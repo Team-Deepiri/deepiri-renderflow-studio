@@ -3,4 +3,5 @@ members = [
   "core/timeline-engine-rs",
   "core/render-engine-vulkan",
 ]
+exclude = ["apps/desktop-tauri/src-tauri"]
 resolver = "2"

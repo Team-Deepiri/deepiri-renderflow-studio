@@ -6,3 +6,13 @@ edition = "2021"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 bitflags = "2"
+thiserror = "1"
+
+[features]
+default = ["vulkan"]
+vulkan = ["dep:ash"]
+
+[dependencies.ash]
+version = "0.38"
+optional = true
+default-features = true

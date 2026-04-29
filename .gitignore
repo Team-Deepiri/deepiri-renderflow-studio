@@ -7,6 +7,8 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 node_modules/
+apps/desktop-tauri/ui/dist/
+apps/desktop-tauri/src-tauri/target/
 .DS_Store
 *.log
 storage/cache/

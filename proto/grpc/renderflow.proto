@@ -34,3 +34,39 @@ service AiSessionService {
   rpc SubmitAiJob(SubmitAiJobRequest) returns (SubmitAiJobResponse);
   rpc GetJobStatus(JobStatusRequest) returns (JobStatusResponse);
 }
+
+message CreateProjectRequest {
+  string name = 1;
+  string owner_id = 2;
+  int32 fps_num = 3;
+  int32 fps_den = 4;
+  int32 sample_rate = 5;
+}
+
+message Project {
+  string id = 1;
+  string owner_id = 2;
+  string name = 3;
+  int32 fps_num = 4;
+  int32 fps_den = 5;
+  int32 sample_rate = 6;
+}
+
+message GetProjectRequest {
+  string project_id = 1;
+}
+
+message ListProjectsRequest {
+  string owner_id = 1;
+}
+
+message ListProjectsResponse {
+  repeated Project projects = 1;
+}
+
+service ProjectService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc CreateProject(CreateProjectRequest) returns (Project);
+  rpc GetProject(GetProjectRequest) returns (Project);
+  rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse);
+}

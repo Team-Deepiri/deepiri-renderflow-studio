@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub mod sequence;
+
 pub const DEFAULT_TICKS_PER_SECOND: u64 = 48_000;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -52,7 +54,7 @@ impl TimelineClock {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ClipSpan {
     pub in_tick: i64,
     pub out_tick: i64,

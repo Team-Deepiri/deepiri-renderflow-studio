@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod commands;
+
 #[tauri::command]
 fn app_mode(ai_enabled: bool) -> String {
     if ai_enabled {
@@ -11,7 +13,16 @@ fn app_mode(ai_enabled: bool) -> String {
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![app_mode])
+        .invoke_handler(tauri::generate_handler![
+            app_mode,
+            commands::orchestrator::orchestrator_health,
+            commands::orchestrator::submit_ai_job,
+            commands::orchestrator::get_ai_job,
+            commands::orchestrator::orchestrator_list_projects,
+            commands::engine::timeline_resolve_active,
+            commands::engine::render_graph_schedule,
+            commands::engine::vulkan_discover,
+        ])
         .run(tauri::generate_context!())
         .expect("failed to run deepiri-renderflow-desktop");
 }

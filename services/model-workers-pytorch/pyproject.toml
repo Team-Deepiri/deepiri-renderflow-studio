@@ -1,0 +1,15 @@
+[build-system]
+requires = ["poetry-core>=1.8.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "deepiri-renderflow-model-workers"
+version = "0.1.0"
+description = "PyTorch model workers for Renderflow (Redis consumer)"
+authors = ["Deepiri"]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.11"
+redis = ">=5.0.0"
+deepiri-renderflow-worker-queue = { path = "../../lib/renderflow_queue", develop = true }

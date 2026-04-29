@@ -1,0 +1,29 @@
+# Deepiri Renderflow orchestrator (FastAPI + gRPC)
+# Build context: deepiri-renderflow-studio repo root (includes lib/renderflow_queue path dep).
+FROM python:3.12-slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Mirror monorepo paths so pyproject path deps resolve (packages/, services/ai-orchestrator-fastapi/).
+COPY . /app
+
+WORKDIR /app/services/ai-orchestrator-fastapi
+
+RUN pip install --no-cache-dir poetry \
+    && poetry config virtualenvs.create false \
+    && poetry install --only main --no-interaction --no-ansi
+
+ENV PYTHONPATH=/app:/app/services/ai-orchestrator-fastapi
+ENV RENDERFLOW_HTTP_HOST=0.0.0.0
+ENV RENDERFLOW_HTTP_PORT=8080
+ENV RENDERFLOW_GRPC_HOST=0.0.0.0
+ENV RENDERFLOW_GRPC_PORT=50051
+
+EXPOSE 8080 50051
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]

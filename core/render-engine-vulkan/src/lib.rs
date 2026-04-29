@@ -1,5 +1,12 @@
 use serde::{Deserialize, Serialize};
 
+pub mod graph_schedule;
+
+#[cfg(feature = "vulkan")]
+pub mod loader;
+
+pub use graph_schedule::schedule;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RenderPassKind {
     Decode,

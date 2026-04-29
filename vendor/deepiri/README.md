@@ -1,19 +1,15 @@
 # Deepiri Vendored Modules
 
-This folder stores copied/adapted code from Deepiri packages.
+Optional snippets copied from Deepiri packages when a **published or path dependency is not wired yet**.
 
-## Policy
+## Current layout
 
-- Do not import these packages directly across repository boundaries.
-- Copy source and adapt locally for Renderflow requirements.
-- Keep provenance metadata in each file header.
+- `helox/`, `synapse/`: placeholders / future adapters.
+- `sugarglider/`: reserved.
 
-## Modules
+## Not vendored (use real packages)
 
-- `gpu-utils/`: GPU detection and runtime capability helpers.
-- `helox/`: device/runtime management utilities.
-- `cyrex/`: queueing and orchestration patterns.
-- `synapse/`: event contract models.
-- `sugarglider/`: reserved for utility imports when located.
+- **GPU detection:** install [`deepiri-gpu-utils`](../../../deepiri-gpu-utils) (Poetry path dep in the orchestrator).
+- **Renderflow Redis job queue:** first-party [`lib/renderflow_queue`](../../lib/renderflow_queue), shared by the orchestrator and model workers.
 
-`sugarglider` source path was not found in current workspace and remains pending discovery.
+Do not re-copy `deepiri-gpu-utils` or queue helpers here; sync upstream by bumping the path dependency or version in `services/ai-orchestrator-fastapi/pyproject.toml`.

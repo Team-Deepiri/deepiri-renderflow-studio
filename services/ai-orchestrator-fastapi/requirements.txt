@@ -1,5 +1,10 @@
+# PyPI-only dependencies. Docker uses `poetry install` (Git gpu-utils + lib/renderflow_queue path).
+# Local development: use Poetry — see pyproject.toml and README.
 fastapi>=0.116.0
 uvicorn>=0.35.0
 pydantic>=2.11.0
 redis>=6.2.0
 psycopg[binary]>=3.2.0
+psycopg-pool>=3.2.0
+grpcio>=1.60.0
+grpcio-tools>=1.60.0

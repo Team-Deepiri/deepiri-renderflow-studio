@@ -1,68 +1,50 @@
-from datetime import datetime, UTC
-from enum import Enum
-from typing import Any
-from uuid import UUID, uuid4
+from __future__ import annotations
 
+import logging
+from contextlib import asynccontextmanager
+
+import grpc
 from fastapi import FastAPI
-from pydantic import BaseModel, Field
+
+from app import db
+from app.api import studio_router
+from app.config import load_settings
+from app.grpc_service import start_grpc_server
+from app.runtime_state import set_settings
+from app.services.studio import bootstrap
+from app.worker_loop import start_worker, stop_worker
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+_grpc_server: grpc.Server | None = None
 
 
-class JobStatus(str, Enum):
-    QUEUED = "queued"
-    PREPARING = "preparing"
-    RUNNING = "running"
-    REVIEW = "review"
-    ACCEPTED = "accepted"
-    REJECTED = "rejected"
-    COMMITTED = "committed"
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _grpc_server
+    settings = load_settings()
+    set_settings(settings)
+    db.init_db(settings.database_url)
+    bootstrap()
+    start_worker(settings)
+    _grpc_server = start_grpc_server()
+    yield
+    stop_worker()
+    if _grpc_server:
+        _grpc_server.stop(grace=2.0)
 
 
-class AiJobCreate(BaseModel):
-    project_id: UUID
-    mode: str = Field(description="scene|audio|vfx|assist")
-    prompt: str
-    metadata: dict[str, Any] = Field(default_factory=dict)
+app = FastAPI(
+    title="Deepiri Renderflow Studio API",
+    version="0.3.0",
+    lifespan=lifespan,
+    description="HTTP + gRPC orchestrator, timeline, scenes, render jobs, AI pipeline.",
+)
 
-
-class AiJob(BaseModel):
-    id: UUID
-    project_id: UUID
-    mode: str
-    prompt: str
-    status: JobStatus
-    stages: list[str]
-    metadata: dict[str, Any]
-    created_at: datetime
-    updated_at: datetime
-
-
-app = FastAPI(title="Deepiri Renderflow AI Orchestrator", version="0.1.0")
-_jobs: dict[UUID, AiJob] = {}
+app.include_router(studio_router)
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
-
-
-@app.post("/v1/jobs", response_model=AiJob)
-def create_job(payload: AiJobCreate) -> AiJob:
-    now = datetime.now(UTC)
-    job = AiJob(
-        id=uuid4(),
-        project_id=payload.project_id,
-        mode=payload.mode,
-        prompt=payload.prompt,
-        status=JobStatus.QUEUED,
-        stages=["queued"],
-        metadata=payload.metadata,
-        created_at=now,
-        updated_at=now,
-    )
-    _jobs[job.id] = job
-    return job
-
-
-@app.get("/v1/jobs/{job_id}", response_model=AiJob)
-def get_job(job_id: UUID) -> AiJob:
-    return _jobs[job_id]

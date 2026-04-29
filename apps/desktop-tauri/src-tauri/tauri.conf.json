@@ -4,15 +4,29 @@
   "version": "0.1.0",
   "identifier": "ai.deepiri.renderflow",
   "build": {
-    "frontendDist": "../ui-shell"
+    "beforeDevCommand": "npm run dev --prefix ../ui",
+    "beforeBuildCommand": "npm run build --prefix ../ui",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../ui/dist"
   },
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Deepiri Renderflow Studio",
         "width": 1600,
         "height": 980
       }
-    ]
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [],
+    "publisher": "Deepiri",
+    "copyright": ""
   }
 }

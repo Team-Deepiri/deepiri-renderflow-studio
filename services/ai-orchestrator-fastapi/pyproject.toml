@@ -1,0 +1,34 @@
+[build-system]
+requires = ["poetry-core>=1.8.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "deepiri-renderflow-orchestrator"
+version = "0.3.0"
+description = "Deepiri Renderflow Studio — FastAPI + gRPC orchestrator"
+authors = ["Deepiri"]
+readme = "README.md"
+packages = [{ include = "app" }]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = ">=0.116.0"
+uvicorn = ">=0.35.0"
+pydantic = ">=2.11.0"
+redis = ">=6.2.0"
+psycopg = { version = ">=3.2.0", extras = ["binary"] }
+psycopg-pool = ">=3.2.0"
+grpcio = ">=1.60.0"
+grpcio-tools = ">=1.60.0"
+# `deepiri-gpu-utils`: track `main`; `poetry lock` pins the commit. Bump with `poetry update deepiri-gpu-utils`.
+deepiri-gpu-utils = { git = "https://github.com/Team-Deepiri/deepiri-gpu-utils.git", branch = "main" }
+# In-repo library under deepiri-renderflow-studio/lib/renderflow_queue (not a separate Git project).
+deepiri-renderflow-worker-queue = { path = "../../lib/renderflow_queue", develop = true }
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.8.0"
+pytest = "^8.0.0"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
