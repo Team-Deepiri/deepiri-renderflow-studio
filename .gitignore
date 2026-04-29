@@ -1,0 +1,14 @@
+dist/
+build/
+target/
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+node_modules/
+.DS_Store
+*.log
+storage/cache/
+storage/renders/
+storage/imports/

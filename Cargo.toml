@@ -1,0 +1,6 @@
+[workspace]
+members = [
+  "core/timeline-engine-rs",
+  "core/render-engine-vulkan",
+]
+resolver = "2"
