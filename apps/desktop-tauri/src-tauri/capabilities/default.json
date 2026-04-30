@@ -3,5 +3,16 @@
   "identifier": "default",
   "description": "Default permissions for Deepiri Renderflow Studio",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "core:window:allow-close", "core:window:allow-minimize", "core:window:allow-maximize"],
+  "fs": {
+    "scope": {
+      "allow": ["$APPDATA/**", "$DOCUMENT/**", "$DOWNLOAD/**", "$HOME/**"],
+      "deny": ["$HOME/.ssh/**", "$HOME/.gnupg/**"]
+    }
+  },
+  "http": {
+    "scope": {
+      "allow": [{ "url": "http://127.0.0.1:8080/**" }, { "url": "http://localhost:8080/**" }]
+    }
+  }
 }
