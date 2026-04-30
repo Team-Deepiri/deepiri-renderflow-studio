@@ -18,6 +18,8 @@ class JobStatus(str, Enum):
     PREPARING = "preparing"
     RUNNING = "running"
     REVIEW = "review"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
     ACCEPTED = "accepted"
     REJECTED = "rejected"
     COMMITTED = "committed"
@@ -114,6 +116,12 @@ class JobStore:
     def list_by_project(self, project_id: UUID) -> list[AiJobRecord]:
         with self._lock:
             return [j for j in self._jobs.values() if j.project_id == project_id]
+
+    def list_recent(self, limit: int = 100) -> list[AiJobRecord]:
+        with self._lock:
+            rows = list(self._jobs.values())
+        rows.sort(key=lambda j: j.updated_at, reverse=True)
+        return rows[: max(1, limit)]
 
 
 store = JobStore()

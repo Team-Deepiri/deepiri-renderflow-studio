@@ -52,8 +52,8 @@ This document is the **single narrative** for what we are building, why it exist
 | `core/timeline-engine-rs/` | Deterministic timebase, clips, keyframe evaluation hooks. |
 | `core/render-engine-vulkan/` | Render graph, passes, GPU resources, preview/export orchestration. |
 | `core/audio-engine-juce/` | JUCE integration boundary (native C++ + FFI). |
-| `services/ai-orchestrator-fastapi/` | FastAPI: job API, auth hooks, DB, Redis, stage streaming. |
-| `services/model-workers-pytorch/` | PyTorch workers: CUDA/MPS/CPU; model loading and inference. |
+| `services/orchestrator/` | FastAPI: job API, auth hooks, DB, Redis, stage streaming. |
+| `services/model-workers/` | PyTorch workers: CUDA/MPS/CPU; model loading and inference. |
 | `proto/grpc/` | `.proto` contracts; desktop ↔ orchestrator. |
 | `infra/postgres/migrations/` | Schema evolution. |
 | `infra/docker/` | Local Postgres, Redis, MinIO. |

@@ -1,6 +1,6 @@
 # Renderflow Studio — module boundaries
 
-## Python orchestrator (`services/ai-orchestrator-fastapi`)
+## Python orchestrator (`services/orchestrator`)
 
 | Area | Location | Responsibility |
 |------|----------|----------------|
@@ -17,7 +17,7 @@
 **Rules**
 
 - No `sys.path` hacks for Deepiri GPU code: use **`deepiri-gpu-utils`** via Poetry.
-- Queue contract is **first-party** under **`deepiri-renderflow-studio/lib/renderflow_queue/`**; orchestrator and **`services/model-workers-pytorch`** depend on the same Poetry path package.
+- Queue contract is **first-party** under **`deepiri-renderflow-studio/lib/renderflow_queue/`**; orchestrator and **`services/model-workers`** depend on the same Poetry path package.
 
 ## In-repo Python library (`lib/renderflow_queue/`)
 
