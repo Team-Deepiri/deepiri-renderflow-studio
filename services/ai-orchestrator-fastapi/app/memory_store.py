@@ -262,7 +262,12 @@ def scene_nodes_list(scene_id: UUID) -> list[dict[str, Any]]:
         return [n for n in _scene_nodes.values() if n["scene_id"] == scene_id]
 
 
-def render_job_create(project_id: UUID, sequence_id: UUID | None, preset: str) -> dict[str, Any]:
+def render_job_create(
+    project_id: UUID,
+    sequence_id: UUID | None,
+    preset: str,
+    output_uri: str = "",
+) -> dict[str, Any]:
     rid = uuid4()
     row = {
         "id": rid,
@@ -270,7 +275,7 @@ def render_job_create(project_id: UUID, sequence_id: UUID | None, preset: str) -
         "sequence_id": sequence_id,
         "preset": preset,
         "status": "queued",
-        "output_uri": None,
+        "output_uri": output_uri,
         "metrics_jsonb": {},
         "created_at": _now(),
         "ended_at": None,
@@ -288,3 +293,33 @@ def render_job_get(job_id: UUID) -> dict[str, Any] | None:
 def render_job_list(project_id: UUID) -> list[dict[str, Any]]:
     with _lock:
         return [r for r in _render_jobs.values() if r["project_id"] == project_id]
+
+
+def project_update(
+    project_id: UUID,
+    name: str | None = None,
+    fps_num: int | None = None,
+    fps_den: int | None = None,
+) -> dict[str, Any] | None:
+    with _lock:
+        row = _projects.get(project_id)
+        if not row:
+            return None
+        if name is not None:
+            row["name"] = name
+        if fps_num is not None:
+            row["fps_num"] = fps_num
+        if fps_den is not None:
+            row["fps_den"] = fps_den
+        row["updated_at"] = _now()
+        return row
+
+
+def project_delete(project_id: UUID) -> None:
+    with _lock:
+        _projects.pop(project_id, None)
+
+
+def asset_get(asset_id: UUID) -> dict[str, Any] | None:
+    with _lock:
+        return _assets.get(asset_id)

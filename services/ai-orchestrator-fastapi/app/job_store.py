@@ -103,5 +103,17 @@ class JobStore:
             j.updated_at = datetime.now(UTC)
         db.sync_job_stages(str(job_id), stages, completed_through=completed_through)
 
+    def mark_artifact_committed(self, job_id: UUID, artifact_id: UUID) -> None:
+        with self._lock:
+            j = self._jobs.get(job_id)
+            if not j:
+                return
+            j.metadata["committed_artifact"] = str(artifact_id)
+            j.updated_at = datetime.now(UTC)
+
+    def list_by_project(self, project_id: UUID) -> list[AiJobRecord]:
+        with self._lock:
+            return [j for j in self._jobs.values() if j.project_id == project_id]
+
 
 store = JobStore()

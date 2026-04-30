@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.routers import ai_jobs, assets_media, capabilities, projects, render_jobs, scenes, timeline
+from app.api.routers import ai_jobs, assets_media, audio_tts, capabilities, media_generation, projects, render_jobs, scenes, timeline
 
 studio_router = APIRouter()
 for _mod in (
@@ -15,6 +15,8 @@ for _mod in (
     timeline,
     scenes,
     render_jobs,
+    audio_tts,
+    media_generation,
 ):
     studio_router.include_router(_mod.router)
 

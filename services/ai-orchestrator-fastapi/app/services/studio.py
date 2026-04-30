@@ -160,11 +160,56 @@ def list_scene_nodes(scene_id: UUID) -> list[dict[str, Any]]:
     return memory_store.scene_nodes_list(scene_id)
 
 
-def submit_render_job(project_id: UUID, sequence_id: UUID | None, preset: str) -> dict[str, Any]:
-    row = memory_store.render_job_create(project_id, sequence_id, preset)
+def update_project(
+    project_id: UUID,
+    name: str | None = None,
+    fps_num: int | None = None,
+    fps_den: int | None = None,
+) -> dict[str, Any] | None:
+    row = memory_store.project_update(project_id, name, fps_num, fps_den)
+    if row:
+        db_repos.update_project(row)
+    return row
+
+
+def delete_project(project_id: UUID) -> None:
+    memory_store.project_delete(project_id)
+    db_repos.delete_project(project_id)
+
+
+def get_asset(asset_id: UUID) -> dict[str, Any] | None:
+    return memory_store.asset_get(asset_id)
+
+
+def get_tracks(sequence_id: UUID) -> list[dict[str, Any]]:
+    return list_tracks(sequence_id)
+
+
+def get_active_clips(sequence_id: UUID, playhead_tick: int) -> list[dict[str, Any]]:
+    clips = list_clips_for_sequence(sequence_id)
+    return [c for c in clips if c.get("in_tick", 0) <= playhead_tick < c.get("out_tick", 0)]
+
+
+def create_render_job(
+    project_id: UUID,
+    sequence_id: UUID | None,
+    preset: str,
+    output_uri: str = "",
+) -> dict[str, Any]:
+    row = memory_store.render_job_create(project_id, sequence_id, preset, output_uri)
     db_repos.insert_render_job(row)
     return row
 
 
+def get_render_job(job_id: UUID) -> dict[str, Any] | None:
+    return memory_store.render_job_get(job_id)
+
+
 def list_render_jobs(project_id: UUID) -> list[dict[str, Any]]:
     return memory_store.render_job_list(project_id)
+
+
+def submit_render_job(project_id: UUID, sequence_id: UUID | None, preset: str) -> dict[str, Any]:
+    row = memory_store.render_job_create(project_id, sequence_id, preset)
+    db_repos.insert_render_job(row)
+    return row
