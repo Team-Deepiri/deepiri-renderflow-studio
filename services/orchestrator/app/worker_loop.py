@@ -17,9 +17,11 @@ logger = logging.getLogger(__name__)
 _local_pending: Queue[str] = Queue()
 _stop = threading.Event()
 _worker_thread: threading.Thread | None = None
+_cancelled_jobs: set[str] = set()
 
 
 def enqueue_job(job_id: str, settings: Settings) -> None:
+    _cancelled_jobs.discard(job_id)
     if settings.redis_url:
         try:
             import redis
@@ -32,6 +34,18 @@ def enqueue_job(job_id: str, settings: Settings) -> None:
     _local_pending.put(job_id)
 
 
+def cancel_job(job_id: str) -> None:
+    _cancelled_jobs.add(job_id)
+
+
+def worker_stats() -> dict[str, object]:
+    return {
+        "worker_running": bool(_worker_thread and _worker_thread.is_alive()),
+        "local_pending_count": _local_pending.qsize(),
+        "cancelled_jobs_count": len(_cancelled_jobs),
+    }
+
+
 def _process_job(job_id: str, settings: Settings) -> None:
     try:
         uid = UUID(job_id)
@@ -41,6 +55,9 @@ def _process_job(job_id: str, settings: Settings) -> None:
     rec = store.get(uid)
     if not rec:
         logger.warning("job not in store: %s", job_id)
+        return
+    if job_id in _cancelled_jobs:
+        store.update_status(uid, JobStatus.CANCELLED, stages=["cancelled"])
         return
 
     store.update_status(uid, JobStatus.PREPARING, stages=["preparing"])
@@ -54,6 +71,9 @@ def _process_job(job_id: str, settings: Settings) -> None:
     names = [r.stage for r in results]
 
     for i, res in enumerate(results):
+        if job_id in _cancelled_jobs:
+            store.update_status(uid, JobStatus.CANCELLED, stages=names[:i] + ["cancelled"])
+            return
         partial = names[: i + 1]
         store.update_status(uid, JobStatus.RUNNING, stages=partial)
         store.merge_meta(uid, f"stage_{res.stage}", res.payload)

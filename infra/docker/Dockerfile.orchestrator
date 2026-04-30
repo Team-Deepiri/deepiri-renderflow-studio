@@ -9,16 +9,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Mirror monorepo paths so pyproject path deps resolve (packages/, services/ai-orchestrator-fastapi/).
+# Mirror monorepo paths so pyproject path deps resolve (packages/, services/orchestrator/).
 COPY . /app
 
-WORKDIR /app/services/ai-orchestrator-fastapi
+WORKDIR /app/services/orchestrator
 
 RUN pip install --no-cache-dir poetry \
     && poetry config virtualenvs.create false \
     && poetry install --only main --no-interaction --no-ansi
 
-ENV PYTHONPATH=/app:/app/services/ai-orchestrator-fastapi
+ENV PYTHONPATH=/app:/app/services/orchestrator
 ENV RENDERFLOW_HTTP_HOST=0.0.0.0
 ENV RENDERFLOW_HTTP_PORT=8080
 ENV RENDERFLOW_GRPC_HOST=0.0.0.0

@@ -1,7 +1,7 @@
 """
 Consume AI job IDs from Redis (same queue as orchestrator worker) for heavy PyTorch work.
 
-Run from services/model-workers-pytorch after: poetry install && poetry run python -m app.redis_worker
+Run from services/model-workers after: poetry install && poetry run python -m app.redis_worker
 """
 
 from __future__ import annotations

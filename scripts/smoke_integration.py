@@ -12,7 +12,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-ORCH = ROOT / "services" / "ai-orchestrator-fastapi"
+ORCH = ROOT / "services" / "orchestrator"
 GEN = ORCH / "app" / "gen"
 
 
