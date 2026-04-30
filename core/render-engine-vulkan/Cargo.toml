@@ -7,6 +7,10 @@ edition = "2021"
 serde = { version = "1", features = ["derive"] }
 bitflags = "2"
 thiserror = "1"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+uuid = { version = "1", features = ["v4"] }
 
 [features]
 default = ["vulkan"]
