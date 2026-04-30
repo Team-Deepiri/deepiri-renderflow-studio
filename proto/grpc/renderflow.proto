@@ -2,6 +2,68 @@ syntax = "proto3";
 
 package deepiri.renderflow.v1;
 
+service AiSessionService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc SubmitAiJob(SubmitAiJobRequest) returns (SubmitAiJobResponse);
+  rpc GetJobStatus(JobStatusRequest) returns (JobStatusResponse);
+  rpc CancelJob(CancelJobRequest) returns (CancelJobResponse);
+  rpc StreamJobEvents(StreamJobEventsRequest) returns (stream JobEvent);
+  rpc CommitArtifact(CommitArtifactRequest) returns (CommitArtifactResponse);
+}
+
+service ProjectService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc CreateProject(CreateProjectRequest) returns (Project);
+  rpc GetProject(GetProjectRequest) returns (Project);
+  rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse);
+  rpc UpdateProject(UpdateProjectRequest) returns (Project);
+  rpc DeleteProject(DeleteProjectRequest) returns (DeleteProjectResponse);
+}
+
+service AssetService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc CreateAsset(CreateAssetRequest) returns (Asset);
+  rpc GetAsset(GetAssetRequest) returns (Asset);
+  rpc ListAssets(ListAssetsRequest) returns (ListAssetsResponse);
+  rpc DeleteAsset(DeleteAssetRequest) returns (DeleteAssetResponse);
+  rpc GetAssetUri(GetAssetUriRequest) returns (GetAssetUriResponse);
+}
+
+service SequenceService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc CreateSequence(CreateSequenceRequest) returns (Sequence);
+  rpc GetSequence(GetSequenceRequest) returns (Sequence);
+  rpc ListSequences(ListSequencesRequest) returns (ListSequencesResponse);
+  rpc UpdateSequence(UpdateSequenceRequest) returns (Sequence);
+}
+
+service TimelineService {
+  rpc ResolveActiveClips(ResolveActiveClipsRequest) returns (ResolveActiveClipsResponse);
+  rpc GetClipFrame(GetClipFrameRequest) returns (GetClipFrameResponse);
+}
+
+service RenderService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc SubmitRenderJob(SubmitRenderJobRequest) returns (RenderJob);
+  rpc GetRenderJob(GetRenderJobRequest) returns (RenderJob);
+  rpc ListRenderJobs(ListRenderJobsRequest) returns (ListRenderJobsResponse);
+}
+
+service AudioService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc CheckMicrophone(HealthRequest) returns (AudioCheckResponse);
+  rpc StartRecording(StartRecordingRequest) returns (AudioRecordResponse);
+  rpc StopRecording(HealthRequest) returns (AudioRecordResponse);
+  rpc GenerateTTS(TTSRequest) returns (TTSResponse);
+  rpc ListVoices(HealthRequest) returns (VoiceListResponse);
+}
+
+service AnimationService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc GenerateVoiceAnimation(VoiceAnimationRequest) returns (AnimationResponse);
+  rpc GetAnimationStages(HealthRequest) returns (AnimationStagesResponse);
+}
+
 message HealthRequest {}
 
 message HealthResponse {
@@ -12,6 +74,7 @@ message SubmitAiJobRequest {
   string project_id = 1;
   string mode = 2;
   string prompt = 3;
+  string model_ref = 4;
 }
 
 message SubmitAiJobResponse {
@@ -29,10 +92,34 @@ message JobStatusResponse {
   repeated string stages = 3;
 }
 
-service AiSessionService {
-  rpc Health(HealthRequest) returns (HealthResponse);
-  rpc SubmitAiJob(SubmitAiJobRequest) returns (SubmitAiJobResponse);
-  rpc GetJobStatus(JobStatusRequest) returns (JobStatusResponse);
+message CancelJobRequest {
+  string job_id = 1;
+}
+
+message CancelJobResponse {
+  bool success = 1;
+}
+
+message StreamJobEventsRequest {
+  string job_id = 1;
+}
+
+message JobEvent {
+  string job_id = 1;
+  string stage = 1;
+  string event_type = 2;
+  string message = 3;
+  float progress = 4;
+}
+
+message CommitArtifactRequest {
+  string job_id = 1;
+  string artifact_id = 1;
+}
+
+message CommitArtifactResponse {
+  bool success = 1;
+  string asset_id = 2;
 }
 
 message CreateProjectRequest {
@@ -50,6 +137,9 @@ message Project {
   int32 fps_num = 4;
   int32 fps_den = 5;
   int32 sample_rate = 6;
+  bool ai_enabled = 7;
+  int64 created_at = 8;
+  int64 updated_at = 9;
 }
 
 message GetProjectRequest {
@@ -64,9 +154,257 @@ message ListProjectsResponse {
   repeated Project projects = 1;
 }
 
-service ProjectService {
-  rpc Health(HealthRequest) returns (HealthResponse);
-  rpc CreateProject(CreateProjectRequest) returns (Project);
-  rpc GetProject(GetProjectRequest) returns (Project);
-  rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse);
+message UpdateProjectRequest {
+  string project_id = 1;
+  string name = 2;
+  int32 fps_num = 3;
+  int32 fps_den = 4;
+  bool ai_enabled = 5;
+}
+
+message DeleteProjectRequest {
+  string project_id = 1;
+}
+
+message DeleteProjectResponse {
+  bool success = 1;
+}
+
+message CreateAssetRequest {
+  string project_id = 1;
+  string kind = 2;
+  string uri = 3;
+  string sha256 = 4;
+  int64 duration_ms = 5;
+  map<string, string> metadata = 6;
+}
+
+message Asset {
+  string id = 1;
+  string project_id = 2;
+  string kind = 3;
+  string uri = 4;
+  string sha256 = 5;
+  int64 duration_ms = 6;
+  map<string, string> metadata = 7;
+  int64 created_at = 8;
+}
+
+message GetAssetRequest {
+  string asset_id = 1;
+}
+
+message ListAssetsRequest {
+  string project_id = 1;
+}
+
+message ListAssetsResponse {
+  repeated Asset assets = 1;
+}
+
+message DeleteAssetRequest {
+  string asset_id = 1;
+}
+
+message DeleteAssetResponse {
+  bool success = 1;
+}
+
+message GetAssetUriRequest {
+  string asset_id = 1;
+}
+
+message GetAssetUriResponse {
+  string uri = 1;
+}
+
+message CreateSequenceRequest {
+  string project_id = 1;
+  string name = 2;
+  int32 resolution_w = 3;
+  int32 resolution_h = 4;
+}
+
+message Sequence {
+  string id = 1;
+  string project_id = 2;
+  string name = 3;
+  int32 resolution_w = 4;
+  int32 resolution_h = 5;
+  int64 duration_ticks = 6;
+  int64 created_at = 7;
+}
+
+message GetSequenceRequest {
+  string sequence_id = 1;
+}
+
+message ListSequencesRequest {
+  string project_id = 1;
+}
+
+message ListSequencesResponse {
+  repeated Sequence sequences = 1;
+}
+
+message UpdateSequenceRequest {
+  string sequence_id = 1;
+  string name = 2;
+  int64 duration_ticks = 3;
+}
+
+message ResolveActiveClipsRequest {
+  string sequence_id = 1;
+  int64 playhead_tick = 2;
+}
+
+message Clip {
+  string id = 1;
+  string track_id = 2;
+  string asset_id = 3;
+  int64 in_tick = 4;
+  int64 out_tick = 5;
+  int64 src_in_tick = 6;
+}
+
+message Track {
+  string id = 1;
+  string sequence_id = 2;
+  string track_type = 3;
+  int32 lane_index = 4;
+  string name = 5;
+}
+
+message ResolveActiveClipsResponse {
+  repeated Clip clips = 1;
+  repeated Track tracks = 2;
+}
+
+message GetClipFrameRequest {
+  string asset_id = 1;
+  int64 frame_index = 2;
+}
+
+message GetClipFrameResponse {
+  string texture_id = 1;
+}
+
+message SubmitRenderJobRequest {
+  string project_id = 1;
+  string sequence_id = 2;
+  string preset = 3;
+  string output_uri = 4;
+}
+
+message RenderJob {
+  string id = 1;
+  string project_id = 2;
+  string sequence_id = 3;
+  string preset = 4;
+  string status = 5;
+  string output_uri = 6;
+  float progress = 7;
+  int64 created_at = 8;
+}
+
+message GetRenderJobRequest {
+  string job_id = 1;
+}
+
+message ListRenderJobsRequest {
+  string project_id = 1;
+}
+
+message ListRenderJobsResponse {
+  repeated RenderJob jobs = 1;
+}
+
+message AudioCheckResponse {
+  bool available = 1;
+  bool status = 2;
+  string status_msg = 3;
+}
+
+message StartRecordingRequest {
+  string output_path = 1;
+  int32 sample_rate = 2;
+  int32 channels = 3;
+}
+
+message AudioRecordResponse {
+  bool success = 1;
+  string output_path = 2;
+  string error = 3;
+}
+
+message TTSRequest {
+  string text = 1;
+  string output_path = 2;
+  string engine = 3;
+  string voice = 4;
+}
+
+message TTSResponse {
+  bool success = 1;
+  string output_path = 2;
+  string engine = 3;
+  string error = 4;
+}
+
+message VoiceListResponse {
+  map<string, VoiceInfo> voices = 1;
+}
+
+message VoiceInfo {
+  string name = 1;
+  string gender = 2;
+  string style = 3;
+}
+
+message VoiceAnimationRequest {
+  string audio_path = 1;
+  string prompt = 2;
+  CharacterConfig character_config = 3;
+}
+
+message CharacterConfig {
+  string name = 1;
+  string style = 2;
+  Position position = 3;
+}
+
+message Position {
+  float x = 1;
+  float y = 2;
+  float z = 3;
+}
+
+message AnimationResponse {
+  bool success = 1;
+  string transcript = 2;
+  string emotion = 3;
+  int32 gesture_count = 4;
+  TimelineDef timeline = 5;
+  string error = 6;
+}
+
+message TimelineDef {
+  repeated LayerDef layers = 1;
+  float duration = 2;
+  Resolution resolution = 3;
+  int32 fps = 4;
+}
+
+message LayerDef {
+  string type = 1;
+  string asset = 2;
+}
+
+message Resolution {
+  int32 w = 1;
+  int32 h = 2;
+}
+
+message AnimationStagesResponse {
+  repeated string stages = 1;
 }
