@@ -177,3 +177,50 @@ def extract_audio_waveform(
     except (OSError, subprocess.TimeoutExpired) as e:
         logger.warning("extract_audio_waveform: %s", e)
         return {"ok": False, "error": str(e)}
+
+
+def detect_format(path_or_uri: str) -> dict[str, Any]:
+    """Detect media format, codec, and container type."""
+    probe_result = probe(path_or_uri)
+    if not probe_result.get("ok"):
+        return probe_result
+
+    ffprobe = probe_result.get("ffprobe", {})
+    streams = ffprobe.get("streams", [])
+    format_info = ffprobe.get("format", {})
+
+    video_stream = next((s for s in streams if s.get("codec_type") == "video"), None)
+    audio_stream = next((s for s in streams if s.get("codec_type") == "audio"), None)
+
+    return {
+        "ok": True,
+        "container": format_info.get("format_name"),
+        "duration_seconds": float(format_info.get("duration", 0)),
+        "size_bytes": int(format_info.get("size", 0)),
+        "bitrate": int(format_info.get("bit_rate", 0)),
+        "video": {
+            "codec": video_stream.get("codec_name") if video_stream else None,
+            "width": video_stream.get("width") if video_stream else None,
+            "height": video_stream.get("height") if video_stream else None,
+            "fps": _parse_frame_rate(video_stream.get("r_frame_rate")) if video_stream else None,
+            "pix_fmt": video_stream.get("pix_fmt") if video_stream else None,
+        } if video_stream else None,
+        "audio": {
+            "codec": audio_stream.get("codec_name") if audio_stream else None,
+            "sample_rate": int(audio_stream.get("sample_rate", 0)) if audio_stream else None,
+            "channels": audio_stream.get("channels") if audio_stream else None,
+        } if audio_stream else None,
+    }
+
+
+def _parse_frame_rate(rate_str: str | None) -> float | None:
+    """Parse FFmpeg frame rate like '30/1' or '30000/1001'."""
+    if not rate_str:
+        return None
+    try:
+        if "/" in rate_str:
+            num, den = rate_str.split("/")
+            return float(num) / float(den)
+        return float(rate_str)
+    except (ValueError, ZeroDivisionError):
+        return None

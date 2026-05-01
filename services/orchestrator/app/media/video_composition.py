@@ -363,6 +363,162 @@ class VideoCompositionPipeline:
     def __init__(self) -> None:
         self.stages = COMPOSITION_STAGES
 
+
+class EffectsChain:
+    def __init__(self) -> None:
+        self.effects: list[Effect] = []
+        self._cache: dict[str, Any] = {}
+
+    def add_effect(self, effect: "Effect") -> "EffectsChain":
+        self.effects.append(effect)
+        return self
+
+    def build_filter_graph(self) -> str:
+        parts = []
+        for effect in self.effects:
+            parts.append(effect.to_filter())
+        return ";".join(parts)
+
+    def clear_cache(self) -> None:
+        self._cache.clear()
+
+
+class Effect:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.params: dict[str, Any] = {}
+
+    def param(self, key: str, value: Any) -> "Effect":
+        self.params[key] = value
+        return self
+
+    def to_filter(self) -> str:
+        return self.name
+
+
+class ColorGradeEffect(Effect):
+    def __init__(self) -> None:
+        super().__init__("colorbalance")
+
+    def shadows(self, r: float, g: float, b: float) -> "ColorGradeEffect":
+        self.params["rs"] = r
+        self.params["gs"] = g
+        self.params["bs"] = b
+        return self
+
+    def midtones(self, r: float, g: float, b: float) -> "ColorGradeEffect":
+        self.params["rm"] = r
+        self.params["gm"] = g
+        self.params["bm"] = b
+        return self
+
+    def highlights(self, r: float, g: float, b: float) -> "ColorGradeEffect":
+        self.params["rh"] = r
+        self.params["gh"] = g
+        self.params["bh"] = b
+        return self
+
+    def to_filter(self) -> str:
+        parts = [self.name]
+        for k, v in self.params.items():
+            parts.append(f"{k}={v}")
+        return "=".join(parts)
+
+
+class BlurEffect(Effect):
+    def __init__(self) -> None:
+        super().__init__("boxblur")
+
+    def radius(self, r: int) -> "BlurEffect":
+        self.params["radius"] = r
+        return self
+
+    def to_filter(self) -> str:
+        radius = self.params.get("radius", 1)
+        return f"boxblur=radius={radius}"
+
+
+class SharpenEffect(Effect):
+    def __init__(self) -> None:
+        super().__init__("unsharp")
+
+    def amount(self, a: float) -> "SharpenEffect":
+        self.params["amount"] = a
+        return self
+
+    def to_filter(self) -> str:
+        amount = self.params.get("amount", 1.0)
+        return f"unsharp=amount={amount}"
+
+
+class VignetteEffect(Effect):
+    def __init__(self) -> None:
+        super().__init__("vignette")
+
+    def angle(self, a: float) -> "VignetteEffect":
+        self.params["angle"] = a
+        return self
+
+    def to_filter(self) -> str:
+        angle = self.params.get("angle", "PI/5")
+        return f"vignette=angle={angle}"
+
+
+class NoiseEffect(Effect):
+    def __init__(self) -> None:
+        all = super().__init__("noise")
+
+    def amount(self, a: int) -> "NoiseEffect":
+        self.params["all"] = a
+        return self
+
+    def to_filter(self) -> str:
+        all = self.params.get("all", 0)
+        return f"noise=all={all}"
+
+
+class PipelineBuilder:
+    """Builder for video composition pipelines."""
+
+    def __init__(self) -> None:
+        self.steps: list[PipelineStep] = []
+
+    def add_input(self, path: str, label: str = "v") -> "PipelineBuilder":
+        self.steps.append(PipelineStep(PipelineStepType.INPUT, path, label))
+        return self
+
+    def add_filter(self, filter: str) -> "PipelineBuilder":
+        self.steps.append(PipelineStep(PipelineStepType.FILTER, filter))
+        return self
+
+    def add_output(self, path: str) -> "PipelineBuilder":
+        self.steps.append(PipelineStep(PipelineStepType.OUTPUT, path))
+        return self
+
+    def build(self) -> str:
+        cmd = ["ffmpeg", "-y"]
+        for step in self.steps:
+            if step.step_type == PipelineStepType.INPUT:
+                cmd.extend(["-i", step.value])
+            elif step.step_type == PipelineStepType.FILTER:
+                cmd.extend(["-vf", step.value])
+            elif step.step_type == PipelineStepType.OUTPUT:
+                cmd.append(step.value)
+        return " ".join(cmd)
+
+
+class PipelineStep:
+    def __init__(self, step_type: "PipelineStepType", value: str = "", label: str = "") -> None:
+        self.step_type = step_type
+        self.value = value
+        self.label = label
+
+
+class PipelineStepType:
+    INPUT = "input"
+    FILTER = "filter"
+    OUTPUT = "output"
+
     def run_full_composition(
         self,
         project_config: dict,
