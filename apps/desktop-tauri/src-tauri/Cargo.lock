@@ -2852,6 +2852,7 @@ dependencies = [
  "bitflags 2.11.1",
  "serde",
  "thiserror 1.0.69",
+ "uuid",
 ]
 
 [[package]]
