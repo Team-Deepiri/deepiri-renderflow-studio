@@ -253,7 +253,7 @@ def create_grid(
         filter_chain += f"[{i}:v]"
     filter_chain += f"xstack=inputs={len(inputs)}:layout="
 
-layouts = []
+    layouts = []
     for i in range(len(inputs)):
         row = i // cols
         col = i % cols

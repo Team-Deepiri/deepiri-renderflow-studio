@@ -17,7 +17,7 @@ class PaginationParams(BaseModel):
     page_size: int = Field(default=20, ge=1, le=100, description="Items per page")
 
 
-@dataclass(class_validator=False)
+@dataclass
 class PaginatedResponse(Generic[T]):
     items: list[T]
     total: int

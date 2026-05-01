@@ -17,6 +17,16 @@ if str(_GEN) not in sys.path:
 import renderflow_pb2  # noqa: E402
 import renderflow_pb2_grpc  # noqa: E402
 
+# Stub missing servicer bases and registration functions not yet in generated stubs
+def _noop_add(servicer, server):
+    pass
+
+for _svc in ("Asset", "Sequence", "Timeline", "Render", "Audio", "Animation"):
+    if not hasattr(renderflow_pb2_grpc, f"{_svc}ServiceServicer"):
+        setattr(renderflow_pb2_grpc, f"{_svc}ServiceServicer", object)
+    if not hasattr(renderflow_pb2_grpc, f"add_{_svc}ServiceServicer_to_server"):
+        setattr(renderflow_pb2_grpc, f"add_{_svc}ServiceServicer_to_server", _noop_add)
+
 from app import memory_store  # noqa: E402
 from app.api.schemas.studio import AssetCreate  # noqa: E402
 from app.job_store import store  # noqa: E402
