@@ -1,6 +1,7 @@
 # Deepiri Renderflow Studio
 
 Native animation and post-production studio for video editing, compositing, motion graphics, and 3D workflows.
+<img width="1853" height="911" alt="image" src="https://github.com/user-attachments/assets/08834bcb-3afa-42cf-b051-cc7a93e53c4e" />
 
 ## Principles
 
