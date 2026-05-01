@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 pub mod export;
 pub mod graph_schedule;
@@ -44,6 +45,35 @@ pub enum ColorSpace {
 impl Default for ColorSpace {
     fn default() -> Self {
         Self::Srgb
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum FilterMode {
+    Nearest,
+    Linear,
+    Bilinear,
+    Trilinear,
+    Anisotropic,
+}
+
+impl Default for FilterMode {
+    fn default() -> Self {
+        Self::Linear
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AddressMode {
+    Repeat,
+    MirroredRepeat,
+    ClampToEdge,
+    ClampToBorder,
+}
+
+impl Default for AddressMode {
+    fn default() -> Self {
+        Self::ClampToEdge
     }
 }
 

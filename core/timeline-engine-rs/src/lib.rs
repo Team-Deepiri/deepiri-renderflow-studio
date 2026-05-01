@@ -1,9 +1,11 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use thiserror::Error;
 
 pub mod sequence;
 
 pub const DEFAULT_TICKS_PER_SECOND: u64 = 48_000;
+pub const DEFAULT_AUDIO_SAMPLE_RATE: u32 = 48_000;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RationalTime {
@@ -11,9 +13,29 @@ pub struct RationalTime {
     pub den: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimeRange {
+    pub start_tick: i64,
+    pub end_tick: i64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TrackType {
+    Video,
+    Audio,
+    Caption,
+    Subtitle,
+    Effect,
+    Marker,
+}
+
 impl RationalTime {
     pub fn to_seconds(self) -> f64 {
-        self.num as f64 / self.den as f64
+        if self.den == 0 {
+            0.0
+        } else {
+            self.num as f64 / self.den as f64
+        }
     }
 
     pub fn zero() -> Self {
@@ -23,6 +45,65 @@ impl RationalTime {
     pub fn as_ticks(self, ticks_per_second: i64) -> i64 {
         (self.to_seconds() * ticks_per_second as f64).round() as i64
     }
+
+    pub fn from_seconds(seconds: f64) -> Self {
+        Self {
+            num: (seconds * 1_000_000.0).round() as i64,
+            den: 1_000_000,
+        }
+    }
+
+    pub fn from_ticks(ticks: i64, ticks_per_second: i64) -> Self {
+        Self {
+            num: ticks,
+            den: ticks_per_second,
+        }
+    }
+}
+
+impl TimeRange {
+    pub fn new(start_tick: i64, end_tick: i64) -> Self {
+        Self {
+            start_tick,
+            end_tick,
+        }
+    }
+
+    pub fn duration_ticks(&self) -> i64 {
+        self.end_tick - self.start_tick
+    }
+
+    pub fn contains_tick(&self, tick: i64) -> bool {
+        tick >= self.start_tick && tick < self.end_tick
+    }
+
+    pub fn overlaps(&self, other: &TimeRange) -> bool {
+        self.start_tick < other.end_tick && other.start_tick < self.end_tick
+    }
+
+    pub fn intersection(&self, other: &TimeRange) -> Option<TimeRange> {
+        if self.overlaps(other) {
+            Some(TimeRange::new(
+                self.start_tick.max(other.start_tick),
+                self.end_tick.min(other.end_tick),
+            ))
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Track {
+    pub id: String,
+    pub track_type: TrackType,
+    pub lane_index: i32,
+    pub name: String,
+    pub muted: bool,
+    pub locked: bool,
+    pub solo: bool,
+    pub height: i32,
+    pub color: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,8 +248,172 @@ impl ClipSpan {
 }
 
 impl Keyframe {
-    pub fn evaluate(&self, _prev: Option<&Keyframe>, _next: Option<&Keyframe>, _interp: Interpolation) -> f64 {
+    pub fn evaluate(
+        &self,
+        _prev: Option<&Keyframe>,
+        _next: Option<&Keyframe>,
+        _interp: Interpolation,
+    ) -> f64 {
         self.value
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Clip {
+    pub id: String,
+    pub track_id: String,
+    pub asset_id: String,
+    pub name: String,
+    pub in_tick: i64,
+    pub out_tick: i64,
+    pub src_in_tick: i64,
+    pub src_duration_ticks: i64,
+    pub speed_ratio: f64,
+    pub time_remap_enabled: bool,
+    pub properties: HashMap<String, PropertyValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PropertyValue {
+    Float(f64),
+    Vec2([f64; 2]),
+    Vec3([f64; 3]),
+    Vec4([f64; 4]),
+    String(String),
+    Bool(bool),
+}
+
+impl Default for Clip {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            track_id: String::new(),
+            asset_id: String::new(),
+            name: String::new(),
+            in_tick: 0,
+            out_tick: 0,
+            src_in_tick: 0,
+            src_duration_ticks: 0,
+            speed_ratio: 1.0,
+            time_remap_enabled: false,
+            properties: HashMap::new(),
+        }
+    }
+}
+
+impl Clip {
+    pub fn duration_ticks(&self) -> i64 {
+        self.out_tick - self.in_tick
+    }
+
+    pub fn effective_speed(&self) -> f64 {
+        if self.time_remap_enabled {
+            self.speed_ratio
+        } else {
+            1.0
+        }
+    }
+
+    pub fn map_playhead_to_source(&self, playhead_tick: i64) -> i64 {
+        let offset = playhead_tick - self.in_tick;
+        let scaled = (offset as f64 / self.speed_ratio).round() as i64;
+        self.src_in_tick + scaled
+    }
+
+    pub fn is_active(&self, playhead_tick: i64) -> bool {
+        playhead_tick >= self.in_tick && playhead_tick < self.out_tick
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Marker {
+    pub id: String,
+    pub time_tick: i64,
+    pub label: String,
+    pub color: String,
+    pub marker_type: MarkerType,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MarkerType {
+    Chapter,
+    Cue,
+    WebLink,
+    Note,
+    Flag,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Effect {
+    pub id: String,
+    pub effect_type: String,
+    pub plugin_id: String,
+    pub enabled: bool,
+    pub parameters: std::collections::HashMap<String, EffectParameter>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EffectParameter {
+    pub name: String,
+    pub value: PropertyValue,
+    pub keyframes: Vec<Keyframe>,
+    pub interpolation: Interpolation,
+}
+
+impl Default for Effect {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            effect_type: String::new(),
+            plugin_id: String::new(),
+            enabled: true,
+            parameters: HashMap::new(),
+        }
+    }
+}
+
+impl Effect {
+    pub fn evaluate(&self, tick: i64) -> std::collections::HashMap<String, f64> {
+        let mut results = HashMap::new();
+        for (name, param) in &self.parameters {
+            let val = if param.keyframes.is_empty() {
+                if let PropertyValue::Float(v) = param.value {
+                    v
+                } else {
+                    0.0
+                }
+            } else {
+                Self::interpolate_keyframes(tick, &param.keyframes, param.interpolation)
+            };
+            results.insert(name.clone(), val);
+        }
+        results
+    }
+
+    fn interpolate_keyframes(tick: i64, kfs: &[Keyframe], _interp: Interpolation) -> f64 {
+        if kfs.is_empty() {
+            return 0.0;
+        }
+        let mut prev: Option<&Keyframe> = None;
+        let mut next: Option<&Keyframe> = None;
+        for kf in kfs {
+            if kf.tick <= tick {
+                prev = Some(kf);
+            } else {
+                next = Some(kf);
+                break;
+            }
+        }
+        match (prev, next) {
+            (Some(p), Some(n)) => {
+                let t = (tick - p.tick) as f64 / (n.tick - p.tick) as f64;
+                p.value + (n.value - p.value) * t
+            }
+            (Some(p), None) => p.value,
+            (None, Some(n)) => n.value,
+            _ => 0.0,
+        }
     }
 }
 
