@@ -14,6 +14,9 @@ class Settings:
     database_url: str | None = os.environ.get("DATABASE_URL")
     worker_poll_sec: float = 0.25
     ai_stages_simulate_ms: int = 50
+    max_concurrent_jobs: int = 4
+    job_timeout_minutes: int = 60
+    enable_sse: bool = True
 
 
 def load_settings() -> Settings:

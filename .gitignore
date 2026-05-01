@@ -14,3 +14,4 @@ apps/desktop-tauri/src-tauri/target/
 storage/cache/
 storage/renders/
 storage/imports/
+.env
