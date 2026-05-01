@@ -64,6 +64,27 @@ service AnimationService {
   rpc GetAnimationStages(HealthRequest) returns (AnimationStagesResponse);
 }
 
+service MediaService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc ProbeMedia(ProbeMediaRequest) returns (ProbeMediaResponse);
+  rpc DetectFormat(DetectFormatRequest) returns (DetectFormatResponse);
+  rpc ExtractThumbnail(ThumbnailRequest) returns (ThumbnailResponse);
+  rpc ExtractWaveform(WaveformRequest) returns (WaveformResponse);
+  rpc TranscodeProxy(TranscodeRequest) returns (TranscodeResponse);
+}
+
+service ExportService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc ListPresets(ListPresetsRequest) returns (ListPresetsResponse);
+  rpc GetPreset(GetPresetRequest) returns (ExportPreset);
+  rpc CreatePreset(CreatePresetRequest) returns (ExportPreset);
+  rpc UpdatePreset(UpdatePresetRequest) returns (ExportPreset);
+  rpc DeletePreset(DeletePresetRequest) returns (DeletePresetResponse);
+  rpc ExportSequence(ExportSequenceRequest) returns (ExportJob);
+  rpc GetExportJob(GetExportJobRequest) returns (ExportJob);
+  rpc ListExportJobs(ListExportJobsRequest) returns (ListExportJobsResponse);
+}
+
 message HealthRequest {}
 
 message HealthResponse {
@@ -407,4 +428,173 @@ message Resolution {
 
 message AnimationStagesResponse {
   repeated string stages = 1;
+}
+
+message ProbeMediaRequest {
+  string path = 1;
+}
+
+message ProbeMediaResponse {
+  bool ok = 1;
+  string container = 2;
+  int64 duration_ms = 3;
+  string video_codec = 4;
+  string audio_codec = 5;
+  int32 width = 6;
+  int32 height = 7;
+  float fps = 8;
+  int64 file_size = 9;
+  string error = 10;
+}
+
+message DetectFormatRequest {
+  string path = 1;
+}
+
+message DetectFormatResponse {
+  bool ok = 1;
+  string container = 2;
+  int64 duration_seconds = 3;
+  int64 size_bytes = 4;
+  int32 bitrate = 5;
+  VideoInfo video = 6;
+  AudioInfo audio = 7;
+}
+
+message VideoInfo {
+  string codec = 1;
+  int32 width = 2;
+  int32 height = 3;
+  float fps = 4;
+  string pix_fmt = 5;
+}
+
+message AudioInfo {
+  string codec = 1;
+  int32 sample_rate = 2;
+  int32 channels = 3;
+}
+
+message ThumbnailRequest {
+  string input_path = 1;
+  string output_path = 2;
+  string time_offset = 3;
+  int32 width = 4;
+}
+
+message ThumbnailResponse {
+  bool ok = 1;
+  string output_path = 2;
+}
+
+message WaveformRequest {
+  string input_path = 1;
+  string output_path = 2;
+  int32 samples_per_second = 3;
+}
+
+message WaveformResponse {
+  bool ok = 1;
+  string output_path = 2;
+}
+
+message TranscodeRequest {
+  string input_path = 1;
+  string output_path = 2;
+  int32 width = 3;
+  int32 height = 4;
+  string codec = 5;
+  int32 crf = 6;
+}
+
+message TranscodeResponse {
+  bool ok = 1;
+  string input_path = 2;
+  string output_path = 3;
+  string error = 4;
+}
+
+message ListPresetsRequest {}
+
+message ListPresetsResponse {
+  repeated ExportPreset presets = 1;
+}
+
+message GetPresetRequest {
+  string preset_id = 1;
+}
+
+message ExportPreset {
+  string id = 1;
+  string name = 2;
+  string container = 3;
+  VideoCodec video = 4;
+  AudioCodec audio = 5;
+  Resolution resolution = 6;
+  int32 fps = 7;
+  bool is_default = 8;
+}
+
+message VideoCodec {
+  string name = 1;
+  int32 crf = 2;
+  int32 bitrate = 3;
+  string profile = 4;
+}
+
+message AudioCodec {
+  string name = 1;
+  int32 bitrate = 2;
+  int32 sample_rate = 3;
+}
+
+message CreatePresetRequest {
+  string name = 1;
+  string container = 2;
+  VideoCodec video = 3;
+  AudioCodec audio = 4;
+  Resolution resolution = 5;
+  int32 fps = 6;
+}
+
+message UpdatePresetRequest {
+  string preset_id = 1;
+  string name = 2;
+  VideoCodec video = 3;
+  AudioCodec audio = 4;
+}
+
+message DeletePresetRequest {
+  string preset_id = 1;
+}
+
+message DeletePresetResponse {
+  bool success = 1;
+}
+
+message ExportSequenceRequest {
+  string sequence_id = 1;
+  string preset_id = 2;
+  string output_uri = 3;
+  string output_format = 4;
+}
+
+message ExportJob {
+  string id = 1;
+  string sequence_id = 2;
+  string preset_id = 3;
+  string status = 4;
+  float progress = 5;
+  string output_uri = 6;
+  int64 started_at = 7;
+  int64 completed_at = 8;
+  string error = 9;
+}
+
+message GetExportJobRequest {
+  string job_id = 1;
+}
+
+message ListExportJobsRequest {
+  string sequence_id = 1;
 }
