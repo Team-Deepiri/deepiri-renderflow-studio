@@ -157,3 +157,80 @@ def readiness_check() -> dict[str, object]:
             "configured": True,
             "detail": f"Failed to reach Postgres with error: {e}",
         }
+def get_ai_job(job_id: str) -> dict[str, Any] | None:
+    if _pool is None:
+        return None
+    try:
+        with connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select id, project_id, mode, prompt, status, created_at, updated_at
+                    from ai_jobs
+                    where id = %s::uuid
+                    """,
+                    (job_id,),
+                )
+                r = cur.fetchone()
+                if not r:
+                    return None
+                cols = [c.name for c in cur.description]
+                return dict(zip(cols, r))
+    except Exception as e:
+        logger.debug("get_ai_job failed: %s", e)
+        return None
+
+
+def list_ai_jobs(project_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    if _pool is None:
+        return []
+    try:
+        with connection() as conn:
+            with conn.cursor() as cur:
+                if project_id:
+                    cur.execute(
+                        """
+                        select id, project_id, mode, prompt, status, created_at, updated_at
+                        from ai_jobs
+                        where project_id = %s::uuid
+                        order by updated_at desc
+                        limit %s
+                        """,
+                        (project_id, max(1, limit)),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        select id, project_id, mode, prompt, status, created_at, updated_at
+                        from ai_jobs
+                        order by updated_at desc
+                        limit %s
+                        """,
+                        (max(1, limit),),
+                    )
+                cols = [c.name for c in cur.description]
+                return [dict(zip(cols, row)) for row in cur.fetchall()]
+    except Exception as e:
+        logger.debug("list_ai_jobs failed: %s", e)
+        return []
+
+
+def get_ai_job_stages(job_id: str) -> list[str]:
+    if _pool is None:
+        return []
+    try:
+        with connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select stage_name
+                    from ai_job_stages
+                    where job_id = %s::uuid
+                    order by stage_order asc
+                    """,
+                    (job_id,),
+                )
+                return [row[0] for row in cur.fetchall()]
+    except Exception as e:
+        logger.debug("get_ai_job_stages failed: %s", e)
+        return []
