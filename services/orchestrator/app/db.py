@@ -133,6 +133,30 @@ def insert_asset_placeholder(project_id: str, kind: str, uri: str, sha256: str =
     return aid
 
 
+def readiness_check() -> dict[str, object]:
+    if _pool is None:
+        return {
+            "status": "disabled",
+            "configured": False,
+            "detail": "DATABASE_URL not set or PostgreSQL pool unavailable",
+        }
+    
+    try:
+        with connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("select 1")
+                cur.fetchone()
+        return {
+            "status": "ok",
+            "configured": True,
+            "detail": "PostgreSQL reachable",
+        }
+    except Exception as e:
+        return {
+            "status": "degraded",
+            "configured": True,
+            "detail": f"Failed to reach Postgres with error: {e}",
+        }
 def get_ai_job(job_id: str) -> dict[str, Any] | None:
     if _pool is None:
         return None

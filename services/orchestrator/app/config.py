@@ -17,9 +17,15 @@ class Settings:
     max_concurrent_jobs: int = 4
     job_timeout_minutes: int = 60
     enable_sse: bool = True
+    readiness_mode: str = "dev"
 
 
 def load_settings() -> Settings:
+    allowed = {"dev", "prod"}
+    mode = os.environ.get("READINESS_MODE", "dev").strip().lower()
+    if mode not in allowed:
+        raise ValueError(f"Invalid READINESS_MODE={mode!r}. Allowed: {sorted(allowed)}")
+
     return Settings(
         http_host=os.environ.get("RENDERFLOW_HTTP_HOST", "0.0.0.0"),
         http_port=int(os.environ.get("RENDERFLOW_HTTP_PORT", "8080")),
@@ -29,4 +35,5 @@ def load_settings() -> Settings:
         database_url=os.environ.get("DATABASE_URL"),
         worker_poll_sec=float(os.environ.get("RENDERFLOW_WORKER_POLL_SEC", "0.25")),
         ai_stages_simulate_ms=int(os.environ.get("RENDERFLOW_AI_STAGE_MS", "50")),
+        readiness_mode=mode
     )
