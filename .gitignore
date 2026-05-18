@@ -15,3 +15,4 @@ storage/cache/
 storage/renders/
 storage/imports/
 .env
+apps/desktop-tauri/src-tauri/gen/
