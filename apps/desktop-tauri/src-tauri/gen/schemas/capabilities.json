@@ -1,1 +1,0 @@
-{"default":{"identifier":"default","description":"Default permissions for Deepiri Renderflow Studio","local":true,"windows":["main"],"permissions":["core:default","core:window:allow-close","core:window:allow-minimize","core:window:allow-maximize"]}}
