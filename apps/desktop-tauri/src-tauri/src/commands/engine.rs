@@ -47,11 +47,11 @@ pub fn timeline_frame_to_time(payload: Value) -> Result<Value, String> {
     let fps_num = payload
         .get("fps_num")
         .and_then(|v| v.as_u64())
-        .ok_or("missing fps_num") as u32;
+        .ok_or_else(|| "missing fps_num".to_string())? as u32;
     let fps_den = payload
         .get("fps_den")
         .and_then(|v| v.as_u64())
-        .ok_or("missing fps_den") as u32;
+        .ok_or_else(|| "missing fps_den".to_string())? as u32;
     let frame = payload
         .get("frame_index")
         .and_then(|v| v.as_i64())
@@ -70,15 +70,15 @@ pub fn timeline_time_to_sample(payload: Value) -> Result<Value, String> {
     let fps_num = payload
         .get("fps_num")
         .and_then(|v| v.as_u64())
-        .ok_or("missing fps_num") as u32;
+        .ok_or_else(|| "missing fps_num".to_string())? as u32;
     let fps_den = payload
         .get("fps_den")
         .and_then(|v| v.as_u64())
-        .ok_or("missing fps_den") as u32;
+        .ok_or_else(|| "missing fps_den".to_string())? as u32;
     let sample_rate = payload
         .get("sample_rate")
         .and_then(|v| v.as_u64())
-        .ok_or("missing sample_rate") as u32;
+        .ok_or_else(|| "missing sample_rate".to_string())? as u32;
     let num = payload
         .get("num")
         .and_then(|v| v.as_i64())
