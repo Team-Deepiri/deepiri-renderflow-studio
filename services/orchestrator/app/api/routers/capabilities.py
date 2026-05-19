@@ -36,23 +36,28 @@ def get_capabilities() -> dict[str, Any]:
 async def _sse_stream():
     queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=100)
     emitter = get_event_emitter()
+    loop = asyncio.get_running_loop()
 
     def listener(data: dict[str, Any]) -> None:
         try:
-            queue.put_nowait(data)
-        except asyncio.QueueFull:
+            loop.call_soon_threadsafe(queue.put_nowait, data)
+        except Exception:
             pass
 
-    emitter.subscribe("job_update", listener)
-    emitter.subscribe("render_update", listener)
-    emitter.subscribe("project_update", listener)
+    event_types = ("job_update", "render_update", "project_update")
+    for et in event_types:
+        emitter.subscribe(et, listener)
 
     try:
         while True:
-            data = await asyncio.wait_for(queue.get(), timeout=30.0)
-            yield f"data: {data!s}\n\n".encode()
-    except asyncio.TimeoutError:
-        yield b": keepalive\n\n"
+            try:
+                data = await asyncio.wait_for(queue.get(), timeout=30.0)
+                yield f"data: {data!s}\n\n".encode()
+            except asyncio.TimeoutError:
+                yield b": keepalive\n\n"
+    finally:
+        for et in event_types:
+            emitter.unsubscribe(et, listener)
 
 
 @router.get("/v1/events")
