@@ -11,6 +11,7 @@ from app.config import Settings
 from app.job_store import JobStatus, store
 from renderflow_queue import REDIS_KEY_JOBS, RedisJobQueue
 from app.stage_runner import run_audio_stages, run_scene_stages
+from app.api.utils import get_event_emitter
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,18 @@ _local_pending: Queue[str] = Queue()
 _stop = threading.Event()
 _worker_thread: threading.Thread | None = None
 _cancelled_jobs: set[str] = set()
+
+
+def _emit(job_id: str, status: str, stage: str | None = None, project_id: str | None = None) -> None:
+    payload: dict[str, object] = {"job_id": job_id, "status": status}
+    if stage:
+        payload["stage"] = stage
+    if project_id:
+        payload["project_id"] = project_id
+    try:
+        get_event_emitter().emit("job_update", payload)
+    except Exception:
+        pass
 
 
 def enqueue_job(job_id: str, settings: Settings) -> None:
@@ -56,11 +69,15 @@ def _process_job(job_id: str, settings: Settings) -> None:
     if not rec:
         logger.warning("job not in store: %s", job_id)
         return
+    pid = str(rec.project_id)
+
     if job_id in _cancelled_jobs:
         store.update_status(uid, JobStatus.CANCELLED, stages=["cancelled"])
+        _emit(job_id, "cancelled", project_id=pid)
         return
 
     store.update_status(uid, JobStatus.PREPARING, stages=["preparing"])
+    _emit(job_id, "preparing", project_id=pid)
     time.sleep(settings.ai_stages_simulate_ms / 1000.0)
 
     if rec.mode in ("audio", "voice", "dialogue"):
@@ -73,15 +90,18 @@ def _process_job(job_id: str, settings: Settings) -> None:
     for i, res in enumerate(results):
         if job_id in _cancelled_jobs:
             store.update_status(uid, JobStatus.CANCELLED, stages=names[:i] + ["cancelled"])
+            _emit(job_id, "cancelled", stage=res.stage, project_id=pid)
             return
         partial = names[: i + 1]
         store.update_status(uid, JobStatus.RUNNING, stages=partial)
         store.merge_meta(uid, f"stage_{res.stage}", res.payload)
         store.set_stages(uid, names, completed_through=i)
+        _emit(job_id, "running", stage=res.stage, project_id=pid)
         time.sleep(settings.ai_stages_simulate_ms / 1000.0)
 
     store.set_stages(uid, names, completed_through=len(names) - 1)
     store.update_status(uid, JobStatus.REVIEW, stages=names)
+    _emit(job_id, "review", project_id=pid)
 
     try:
         from app import db_repos, memory_store
@@ -97,6 +117,7 @@ def _process_job(job_id: str, settings: Settings) -> None:
 
     final_stages = names + ["committed"]
     store.update_status(uid, JobStatus.COMMITTED, stages=final_stages)
+    _emit(job_id, "committed", project_id=pid)
 
 
 def _loop(settings: Settings) -> None:

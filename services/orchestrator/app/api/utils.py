@@ -101,20 +101,30 @@ class EventEmitter:
     """Simple in-memory event emitter for SSE."""
 
     def __init__(self):
+        self._lock = __import__("threading").Lock()
         self._subscribers: dict[str, list[callable]] = {}
 
     def subscribe(self, event_type: str, callback: callable) -> None:
-        if event_type not in self._subscribers:
-            self._subscribers[event_type] = []
-        self._subscribers[event_type].append(callback)
+        with self._lock:
+            if event_type not in self._subscribers:
+                self._subscribers[event_type] = []
+            self._subscribers[event_type].append(callback)
+
+    def unsubscribe(self, event_type: str, callback: callable) -> None:
+        with self._lock:
+            if event_type in self._subscribers:
+                self._subscribers[event_type] = [
+                    cb for cb in self._subscribers[event_type] if cb is not callback
+                ]
 
     def emit(self, event_type: str, data: dict[str, Any]) -> None:
-        if event_type in self._subscribers:
-            for callback in self._subscribers[event_type]:
-                try:
-                    callback(data)
-                except Exception:
-                    pass
+        with self._lock:
+            callbacks = list(self._subscribers.get(event_type, []))
+        for callback in callbacks:
+            try:
+                callback(data)
+            except Exception:
+                pass
 
 
 _global_emitter = EventEmitter()
