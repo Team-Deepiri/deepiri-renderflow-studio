@@ -29,6 +29,10 @@ deepiri-renderflow-worker-queue = { path = "../../lib/renderflow_queue", develop
 ruff = "^0.8.0"
 pytest = "^8.0.0"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
