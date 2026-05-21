@@ -167,3 +167,44 @@ export async function probeMedia(path: string): Promise<string> {
   });
   return res.text();
 }
+
+const BASE = "http://127.0.0.1:8080";
+
+export async function orchestratorCreateTrack(
+  sequenceId: string,
+  trackType: string,
+  laneIndex: number,
+  name: string,
+): Promise<Track> {
+  const res = await fetch(`${BASE}/v1/sequences/${sequenceId}/tracks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ track_type: trackType, lane_index: laneIndex, name }),
+  });
+  return res.json();
+}
+
+export async function orchestratorListTracks(sequenceId: string): Promise<Track[]> {
+  const res = await fetch(`${BASE}/v1/sequences/${sequenceId}/tracks`);
+  return res.json();
+}
+
+export async function orchestratorCreateClip(
+  sequenceId: string,
+  trackId: string,
+  assetId: string,
+  inTick: number,
+  outTick: number,
+): Promise<Clip> {
+  const res = await fetch(`${BASE}/v1/sequences/${sequenceId}/clips`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ track_id: trackId, asset_id: assetId, in_tick: inTick, out_tick: outTick, src_in_tick: 0, speed_ratio: 1.0 }),
+  });
+  return res.json();
+}
+
+export async function orchestratorListClips(sequenceId: string): Promise<Clip[]> {
+  const res = await fetch(`${BASE}/v1/sequences/${sequenceId}/clips`);
+  return res.json();
+}
