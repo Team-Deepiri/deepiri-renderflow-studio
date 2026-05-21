@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 import grpc
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app import db
 from app.api import studio_router
@@ -40,6 +41,13 @@ app = FastAPI(
     version="0.3.0",
     lifespan=lifespan,
     description="HTTP + gRPC orchestrator, timeline, scenes, render jobs, AI pipeline.",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(studio_router)

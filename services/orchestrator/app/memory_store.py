@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import threading
 from datetime import datetime, UTC
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
+
+logger = logging.getLogger(__name__)
 
 _lock = threading.RLock()
 
@@ -22,6 +27,87 @@ _scenes: dict[UUID, dict[str, Any]] = {}
 _scene_nodes: dict[UUID, dict[str, Any]] = {}
 _render_jobs: dict[UUID, dict[str, Any]] = {}
 
+_STORE_PATH = Path(__file__).parent.parent / "data" / "store.json"
+
+_UUID_FIELDS = {
+    "id", "owner_id", "project_id", "sequence_id", "track_id",
+    "asset_id", "clip_id", "scene_id", "parent_id", "job_id",
+}
+_DT_FIELDS = {"created_at", "updated_at", "ended_at", "started_at"}
+
+_ALL_STORES = [
+    ("users", "_users"),
+    ("projects", "_projects"),
+    ("assets", "_assets"),
+    ("sequences", "_sequences"),
+    ("tracks", "_tracks"),
+    ("clips", "_clips"),
+    ("clip_effects", "_clip_effects"),
+    ("scenes", "_scenes"),
+    ("scene_nodes", "_scene_nodes"),
+    ("render_jobs", "_render_jobs"),
+]
+
+
+def _record_to_json(record: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for k, v in record.items():
+        if isinstance(v, UUID):
+            out[k] = str(v)
+        elif isinstance(v, datetime):
+            out[k] = v.isoformat()
+        else:
+            out[k] = v
+    return out
+
+
+def _record_from_json(record: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for k, v in record.items():
+        if k in _UUID_FIELDS and v is not None:
+            out[k] = UUID(v)
+        elif k in _DT_FIELDS and v is not None:
+            out[k] = datetime.fromisoformat(v)
+        else:
+            out[k] = v
+    return out
+
+
+def _save() -> None:
+    try:
+        _STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        import sys
+        this = sys.modules[__name__]
+        data: dict[str, Any] = {}
+        for json_key, attr in _ALL_STORES:
+            store: dict[UUID, dict] = getattr(this, attr)
+            data[json_key] = {str(k): _record_to_json(v) for k, v in store.items()}
+        tmp = _STORE_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=2))
+        tmp.replace(_STORE_PATH)
+    except Exception as e:
+        logger.warning("Failed to persist store: %s", e)
+
+
+def _load() -> None:
+    if not _STORE_PATH.exists():
+        return
+    try:
+        import sys
+        this = sys.modules[__name__]
+        data = json.loads(_STORE_PATH.read_text())
+        for json_key, attr in _ALL_STORES:
+            store: dict[UUID, dict] = getattr(this, attr)
+            store.clear()
+            for k_str, v in data.get(json_key, {}).items():
+                store[UUID(k_str)] = _record_from_json(v)
+        logger.info("Loaded store from %s", _STORE_PATH)
+    except Exception as e:
+        logger.warning("Failed to load store: %s", e)
+
+
+_load()
+
 
 def _now() -> datetime:
     return datetime.now(UTC)
@@ -37,6 +123,7 @@ def ensure_demo_user() -> UUID:
                 "role": "admin",
                 "created_at": _now(),
             }
+            _save()
         return DEMO_OWNER
 
 
@@ -62,6 +149,7 @@ def project_create(owner_id: UUID, name: str, fps_num: int, fps_den: int, sample
     }
     with _lock:
         _projects[pid] = row
+    _save()
     return row
 
 
@@ -99,6 +187,7 @@ def asset_create(
     }
     with _lock:
         _assets[aid] = row
+    _save()
     return row
 
 
@@ -127,6 +216,7 @@ def sequence_create(
     }
     with _lock:
         _sequences[sid] = row
+    _save()
     return row
 
 
@@ -154,6 +244,7 @@ def track_create(sequence_id: UUID, track_type: str, lane_index: int, name: str)
     }
     with _lock:
         _tracks[tid] = row
+    _save()
     return row
 
 
@@ -186,6 +277,7 @@ def clip_create(
     }
     with _lock:
         _clips[cid] = row
+    _save()
     return row
 
 
@@ -207,6 +299,7 @@ def clip_effect_create(clip_id: UUID, effect_type: str, order_idx: int, params: 
     }
     with _lock:
         _clip_effects[eid] = row
+    _save()
     return row
 
 
@@ -228,6 +321,7 @@ def scene_create(project_id: UUID, name: str, unit_scale: float = 1.0, up_axis: 
     }
     with _lock:
         _scenes[sid] = row
+    _save()
     return row
 
 
@@ -254,6 +348,7 @@ def scene_node_create(
     }
     with _lock:
         _scene_nodes[nid] = row
+    _save()
     return row
 
 
@@ -282,6 +377,7 @@ def render_job_create(
     }
     with _lock:
         _render_jobs[rid] = row
+    _save()
     return row
 
 
@@ -312,12 +408,14 @@ def project_update(
         if fps_den is not None:
             row["fps_den"] = fps_den
         row["updated_at"] = _now()
-        return row
+    _save()
+    return row
 
 
 def project_delete(project_id: UUID) -> None:
     with _lock:
         _projects.pop(project_id, None)
+    _save()
 
 
 def asset_get(asset_id: UUID) -> dict[str, Any] | None:

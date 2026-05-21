@@ -1,0 +1,44 @@
+{
+  "users": {
+    "00000000-0000-4000-8000-000000000001": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "email": "studio@renderflow.local",
+      "display_name": "Renderflow Studio",
+      "role": "admin",
+      "created_at": "2026-05-21T02:29:39.304351+00:00"
+    }
+  },
+  "projects": {
+    "76bc0bff-6b42-4eea-9ce1-32ee0c6845a2": {
+      "id": "76bc0bff-6b42-4eea-9ce1-32ee0c6845a2",
+      "owner_id": "00000000-0000-4000-8000-000000000001",
+      "name": "Untitled 9:31:57 AM",
+      "fps_num": 24,
+      "fps_den": 1,
+      "sample_rate": 48000,
+      "ai_enabled": true,
+      "settings_jsonb": {},
+      "created_at": "2026-05-21T02:31:57.268103+00:00",
+      "updated_at": "2026-05-21T02:31:57.268110+00:00"
+    }
+  },
+  "assets": {},
+  "sequences": {
+    "fda7d415-8725-4869-9489-995d0bed8d25": {
+      "id": "fda7d415-8725-4869-9489-995d0bed8d25",
+      "project_id": "76bc0bff-6b42-4eea-9ce1-32ee0c6845a2",
+      "name": "Main Sequence",
+      "start_tc": "00:00:00:00",
+      "duration_ticks": 0,
+      "resolution_w": 1920,
+      "resolution_h": 1080,
+      "created_at": "2026-05-21T02:31:57.275397+00:00"
+    }
+  },
+  "tracks": {},
+  "clips": {},
+  "clip_effects": {},
+  "scenes": {},
+  "scene_nodes": {},
+  "render_jobs": {}
+}

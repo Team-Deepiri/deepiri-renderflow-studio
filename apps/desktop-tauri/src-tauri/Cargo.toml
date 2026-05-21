@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["devtools"] }
 reqwest = { version = "0.12", features = ["json", "blocking"] }
 uuid = { version = "1", features = ["v4"] }
 timeline-engine-rs = { path = "../../../core/timeline-engine-rs" }
