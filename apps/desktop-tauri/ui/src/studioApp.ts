@@ -1061,7 +1061,7 @@ export function bootstrapStudioApp(): void {
         return;
       }
       writeOutput({ available_projects: result.items.map((p, i) => `${i + 1}. ${p.name} (${p.id})`) });
-      const project = result.items[result.items.length - 1];
+      const project = result.items[0];
 
       activeProjectId = project.id;
       const sequences = await orchestratorListSequences(project.id) as any[];

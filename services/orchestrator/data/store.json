@@ -188,6 +188,90 @@
       "settings_jsonb": {},
       "created_at": "2026-05-22T02:01:48.253806+00:00",
       "updated_at": "2026-05-22T02:01:48.253815+00:00"
+    },
+    "6f63eec2-c2a8-4fe8-93d5-70c17fc0bfb2": {
+      "id": "6f63eec2-c2a8-4fe8-93d5-70c17fc0bfb2",
+      "owner_id": "00000000-0000-4000-8000-000000000001",
+      "name": "Untitled 10:52:22 AM",
+      "fps_num": 24,
+      "fps_den": 1,
+      "sample_rate": 48000,
+      "ai_enabled": true,
+      "settings_jsonb": {},
+      "created_at": "2026-05-22T03:52:22.526524+00:00",
+      "updated_at": "2026-05-22T03:52:22.526531+00:00"
+    },
+    "89bb300c-65f4-43b1-bcb3-d91f24a2cc58": {
+      "id": "89bb300c-65f4-43b1-bcb3-d91f24a2cc58",
+      "owner_id": "00000000-0000-4000-8000-000000000001",
+      "name": "Untitled 10:55:31 AM",
+      "fps_num": 24,
+      "fps_den": 1,
+      "sample_rate": 48000,
+      "ai_enabled": true,
+      "settings_jsonb": {},
+      "created_at": "2026-05-22T03:55:31.304791+00:00",
+      "updated_at": "2026-05-22T03:55:31.304799+00:00"
+    },
+    "54b50cc5-9586-48e0-be94-afa67d60b8f6": {
+      "id": "54b50cc5-9586-48e0-be94-afa67d60b8f6",
+      "owner_id": "00000000-0000-4000-8000-000000000001",
+      "name": "Untitled 10:57:02 AM",
+      "fps_num": 24,
+      "fps_den": 1,
+      "sample_rate": 48000,
+      "ai_enabled": true,
+      "settings_jsonb": {},
+      "created_at": "2026-05-22T03:57:02.935657+00:00",
+      "updated_at": "2026-05-22T03:57:02.935667+00:00"
+    },
+    "01bb73f5-8919-4073-ab3b-551b1c1d86fb": {
+      "id": "01bb73f5-8919-4073-ab3b-551b1c1d86fb",
+      "owner_id": "00000000-0000-4000-8000-000000000001",
+      "name": "Untitled 10:57:26 AM",
+      "fps_num": 24,
+      "fps_den": 1,
+      "sample_rate": 48000,
+      "ai_enabled": true,
+      "settings_jsonb": {},
+      "created_at": "2026-05-22T03:57:26.971644+00:00",
+      "updated_at": "2026-05-22T03:57:26.971658+00:00"
+    },
+    "2e53fb28-f959-440a-a275-1b091b5673b5": {
+      "id": "2e53fb28-f959-440a-a275-1b091b5673b5",
+      "owner_id": "00000000-0000-4000-8000-000000000001",
+      "name": "Untitled 10:57:55 AM",
+      "fps_num": 24,
+      "fps_den": 1,
+      "sample_rate": 48000,
+      "ai_enabled": true,
+      "settings_jsonb": {},
+      "created_at": "2026-05-22T03:57:55.907904+00:00",
+      "updated_at": "2026-05-22T03:57:55.907912+00:00"
+    },
+    "494d36b3-59fc-4045-ae59-93f86021fac7": {
+      "id": "494d36b3-59fc-4045-ae59-93f86021fac7",
+      "owner_id": "00000000-0000-4000-8000-000000000001",
+      "name": "Untitled 10:59:16 AM",
+      "fps_num": 24,
+      "fps_den": 1,
+      "sample_rate": 48000,
+      "ai_enabled": true,
+      "settings_jsonb": {},
+      "created_at": "2026-05-22T03:59:16.714183+00:00",
+      "updated_at": "2026-05-22T03:59:16.714194+00:00"
+    },
+    "04369dff-1fc7-427f-9151-d75562737a16": {
+      "id": "04369dff-1fc7-427f-9151-d75562737a16",
+      "owner_id": "00000000-0000-4000-8000-000000000001",
+      "name": "Untitled 10:59:57 AM",
+      "fps_num": 24,
+      "fps_den": 1,
+      "sample_rate": 48000,
+      "ai_enabled": true,
+      "settings_jsonb": {},
+      "created_at": "2026-05-22T03:59:57.996352+00:00",
+      "updated_at": "2026-05-22T03:59:57.996363+00:00"
     }
   },
   "assets": {
@@ -344,6 +428,150 @@
         "name": "{\n  \"debug_click\": true,\n  \"trackCount\": 0,\n  \"activeTrackId\": null,\n  \"foundTrack\": null\n}"
       },
       "created_at": "2026-05-22T02:01:51.865418+00:00"
+    },
+    "80bbe06a-c47c-40aa-85aa-99a4adb2ca45": {
+      "id": "80bbe06a-c47c-40aa-85aa-99a4adb2ca45",
+      "project_id": "6f63eec2-c2a8-4fe8-93d5-70c17fc0bfb2",
+      "kind": "image",
+      "uri": "'/Users/quanhuynh/Desktop/self-study/Project JS/personal project/DO-patriotHack/DO-patriotHack/hackathon.mp4'",
+      "sha256": "pending",
+      "duration_ms": null,
+      "meta_jsonb": {
+        "proxy_status": "unavailable",
+        "proxy_path": null,
+        "name": "hackathon.mp4'"
+      },
+      "created_at": "2026-05-22T03:52:38.985307+00:00"
+    },
+    "75a00bd9-3d9f-4a45-9765-ab398b797093": {
+      "id": "75a00bd9-3d9f-4a45-9765-ab398b797093",
+      "project_id": "89bb300c-65f4-43b1-bcb3-d91f24a2cc58",
+      "kind": "image",
+      "uri": "'/Users/quanhuynh/Desktop/self-study/Project JS/personal project/DO-patriotHack/DO-patriotHack/hackathon.mp4'",
+      "sha256": "pending",
+      "duration_ms": null,
+      "meta_jsonb": {
+        "proxy_status": "unavailable",
+        "proxy_path": null,
+        "name": "hackathon.mp4'"
+      },
+      "created_at": "2026-05-22T03:55:49.127467+00:00"
+    },
+    "868ae930-888d-4559-a14e-c2061466727b": {
+      "id": "868ae930-888d-4559-a14e-c2061466727b",
+      "project_id": "54b50cc5-9586-48e0-be94-afa67d60b8f6",
+      "kind": "video",
+      "uri": "/Users/quanhuynh/Desktop/self-study/Project JS/personal project/DO-patriotHack/DO-patriotHack/hackathon.mp4",
+      "sha256": "pending",
+      "duration_ms": 455029,
+      "meta_jsonb": {
+        "proxy_status": "ready",
+        "proxy_path": "/Users/quanhuynh/Desktop/renderflow/deepiri-renderflow-studio/services/orchestrator/data/proxies/868ae930-888d-4559-a14e-c2061466727b_proxy.mp4",
+        "name": "hackathon.mp4",
+        "size_bytes": 87820038,
+        "width": 1662,
+        "height": 1080,
+        "fps": 30.0,
+        "codec": "h264",
+        "audio_codec": "aac",
+        "sample_rate": 44100,
+        "channels": 1
+      },
+      "created_at": "2026-05-22T03:57:06.121629+00:00"
+    },
+    "77a63555-6970-461f-95ee-e13c3eaca7f6": {
+      "id": "77a63555-6970-461f-95ee-e13c3eaca7f6",
+      "project_id": "01bb73f5-8919-4073-ab3b-551b1c1d86fb",
+      "kind": "video",
+      "uri": "/Users/quanhuynh/Desktop/self-study/Project JS/personal project/DO-patriotHack/DO-patriotHack/hackathon.mp4",
+      "sha256": "pending",
+      "duration_ms": 455029,
+      "meta_jsonb": {
+        "proxy_status": "ready",
+        "proxy_path": "/Users/quanhuynh/Desktop/renderflow/deepiri-renderflow-studio/services/orchestrator/data/proxies/77a63555-6970-461f-95ee-e13c3eaca7f6_proxy.mp4",
+        "name": "hackathon.mp4",
+        "size_bytes": 87820038,
+        "width": 1662,
+        "height": 1080,
+        "fps": 30.0,
+        "codec": "h264",
+        "audio_codec": "aac",
+        "sample_rate": 44100,
+        "channels": 1
+      },
+      "created_at": "2026-05-22T03:57:29.700233+00:00"
+    },
+    "0cb77e46-9a41-42f2-9d4c-0cd64aa1c58e": {
+      "id": "0cb77e46-9a41-42f2-9d4c-0cd64aa1c58e",
+      "project_id": "2e53fb28-f959-440a-a275-1b091b5673b5",
+      "kind": "video",
+      "uri": "/Users/quanhuynh/Desktop/self-study/Project JS/personal project/DO-patriotHack/DO-patriotHack/hackathon.mp4",
+      "sha256": "pending",
+      "duration_ms": 455029,
+      "meta_jsonb": {
+        "proxy_status": "ready",
+        "proxy_path": "/Users/quanhuynh/Desktop/renderflow/deepiri-renderflow-studio/services/orchestrator/data/proxies/0cb77e46-9a41-42f2-9d4c-0cd64aa1c58e_proxy.mp4",
+        "name": "hackathon.mp4",
+        "size_bytes": 87820038,
+        "width": 1662,
+        "height": 1080,
+        "fps": 30.0,
+        "codec": "h264",
+        "audio_codec": "aac",
+        "sample_rate": 44100,
+        "channels": 1
+      },
+      "created_at": "2026-05-22T03:58:00.825620+00:00"
+    },
+    "e12ba770-2bfe-4625-9fed-03ec36e03cc7": {
+      "id": "e12ba770-2bfe-4625-9fed-03ec36e03cc7",
+      "project_id": "494d36b3-59fc-4045-ae59-93f86021fac7",
+      "kind": "image",
+      "uri": "'/Users/quanhuynh/Desktop/self-study/Project JS/personal project/DO-patriotHack/DO-patriotHack/hackathon.mp4'",
+      "sha256": "pending",
+      "duration_ms": null,
+      "meta_jsonb": {
+        "proxy_status": "unavailable",
+        "proxy_path": null,
+        "name": "hackathon.mp4'"
+      },
+      "created_at": "2026-05-22T03:59:41.342349+00:00"
+    },
+    "a5e2c34d-e7d1-491f-ab2a-8abd574364b4": {
+      "id": "a5e2c34d-e7d1-491f-ab2a-8abd574364b4",
+      "project_id": "494d36b3-59fc-4045-ae59-93f86021fac7",
+      "kind": "image",
+      "uri": "'/Users/quanhuynh/Desktop/self-study/Project JS/personal project/DO-patriotHack/DO-patriotHack/hackathon.mp4",
+      "sha256": "pending",
+      "duration_ms": null,
+      "meta_jsonb": {
+        "proxy_status": "unavailable",
+        "proxy_path": null,
+        "name": "hackathon.mp4"
+      },
+      "created_at": "2026-05-22T03:59:49.917366+00:00"
+    },
+    "9b511f17-9f0f-4a71-9789-f23e38c55d8f": {
+      "id": "9b511f17-9f0f-4a71-9789-f23e38c55d8f",
+      "project_id": "04369dff-1fc7-427f-9151-d75562737a16",
+      "kind": "video",
+      "uri": "/Users/quanhuynh/Desktop/self-study/Project JS/personal project/DO-patriotHack/DO-patriotHack/hackathon.mp4",
+      "sha256": "pending",
+      "duration_ms": 455029,
+      "meta_jsonb": {
+        "proxy_status": "ready",
+        "proxy_path": "/Users/quanhuynh/Desktop/renderflow/deepiri-renderflow-studio/services/orchestrator/data/proxies/9b511f17-9f0f-4a71-9789-f23e38c55d8f_proxy.mp4",
+        "name": "hackathon.mp4",
+        "size_bytes": 87820038,
+        "width": 1662,
+        "height": 1080,
+        "fps": 30.0,
+        "codec": "h264",
+        "audio_codec": "aac",
+        "sample_rate": 44100,
+        "channels": 1
+      },
+      "created_at": "2026-05-22T04:00:04.544048+00:00"
     }
   },
   "sequences": {
@@ -496,6 +724,76 @@
       "resolution_w": 1920,
       "resolution_h": 1080,
       "created_at": "2026-05-22T02:01:48.268589+00:00"
+    },
+    "00903d70-82aa-48ca-b694-62119df76570": {
+      "id": "00903d70-82aa-48ca-b694-62119df76570",
+      "project_id": "6f63eec2-c2a8-4fe8-93d5-70c17fc0bfb2",
+      "name": "Main Sequence",
+      "start_tc": "00:00:00:00",
+      "duration_ticks": 0,
+      "resolution_w": 1920,
+      "resolution_h": 1080,
+      "created_at": "2026-05-22T03:52:22.534311+00:00"
+    },
+    "903603ff-e522-4353-8c38-54714cdd154d": {
+      "id": "903603ff-e522-4353-8c38-54714cdd154d",
+      "project_id": "89bb300c-65f4-43b1-bcb3-d91f24a2cc58",
+      "name": "Main Sequence",
+      "start_tc": "00:00:00:00",
+      "duration_ticks": 0,
+      "resolution_w": 1920,
+      "resolution_h": 1080,
+      "created_at": "2026-05-22T03:55:31.319126+00:00"
+    },
+    "fe9f3caf-e69b-40f0-8670-1ae28720b9b3": {
+      "id": "fe9f3caf-e69b-40f0-8670-1ae28720b9b3",
+      "project_id": "54b50cc5-9586-48e0-be94-afa67d60b8f6",
+      "name": "Main Sequence",
+      "start_tc": "00:00:00:00",
+      "duration_ticks": 0,
+      "resolution_w": 1920,
+      "resolution_h": 1080,
+      "created_at": "2026-05-22T03:57:02.947866+00:00"
+    },
+    "dd4c6a25-ff5d-4576-982d-9f434a5f32d6": {
+      "id": "dd4c6a25-ff5d-4576-982d-9f434a5f32d6",
+      "project_id": "01bb73f5-8919-4073-ab3b-551b1c1d86fb",
+      "name": "Main Sequence",
+      "start_tc": "00:00:00:00",
+      "duration_ticks": 0,
+      "resolution_w": 1920,
+      "resolution_h": 1080,
+      "created_at": "2026-05-22T03:57:26.985133+00:00"
+    },
+    "8fc0463f-fd26-4c6a-9a71-6d681014c5b3": {
+      "id": "8fc0463f-fd26-4c6a-9a71-6d681014c5b3",
+      "project_id": "2e53fb28-f959-440a-a275-1b091b5673b5",
+      "name": "Main Sequence",
+      "start_tc": "00:00:00:00",
+      "duration_ticks": 0,
+      "resolution_w": 1920,
+      "resolution_h": 1080,
+      "created_at": "2026-05-22T03:57:55.921706+00:00"
+    },
+    "a820b395-01ff-439c-8ad0-9c55b5ab1f8b": {
+      "id": "a820b395-01ff-439c-8ad0-9c55b5ab1f8b",
+      "project_id": "494d36b3-59fc-4045-ae59-93f86021fac7",
+      "name": "Main Sequence",
+      "start_tc": "00:00:00:00",
+      "duration_ticks": 0,
+      "resolution_w": 1920,
+      "resolution_h": 1080,
+      "created_at": "2026-05-22T03:59:16.728675+00:00"
+    },
+    "4a913c6e-f159-4dab-95fd-909b81b5c610": {
+      "id": "4a913c6e-f159-4dab-95fd-909b81b5c610",
+      "project_id": "04369dff-1fc7-427f-9151-d75562737a16",
+      "name": "Main Sequence",
+      "start_tc": "00:00:00:00",
+      "duration_ticks": 0,
+      "resolution_w": 1920,
+      "resolution_h": 1080,
+      "created_at": "2026-05-22T03:59:58.007624+00:00"
     }
   },
   "tracks": {
@@ -678,6 +976,146 @@
       "muted": false,
       "solo": false,
       "created_at": "2026-05-22T02:01:48.287791+00:00"
+    },
+    "4a601c01-9b09-4c65-9c70-43f971c58c2e": {
+      "id": "4a601c01-9b09-4c65-9c70-43f971c58c2e",
+      "sequence_id": "00903d70-82aa-48ca-b694-62119df76570",
+      "track_type": "video",
+      "lane_index": 0,
+      "name": "V1",
+      "muted": false,
+      "solo": false,
+      "created_at": "2026-05-22T03:52:22.541233+00:00"
+    },
+    "ffd4676a-c23a-4e13-bd88-ac4673f96cae": {
+      "id": "ffd4676a-c23a-4e13-bd88-ac4673f96cae",
+      "sequence_id": "00903d70-82aa-48ca-b694-62119df76570",
+      "track_type": "audio",
+      "lane_index": 0,
+      "name": "A1",
+      "muted": false,
+      "solo": false,
+      "created_at": "2026-05-22T03:52:22.545745+00:00"
+    },
+    "8b63a4fd-442a-4018-b3f0-3193c9ade5f0": {
+      "id": "8b63a4fd-442a-4018-b3f0-3193c9ade5f0",
+      "sequence_id": "903603ff-e522-4353-8c38-54714cdd154d",
+      "track_type": "video",
+      "lane_index": 0,
+      "name": "V1",
+      "muted": false,
+      "solo": false,
+      "created_at": "2026-05-22T03:55:31.330172+00:00"
+    },
+    "7cb1d68a-acc1-4dbf-aa0f-794929dbe561": {
+      "id": "7cb1d68a-acc1-4dbf-aa0f-794929dbe561",
+      "sequence_id": "903603ff-e522-4353-8c38-54714cdd154d",
+      "track_type": "audio",
+      "lane_index": 0,
+      "name": "A1",
+      "muted": false,
+      "solo": false,
+      "created_at": "2026-05-22T03:55:31.337572+00:00"
+    },
+    "43e6892a-3ba1-4a61-81cb-1184fd6c97ea": {
+      "id": "43e6892a-3ba1-4a61-81cb-1184fd6c97ea",
+      "sequence_id": "fe9f3caf-e69b-40f0-8670-1ae28720b9b3",
+      "track_type": "video",
+      "lane_index": 0,
+      "name": "V1",
+      "muted": false,
+      "solo": false,
+      "created_at": "2026-05-22T03:57:02.956176+00:00"
+    },
+    "fbf06b94-c24d-4672-b7fa-81c19f8dfc5d": {
+      "id": "fbf06b94-c24d-4672-b7fa-81c19f8dfc5d",
+      "sequence_id": "fe9f3caf-e69b-40f0-8670-1ae28720b9b3",
+      "track_type": "audio",
+      "lane_index": 0,
+      "name": "A1",
+      "muted": false,
+      "solo": false,
+      "created_at": "2026-05-22T03:57:02.962328+00:00"
+    },
+    "e783954e-0a0c-4f7c-89b2-8300f6ab7fd5": {
+      "id": "e783954e-0a0c-4f7c-89b2-8300f6ab7fd5",
+      "sequence_id": "dd4c6a25-ff5d-4576-982d-9f434a5f32d6",
+      "track_type": "video",
+      "lane_index": 0,
+      "name": "V1",
+      "muted": false,
+      "solo": false,
+      "created_at": "2026-05-22T03:57:26.993708+00:00"
+    },
+    "cd27bcdd-ef29-4b46-9937-2eea0f737b76": {
+      "id": "cd27bcdd-ef29-4b46-9937-2eea0f737b76",
+      "sequence_id": "dd4c6a25-ff5d-4576-982d-9f434a5f32d6",
+      "track_type": "audio",
+      "lane_index": 0,
+      "name": "A1",
+      "muted": false,
+      "solo": false,
+      "created_at": "2026-05-22T03:57:27.000237+00:00"
+    },
+    "52c4682d-ba88-4284-a2a9-0ecca397359a": {
+      "id": "52c4682d-ba88-4284-a2a9-0ecca397359a",
+      "sequence_id": "8fc0463f-fd26-4c6a-9a71-6d681014c5b3",
+      "track_type": "video",
+      "lane_index": 0,
+      "name": "V1",
+      "muted": false,
+      "solo": false,
+      "created_at": "2026-05-22T03:57:55.933403+00:00"
+    },
+    "a0d95250-e749-4318-a0d1-3e8c68c24697": {
+      "id": "a0d95250-e749-4318-a0d1-3e8c68c24697",
+      "sequence_id": "8fc0463f-fd26-4c6a-9a71-6d681014c5b3",
+      "track_type": "audio",
+      "lane_index": 0,
+      "name": "A1",
+      "muted": false,
+      "solo": false,
+      "created_at": "2026-05-22T03:57:55.940903+00:00"
+    },
+    "f80085f2-8149-41d8-9997-3fe62e8a7d80": {
+      "id": "f80085f2-8149-41d8-9997-3fe62e8a7d80",
+      "sequence_id": "a820b395-01ff-439c-8ad0-9c55b5ab1f8b",
+      "track_type": "video",
+      "lane_index": 0,
+      "name": "V1",
+      "muted": false,
+      "solo": false,
+      "created_at": "2026-05-22T03:59:16.740029+00:00"
+    },
+    "8849c857-2a5b-4718-a99d-e7e41c96b2ab": {
+      "id": "8849c857-2a5b-4718-a99d-e7e41c96b2ab",
+      "sequence_id": "a820b395-01ff-439c-8ad0-9c55b5ab1f8b",
+      "track_type": "audio",
+      "lane_index": 0,
+      "name": "A1",
+      "muted": false,
+      "solo": false,
+      "created_at": "2026-05-22T03:59:16.747834+00:00"
+    },
+    "1cd2a9a7-2e53-407e-827d-c77771641158": {
+      "id": "1cd2a9a7-2e53-407e-827d-c77771641158",
+      "sequence_id": "4a913c6e-f159-4dab-95fd-909b81b5c610",
+      "track_type": "video",
+      "lane_index": 0,
+      "name": "V1",
+      "muted": false,
+      "solo": false,
+      "created_at": "2026-05-22T03:59:58.018093+00:00"
+    },
+    "75487645-4c14-4bd3-aa36-664ee7d5c503": {
+      "id": "75487645-4c14-4bd3-aa36-664ee7d5c503",
+      "sequence_id": "4a913c6e-f159-4dab-95fd-909b81b5c610",
+      "track_type": "audio",
+      "lane_index": 0,
+      "name": "A1",
+      "muted": false,
+      "solo": false,
+      "created_at": "2026-05-22T03:59:58.025194+00:00"
     }
   },
   "clips": {
@@ -691,6 +1129,28 @@
       "speed_ratio": 1.0,
       "transform_jsonb": {},
       "created_at": "2026-05-22T01:58:12.232842+00:00"
+    },
+    "312cc78b-cbe4-4202-b13c-b6f3f41e02b5": {
+      "id": "312cc78b-cbe4-4202-b13c-b6f3f41e02b5",
+      "track_id": "52c4682d-ba88-4284-a2a9-0ecca397359a",
+      "asset_id": "00000000-0000-0000-0000-000000000001",
+      "in_tick": 0,
+      "out_tick": 2400,
+      "src_in_tick": 0,
+      "speed_ratio": 1.0,
+      "transform_jsonb": {},
+      "created_at": "2026-05-22T03:58:04.772824+00:00"
+    },
+    "b80e4725-30e8-4e78-9acf-0194a9ab0763": {
+      "id": "b80e4725-30e8-4e78-9acf-0194a9ab0763",
+      "track_id": "1cd2a9a7-2e53-407e-827d-c77771641158",
+      "asset_id": "00000000-0000-0000-0000-000000000001",
+      "in_tick": 0,
+      "out_tick": 2400,
+      "src_in_tick": 0,
+      "speed_ratio": 1.0,
+      "transform_jsonb": {},
+      "created_at": "2026-05-22T04:00:09.495972+00:00"
     }
   },
   "clip_effects": {},
