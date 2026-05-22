@@ -421,3 +421,13 @@ def project_delete(project_id: UUID) -> None:
 def asset_get(asset_id: UUID) -> dict[str, Any] | None:
     with _lock:
         return _assets.get(asset_id)
+
+
+def asset_update_meta(asset_id: UUID, meta_updates: dict[str, Any]) -> dict[str, Any] | None:
+    with _lock:
+        row = _assets.get(asset_id)
+        if not row:
+            return None
+        row["meta_jsonb"].update(meta_updates)
+    _save()
+    return row

@@ -181,6 +181,10 @@ def get_asset(asset_id: UUID) -> dict[str, Any] | None:
     return memory_store.asset_get(asset_id)
 
 
+def update_asset_meta(asset_id: UUID, meta_updates: dict[str, Any]) -> dict[str, Any] | None:
+    return memory_store.asset_update_meta(asset_id, meta_updates)
+
+
 def get_tracks(sequence_id: UUID) -> list[dict[str, Any]]:
     return list_tracks(sequence_id)
 
