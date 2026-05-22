@@ -2,10 +2,12 @@
 """Start orchestrator on ephemeral ports, hit HTTP + gRPC, exit 0 on success."""
 from __future__ import annotations
 
+import ast
 import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -34,6 +36,21 @@ def _orchestrator_python() -> Path:
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
         pass
     return Path(sys.executable)
+
+
+def _sse_collector(port: int, collected: list, stop: threading.Event) -> None:
+    """Read /v1/events in a background thread and collect data lines."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/events", timeout=35) as r:
+            while not stop.is_set():
+                line = r.readline()
+                if not line:
+                    break
+                text = line.decode("utf-8", errors="replace").strip()
+                if text.startswith("data:"):
+                    collected.append(text[5:].strip())
+    except Exception:
+        pass
 
 
 def main() -> int:
@@ -83,6 +100,14 @@ def main() -> int:
             proj = json.loads(r.read().decode())
         pid = proj["id"]
 
+        sse_events: list[str] = []
+        sse_stop = threading.Event()
+        sse_thread = threading.Thread(
+            target=_sse_collector, args=(http_port, sse_events, sse_stop), daemon=True
+        )
+        sse_thread.start()
+        time.sleep(0.1)
+
         req = json.dumps(
             {"project_id": pid, "mode": "scene", "prompt": "smoke", "metadata": {}}
         ).encode()
@@ -108,6 +133,21 @@ def main() -> int:
             print("job did not reach committed:", st, file=sys.stderr)
             return 1
 
+        time.sleep(0.3)
+        sse_stop.set()
+        sse_thread.join(timeout=2)
+
+        statuses: set[str] = set()
+        for raw in sse_events:
+            if job_id in raw:
+                try:
+                    statuses.add(ast.literal_eval(raw).get("status", ""))
+                except Exception:
+                    pass
+        if "preparing" not in statuses or "committed" not in statuses:
+            print(f"SSE events missing expected statuses, got: {statuses}", file=sys.stderr)
+            return 1
+
         sys.path.insert(0, str(GEN))
         import grpc  # noqa: E402
         import renderflow_pb2  # noqa: E402
@@ -127,7 +167,7 @@ def main() -> int:
             print("grpc CreateProject failed", file=sys.stderr)
             return 1
         ch.close()
-        print("smoke ok: http + job pipeline + grpc AI + grpc Project")
+        print("smoke ok: http + job pipeline + SSE events + grpc AI + grpc Project")
         return 0
     finally:
         proc.terminate()

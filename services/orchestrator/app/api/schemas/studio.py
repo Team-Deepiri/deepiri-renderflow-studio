@@ -62,6 +62,10 @@ class ProbeBody(BaseModel):
     path: str
 
 
+class AssetImportBody(BaseModel):
+    path: str
+
+
 class SequenceCreate(BaseModel):
     name: str = "Sequence 1"
     resolution_w: int = 1920
