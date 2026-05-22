@@ -13,6 +13,10 @@ import {
   submitAiJob,
   timelineResolveActive,
   vulkanDiscover,
+  importMedia,
+  listProjectAssets,
+  getAsset,
+  type Asset,
 } from "./backendApi";
 
 export function bootstrapStudioApp(): void {
@@ -90,6 +94,8 @@ export function bootstrapStudioApp(): void {
 
   let activeProjectId: string | null = null;
   let activeSequenceId: string | null = null;
+  let registeredAssets: Asset[] = [];
+  let proxyPollTimer: number | undefined;
   const PLACEHOLDER_ASSET_ID = "00000000-0000-0000-0000-000000000001";
 
   app.innerHTML = `
@@ -121,8 +127,12 @@ export function bootstrapStudioApp(): void {
         </div>
         <div class="asset-section">
           <h4>Assets</h4>
+          <div id="drop-zone" class="drop-zone">Drop media files here</div>
           <ul id="asset-list" class="asset-list"></ul>
-          <button class="btn narrow" id="btn-probe" type="button">Probe Media via Orchestrator</button>
+          <div class="asset-actions">
+            <button class="btn narrow" id="btn-import-media" type="button">Import Media</button>
+            <button class="btn narrow subtle" id="btn-probe" type="button">Probe</button>
+          </div>
         </div>
       </aside>
 
@@ -377,6 +387,51 @@ export function bootstrapStudioApp(): void {
     font-size: 12px;
     color: var(--text-dim);
   }
+  .drop-zone {
+    border: 1.5px dashed #3a4a68;
+    border-radius: 7px;
+    padding: 10px;
+    text-align: center;
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+    transition: border-color 0.15s, background 0.15s;
+    cursor: default;
+  }
+  .drop-zone.drag-over {
+    border-color: var(--accent);
+    background: rgba(77, 125, 255, 0.08);
+    color: var(--accent);
+  }
+  .asset-actions { display: flex; gap: 6px; margin-top: 4px; }
+  .asset-list { margin: 0 0 6px; padding: 0; list-style: none; }
+  .asset-item {
+    padding: 7px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: #0f131b;
+    margin-bottom: 5px;
+    cursor: pointer;
+    transition: border-color 0.1s;
+  }
+  .asset-item:hover { border-color: var(--accent); }
+  .asset-item-name { font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .asset-item-meta { font-size: 10px; color: var(--text-dim); margin-top: 2px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .asset-badge {
+    display: inline-block;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+  }
+  .badge-video { background: rgba(46, 120, 255, 0.25); color: #6fa3ff; }
+  .badge-audio { background: rgba(203, 147, 66, 0.25); color: #e5b86a; }
+  .badge-image { background: rgba(24, 180, 135, 0.25); color: #4addb5; }
+  .proxy-pending { color: #a8b2c7; }
+  .proxy-ready { color: #4addb5; }
+  .proxy-failed { color: var(--danger); }
 `;
   document.head.appendChild(style);
 
@@ -649,27 +704,56 @@ export function bootstrapStudioApp(): void {
     updateInspector();
   }
 
-  function seedAssets() {
-    const assets = [
-      "cam_a_take03.mov",
-      "broll_city_night.mp4",
-      "voiceover_v1.wav",
-      "logo_anim_rgba.mov",
-      "color_lut_709.cube",
-    ];
-    assetList.innerHTML = assets.map((item) => `<li>${item}</li>`).join("");
-    const rows = assetList.querySelectorAll("li");
-    rows.forEach((row) => {
-      row.addEventListener("click", () => {
+  function fmtDuration(ms: number | null): string {
+    if (ms == null) return "";
+    const s = Math.floor(ms / 1000);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+    return `${m}:${String(sec).padStart(2, "0")}`;
+  }
+
+  function renderAssetList() {
+    assetList.innerHTML = "";
+    if (registeredAssets.length === 0) return;
+    for (const asset of registeredAssets) {
+      const meta = asset.meta_jsonb ?? {};
+      const name = meta.name ?? asset.uri.split("/").pop() ?? asset.uri;
+      const li = document.createElement("li");
+      li.className = "asset-item";
+
+      const badgeClass = asset.kind === "video" ? "badge-video" : asset.kind === "audio" ? "badge-audio" : "badge-image";
+      const resMeta = meta.width && meta.height ? `${meta.width}×${meta.height}` : "";
+      const durMeta = asset.duration_ms != null ? fmtDuration(asset.duration_ms) : "";
+      const fpsMeta = meta.fps != null ? `${meta.fps.toFixed(2)} fps` : "";
+      const proxyStatus = meta.proxy_status ?? "unavailable";
+      const proxyLabel = proxyStatus === "pending" ? "⏳ proxy" : proxyStatus === "ready" ? "✓ proxy" : proxyStatus === "failed" ? "✗ proxy" : "";
+      const proxyClass = proxyStatus === "ready" ? "proxy-ready" : proxyStatus === "failed" ? "proxy-failed" : "proxy-pending";
+
+      li.innerHTML = `
+        <div class="asset-item-name" title="${asset.uri}">${name}</div>
+        <div class="asset-item-meta">
+          <span class="asset-badge ${badgeClass}">${asset.kind}</span>
+          ${durMeta ? `<span>${durMeta}</span>` : ""}
+          ${resMeta ? `<span>${resMeta}</span>` : ""}
+          ${fpsMeta ? `<span>${fpsMeta}</span>` : ""}
+          ${proxyLabel ? `<span class="${proxyClass}">${proxyLabel}</span>` : ""}
+        </div>
+      `;
+
+      li.addEventListener("click", () => {
         const track = timelineState.tracks.find((t) => t.id === timelineUiState.activeTrackId) ?? timelineState.tracks[0];
+        if (!track) return;
         commitHistory("insert_clip_from_asset");
-        const duration = 160;
+        const durationTicks = asset.duration_ms != null ? Math.round((asset.duration_ms / 1000) * timelineState.fps) : 160;
+        const inTick = Math.min(timelineState.playheadTick, timelineState.durationTicks - durationTicks);
         const nextClip: Clip = {
           id: nextClipId++,
-          label: row.textContent?.trim() ?? "asset",
-          inTick: timelineState.playheadTick,
-          outTick: Math.min(timelineState.durationTicks, timelineState.playheadTick + duration),
-          color: track.kind === "Audio" ? "var(--clip-gold)" : "var(--clip-blue)",
+          label: name,
+          inTick: Math.max(0, inTick),
+          outTick: Math.min(timelineState.durationTicks, Math.max(0, inTick) + durationTicks),
+          color: asset.kind === "audio" ? "var(--clip-gold)" : "var(--clip-blue)",
         };
         track.clips.push(nextClip);
         track.clips.sort((a, b) => a.inTick - b.inTick);
@@ -677,7 +761,49 @@ export function bootstrapStudioApp(): void {
         timelineUiState.activeTrackId = track.id;
         renderTimeline();
       });
-    });
+
+      assetList.appendChild(li);
+    }
+  }
+
+  function startProxyPolling() {
+    if (proxyPollTimer) return;
+    proxyPollTimer = window.setInterval(async () => {
+      const pending = registeredAssets.filter((a) => a.meta_jsonb?.proxy_status === "pending");
+      if (pending.length === 0) {
+        window.clearInterval(proxyPollTimer);
+        proxyPollTimer = undefined;
+        return;
+      }
+      let changed = false;
+      for (const asset of pending) {
+        try {
+          const fresh = await getAsset(asset.id);
+          if (fresh.meta_jsonb?.proxy_status !== "pending") {
+            const idx = registeredAssets.findIndex((a) => a.id === asset.id);
+            if (idx >= 0) { registeredAssets[idx] = fresh; changed = true; }
+          }
+        } catch { /* ignore */ }
+      }
+      if (changed) renderAssetList();
+    }, 3000);
+  }
+
+  async function handleImportFile(filePath: string) {
+    if (!activeProjectId) {
+      writeOutput("Create or load a project first, then import media.");
+      return;
+    }
+    writeOutput(`Importing: ${filePath}`);
+    try {
+      const asset = await importMedia(activeProjectId, filePath);
+      registeredAssets.push(asset);
+      renderAssetList();
+      writeOutput({ action: "import_asset", id: asset.id, kind: asset.kind, duration_ms: asset.duration_ms, meta: asset.meta_jsonb });
+      if (asset.meta_jsonb?.proxy_status === "pending") startProxyPolling();
+    } catch (e) {
+      writeOutput({ action: "import_error", error: String(e) });
+    }
   }
 
   function writeOutput(value: unknown) {
@@ -882,11 +1008,20 @@ export function bootstrapStudioApp(): void {
       activeProjectId = project.id;
       const seq = await orchestratorCreateSequence(project.id, "Main Sequence");
       activeSequenceId = seq.id;
-      timelineState.tracks = [];
+      const v1Server = await orchestratorCreateTrack(seq.id, "video", 0, "V1");
+      const a1Server = await orchestratorCreateTrack(seq.id, "audio", 0, "A1");
+      const v1Id = nextClipId++;
+      const a1Id = nextClipId++;
+      timelineState.tracks = [
+        { id: v1Id, serverId: v1Server.id, name: "V1", kind: "Video", lane_index: 0, clips: [] },
+        { id: a1Id, serverId: a1Server.id, name: "A1", kind: "Audio", lane_index: 0, clips: [] },
+      ];
       timelineState.playheadTick = 0;
       timelineUiState.selectedClipId = null;
-      timelineUiState.activeTrackId = null;
+      timelineUiState.activeTrackId = v1Id;
       timelineUiState.markers = [];
+      registeredAssets = [];
+      renderAssetList();
       writeOutput({ action: "new_project", projectId: project.id, sequenceId: seq.id });
     } catch (e) {
       writeOutput({ action: "new_project_error", error: String(e) });
@@ -926,7 +1061,7 @@ export function bootstrapStudioApp(): void {
         return;
       }
       writeOutput({ available_projects: result.items.map((p, i) => `${i + 1}. ${p.name} (${p.id})`) });
-      const project = result.items[result.items.length - 1];
+      const project = result.items[0];
 
       activeProjectId = project.id;
       const sequences = await orchestratorListSequences(project.id) as any[];
@@ -956,10 +1091,16 @@ export function bootstrapStudioApp(): void {
           })),
       }));
 
+      timelineUiState.activeTrackId = timelineState.tracks[0]?.id ?? null;
       const projectNameInput = document.querySelector<HTMLInputElement>("#project-name");
       if (projectNameInput) projectNameInput.value = project.name;
+      try {
+        registeredAssets = await listProjectAssets(project.id);
+        renderAssetList();
+        if (registeredAssets.some((a) => a.meta_jsonb?.proxy_status === "pending")) startProxyPolling();
+      } catch { /* orchestrator may not have assets yet */ }
       renderTimeline();
-      writeOutput({ action: "load_project", projectId: project.id, tracks: tracks.length, clips: clips.length });
+      writeOutput({ action: "load_project", projectId: project.id, tracks: tracks.length, clips: clips.length, assets: registeredAssets.length });
     } catch (e) {
       writeOutput({ action: "load_error", error: String(e) });
     }
@@ -1078,7 +1219,40 @@ export function bootstrapStudioApp(): void {
     }
   });
 
-  seedAssets();
+  document.querySelector("#btn-import-media")!.addEventListener("click", async () => {
+    const path = window.prompt("Absolute path to media file:");
+    if (!path?.trim()) return;
+    await handleImportFile(path.trim());
+  });
+
+  const dropZone = document.querySelector<HTMLDivElement>("#drop-zone")!;
+  dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.classList.add("drag-over"); });
+  dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
+  dropZone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dropZone.classList.remove("drag-over");
+  });
+
+  // Tauri drag-drop: fires when files are dragged from the OS onto the window
+  (async () => {
+    try {
+      const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+      await getCurrentWebview().onDragDropEvent(async (event) => {
+        if (event.payload.type === "over") { dropZone.classList.add("drag-over"); return; }
+        if (event.payload.type === "leave") { dropZone.classList.remove("drag-over"); return; }
+        if (event.payload.type === "drop") {
+          dropZone.classList.remove("drag-over");
+          for (const path of event.payload.paths) {
+            await handleImportFile(path);
+          }
+        }
+      });
+    } catch {
+      // Not running inside Tauri (e.g. browser dev mode) — drag-drop via Tauri unavailable
+    }
+  })();
+
+  renderAssetList();
   timelineUiState.activeTrackId = timelineState.tracks[0]?.id ?? null;
   renderTimeline();
 }

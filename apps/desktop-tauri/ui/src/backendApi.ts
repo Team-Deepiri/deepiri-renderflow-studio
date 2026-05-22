@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
+const BASE = "http://127.0.0.1:8080";
+
 export interface Project {
   id: string;
   name: string;
@@ -64,6 +66,29 @@ export interface RenderJob {
   output_uri?: string;
 }
 
+export interface Asset {
+  id: string;
+  project_id: string;
+  kind: string;
+  uri: string;
+  sha256: string;
+  duration_ms: number | null;
+  meta_jsonb: {
+    name?: string;
+    width?: number;
+    height?: number;
+    fps?: number;
+    codec?: string;
+    proxy_status?: "pending" | "ready" | "failed" | "unavailable";
+    proxy_path?: string | null;
+    size_bytes?: number;
+    audio_codec?: string;
+    sample_rate?: number;
+    channels?: number;
+  };
+  created_at: string;
+}
+
 export interface PaginatedResponse<T> {
   items: T[];
   total: number;
@@ -81,10 +106,12 @@ export interface Capabilities {
   service: string;
 }
 
-export function orchestratorHealth(): Promise<{ status: string }> {
-  return invoke("orchestrator_health", { baseUrl: null });
+export async function orchestratorHealth(): Promise<{ status: string }> {
+  const res = await fetch(`${BASE}/health`);
+  return res.json();
 }
 
+// These two call native Rust engine code — keep as invoke
 export function vulkanDiscover(): Promise<unknown> {
   return invoke("vulkan_discover", {});
 }
@@ -93,82 +120,81 @@ export function timelineResolveActive(payload: unknown): Promise<unknown> {
   return invoke("timeline_resolve_active", { payload });
 }
 
-export function submitAiJob(prompt: string, mode = "scene-generation"): Promise<{ job_id: string; status: string }> {
-  return invoke("submit_ai_job", {
-    projectId: "renderflow-local-project",
-    mode,
-    prompt,
-    baseUrl: null,
+export async function submitAiJob(prompt: string, mode = "scene-generation"): Promise<{ job_id: string; status: string }> {
+  const res = await fetch(`${BASE}/v1/jobs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id: "renderflow-local-project", mode, prompt, metadata: {} }),
   });
+  const v = await res.json();
+  return { job_id: v.id, status: v.status };
 }
 
-export function getAiJob(jobId: string): Promise<AIJob> {
-  return invoke("get_ai_job", { jobId, baseUrl: null });
+export async function getAiJob(jobId: string): Promise<AIJob> {
+  const res = await fetch(`${BASE}/v1/jobs/${jobId}`);
+  return res.json();
 }
 
-export function orchestratorListProjects(): Promise<PaginatedResponse<Project>> {
-  return invoke("orchestrator_list_projects_paginated", {
-    page: 1,
-    pageSize: 20,
-    baseUrl: null,
-  });
+export async function orchestratorListProjects(): Promise<PaginatedResponse<Project>> {
+  const res = await fetch(`${BASE}/v1/projects?page=1&page_size=20`);
+  return res.json();
 }
 
-export function orchestratorCreateProject(
+export async function orchestratorCreateProject(
   name: string,
   fpsNum = 24,
   fpsDen = 1,
 ): Promise<Project> {
-  return invoke("orchestrator_create_project", {
-    name,
-    fpsNum,
-    fpsDen,
-    baseUrl: null,
+  const res = await fetch(`${BASE}/v1/projects`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, fps_num: fpsNum, fps_den: fpsDen }),
   });
+  return res.json();
 }
 
-export function orchestratorGetProject(projectId: string): Promise<Project> {
-  return invoke("orchestrator_get_project", { projectId, baseUrl: null });
+export async function orchestratorGetProject(projectId: string): Promise<Project> {
+  const res = await fetch(`${BASE}/v1/projects/${projectId}`);
+  return res.json();
 }
 
-export function orchestratorDeleteProject(projectId: string): Promise<{ status: string }> {
-  return invoke("orchestrator_delete_project", { projectId, baseUrl: null });
+export async function orchestratorDeleteProject(projectId: string): Promise<{ status: string }> {
+  const res = await fetch(`${BASE}/v1/projects/${projectId}`, { method: "DELETE" });
+  return res.json();
 }
 
-export function orchestratorListSequences(projectId: string): Promise<Sequence[]> {
-  return invoke("orchestrator_list_sequences", { projectId, baseUrl: null });
+export async function orchestratorListSequences(projectId: string): Promise<Sequence[]> {
+  const res = await fetch(`${BASE}/v1/projects/${projectId}/sequences`);
+  return res.json();
 }
 
-export function orchestratorCreateSequence(
+export async function orchestratorCreateSequence(
   projectId: string,
   name: string,
   resolutionW = 1920,
   resolutionH = 1080,
 ): Promise<Sequence> {
-  return invoke("orchestrator_create_sequence", {
-    projectId,
-    name,
-    resolutionW,
-    resolutionH,
-    baseUrl: null,
+  const res = await fetch(`${BASE}/v1/projects/${projectId}/sequences`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, resolution_w: resolutionW, resolution_h: resolutionH }),
   });
+  return res.json();
 }
 
-export function orchestratorGetCapabilities(): Promise<Capabilities> {
-  return invoke("orchestrator_get_capabilities", { baseUrl: null });
+export async function orchestratorGetCapabilities(): Promise<Capabilities> {
+  const res = await fetch(`${BASE}/v1/capabilities`);
+  return res.json();
 }
 
 export async function probeMedia(path: string): Promise<string> {
-  const base = "http://127.0.0.1:8080";
-  const res = await fetch(`${base}/v1/media/probe`, {
+  const res = await fetch(`${BASE}/v1/media/probe`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path }),
   });
   return res.text();
 }
-
-const BASE = "http://127.0.0.1:8080";
 
 export async function orchestratorCreateTrack(
   sequenceId: string,
@@ -206,5 +232,25 @@ export async function orchestratorCreateClip(
 
 export async function orchestratorListClips(sequenceId: string): Promise<Clip[]> {
   const res = await fetch(`${BASE}/v1/sequences/${sequenceId}/clips`);
+  return res.json();
+}
+
+export async function importMedia(projectId: string, filePath: string): Promise<Asset> {
+  const res = await fetch(`${BASE}/v1/projects/${projectId}/assets/import`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path: filePath }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function listProjectAssets(projectId: string): Promise<Asset[]> {
+  const res = await fetch(`${BASE}/v1/projects/${projectId}/assets`);
+  return res.json();
+}
+
+export async function getAsset(assetId: string): Promise<Asset> {
+  const res = await fetch(`${BASE}/v1/assets/${assetId}`);
   return res.json();
 }
