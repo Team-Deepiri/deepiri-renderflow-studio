@@ -1,0 +1,15 @@
+# CodeQL config for deepiri-renderflow-studio
+# Exclude generated/build/runtime artifact paths.
+paths-ignore:
+  - '**/node_modules/**'
+  - '**/dist/**'
+  - '**/build/**'
+  - '**/coverage/**'
+  - '**/logs/**'
+  - '**/*.min.js'
+  - '**/gen/**'
+  - '**/media/**'
+  - '**/vendor/**'
+  - '**/infra/docker/**'
+  - '**/postgres/migrations/**'
+  - '**/apps/desktop-tauri/ui-shell/**'

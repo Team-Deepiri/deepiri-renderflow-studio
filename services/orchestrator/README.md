@@ -30,3 +30,43 @@ Build context is the **`deepiri-renderflow-studio`** repo root so `lib/renderflo
 ## Legacy pip
 
 `requirements.txt` is PyPI-only. The image does **not** rely on it for Deepiri deps; use Poetry in Docker as in the Dockerfile.
+
+## Health Endpoints
+
+- `GET /health`: liveness check for process availability. Returns `200` with `{"status":"ok"}` when the API process is up.
+- `GET /ready`: readiness check with dependency status for Postgres and Redis.
+
+`/ready` response shape:
+
+```json
+{
+  "status": "ready",
+  "mode": "dev",
+  "dependencies": {
+    "postgres": {
+      "status": "disabled",
+      "configured": false,
+      "detail": "DATABASE_URL not set or PostgreSQL pool unavailable"
+    },
+    "redis": {
+      "status": "ok",
+      "configured": true,
+      "detail": "Redis reachable"
+    }
+  }
+}
+```
+
+Dependency statuses:
+
+- `ok`: configured and reachable
+- `disabled`: not configured
+- `degraded`: configured but currently unreachable (fallback/partial behavior may still allow serving)
+- `failed`: configured and required but unavailable
+
+## Readiness Mode
+
+`READINESS_MODE` controls how dependency states map to HTTP readiness.
+
+- `dev` (default): permissive mode. `ok`, `disabled`, and `degraded` are treated as ready (`200`). `failed` returns `503`.
+- `prod`: strict mode. all dependencies must be `ok` to return ready (`200`); otherwise `/ready` returns `503`.
