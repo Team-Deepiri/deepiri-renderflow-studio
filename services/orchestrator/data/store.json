@@ -1,0 +1,174 @@
+{
+  "users": {
+    "00000000-0000-4000-8000-000000000001": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "email": "studio@renderflow.local",
+      "display_name": "Renderflow Studio",
+      "role": "admin",
+      "created_at": "2026-05-23T01:29:55.814070+00:00"
+    }
+  },
+  "projects": {
+    "e7899410-647c-4586-a971-9a7f072b5d2e": {
+      "id": "e7899410-647c-4586-a971-9a7f072b5d2e",
+      "owner_id": "00000000-0000-4000-8000-000000000001",
+      "name": "Untitled 8:42:02 AM",
+      "fps_num": 24,
+      "fps_den": 1,
+      "sample_rate": 48000,
+      "ai_enabled": true,
+      "settings_jsonb": {},
+      "created_at": "2026-05-23T01:42:02.174207+00:00",
+      "updated_at": "2026-05-23T01:42:02.174216+00:00"
+    },
+    "026c4629-f085-4043-95ca-c2d84fa21bd7": {
+      "id": "026c4629-f085-4043-95ca-c2d84fa21bd7",
+      "owner_id": "00000000-0000-4000-8000-000000000001",
+      "name": "Untitled 8:45:04 AM",
+      "fps_num": 24,
+      "fps_den": 1,
+      "sample_rate": 48000,
+      "ai_enabled": true,
+      "settings_jsonb": {},
+      "created_at": "2026-05-23T01:45:04.479543+00:00",
+      "updated_at": "2026-05-23T01:45:04.479553+00:00"
+    }
+  },
+  "assets": {
+    "b1e160ad-3409-4f94-8f15-10b81305ed87": {
+      "id": "b1e160ad-3409-4f94-8f15-10b81305ed87",
+      "project_id": "e7899410-647c-4586-a971-9a7f072b5d2e",
+      "kind": "video",
+      "uri": "/Users/quanhuynh/Desktop/renderflow/deepiri-renderflow-studio/services/orchestrator/data/proxies/0cb77e46-9a41-42f2-9d4c-0cd64aa1c58e_proxy.mp4",
+      "sha256": "pending",
+      "duration_ms": 454981,
+      "meta_jsonb": {
+        "proxy_status": "ready",
+        "proxy_path": "/Users/quanhuynh/Desktop/renderflow/deepiri-renderflow-studio/services/orchestrator/data/proxies/b1e160ad-3409-4f94-8f15-10b81305ed87_proxy.mp4",
+        "name": "0cb77e46-9a41-42f2-9d4c-0cd64aa1c58e_proxy.mp4",
+        "size_bytes": 15266926,
+        "width": 854,
+        "height": 480,
+        "fps": 30.0,
+        "codec": "h264",
+        "audio_codec": "aac",
+        "sample_rate": 44100,
+        "channels": 1
+      },
+      "created_at": "2026-05-23T01:42:09.315888+00:00"
+    },
+    "f38412b7-3b1f-4f09-bbd8-fdcfcda6dff1": {
+      "id": "f38412b7-3b1f-4f09-bbd8-fdcfcda6dff1",
+      "project_id": "e7899410-647c-4586-a971-9a7f072b5d2e",
+      "kind": "video",
+      "uri": "/Users/quanhuynh/Desktop/renderflow/deepiri-renderflow-studio/services/orchestrator/data/proxies/0cb77e46-9a41-42f2-9d4c-0cd64aa1c58e_proxy.mp4",
+      "sha256": "pending",
+      "duration_ms": 454981,
+      "meta_jsonb": {
+        "proxy_status": "ready",
+        "proxy_path": "/Users/quanhuynh/Desktop/renderflow/deepiri-renderflow-studio/services/orchestrator/data/proxies/f38412b7-3b1f-4f09-bbd8-fdcfcda6dff1_proxy.mp4",
+        "name": "0cb77e46-9a41-42f2-9d4c-0cd64aa1c58e_proxy.mp4",
+        "size_bytes": 15266926,
+        "width": 854,
+        "height": 480,
+        "fps": 30.0,
+        "codec": "h264",
+        "audio_codec": "aac",
+        "sample_rate": 44100,
+        "channels": 1
+      },
+      "created_at": "2026-05-23T01:42:13.501613+00:00"
+    },
+    "489cd5da-8e36-4bae-b297-cf358e2bdeca": {
+      "id": "489cd5da-8e36-4bae-b297-cf358e2bdeca",
+      "project_id": "026c4629-f085-4043-95ca-c2d84fa21bd7",
+      "kind": "video",
+      "uri": "/Users/quanhuynh/Desktop/renderflow/deepiri-renderflow-studio/services/orchestrator/data/proxies/0cb77e46-9a41-42f2-9d4c-0cd64aa1c58e_proxy.mp4",
+      "sha256": "pending",
+      "duration_ms": 454981,
+      "meta_jsonb": {
+        "proxy_status": "ready",
+        "proxy_path": "/Users/quanhuynh/Desktop/renderflow/deepiri-renderflow-studio/services/orchestrator/data/proxies/489cd5da-8e36-4bae-b297-cf358e2bdeca_proxy.mp4",
+        "name": "0cb77e46-9a41-42f2-9d4c-0cd64aa1c58e_proxy.mp4",
+        "size_bytes": 15266926,
+        "width": 854,
+        "height": 480,
+        "fps": 30.0,
+        "codec": "h264",
+        "audio_codec": "aac",
+        "sample_rate": 44100,
+        "channels": 1
+      },
+      "created_at": "2026-05-23T01:45:07.770893+00:00"
+    }
+  },
+  "sequences": {
+    "94d2b825-25af-474c-a5cb-44c1c45f16b0": {
+      "id": "94d2b825-25af-474c-a5cb-44c1c45f16b0",
+      "project_id": "e7899410-647c-4586-a971-9a7f072b5d2e",
+      "name": "Main Sequence",
+      "start_tc": "00:00:00:00",
+      "duration_ticks": 0,
+      "resolution_w": 1920,
+      "resolution_h": 1080,
+      "created_at": "2026-05-23T01:42:02.182728+00:00"
+    },
+    "c6d13e28-b4bc-4415-a145-3bc497697bec": {
+      "id": "c6d13e28-b4bc-4415-a145-3bc497697bec",
+      "project_id": "026c4629-f085-4043-95ca-c2d84fa21bd7",
+      "name": "Main Sequence",
+      "start_tc": "00:00:00:00",
+      "duration_ticks": 0,
+      "resolution_w": 1920,
+      "resolution_h": 1080,
+      "created_at": "2026-05-23T01:45:04.491837+00:00"
+    }
+  },
+  "tracks": {
+    "9888b99c-1ac6-42d2-b622-b64087c8263c": {
+      "id": "9888b99c-1ac6-42d2-b622-b64087c8263c",
+      "sequence_id": "94d2b825-25af-474c-a5cb-44c1c45f16b0",
+      "track_type": "video",
+      "lane_index": 0,
+      "name": "V1",
+      "muted": false,
+      "solo": false,
+      "created_at": "2026-05-23T01:42:02.195283+00:00"
+    },
+    "8b13fe64-9ea7-42c9-96d3-56514f76564b": {
+      "id": "8b13fe64-9ea7-42c9-96d3-56514f76564b",
+      "sequence_id": "94d2b825-25af-474c-a5cb-44c1c45f16b0",
+      "track_type": "audio",
+      "lane_index": 0,
+      "name": "A1",
+      "muted": false,
+      "solo": false,
+      "created_at": "2026-05-23T01:42:02.200982+00:00"
+    },
+    "320da45a-4cf0-4acd-816f-4f3514ab5779": {
+      "id": "320da45a-4cf0-4acd-816f-4f3514ab5779",
+      "sequence_id": "c6d13e28-b4bc-4415-a145-3bc497697bec",
+      "track_type": "video",
+      "lane_index": 0,
+      "name": "V1",
+      "muted": false,
+      "solo": false,
+      "created_at": "2026-05-23T01:45:04.500531+00:00"
+    },
+    "db8c1da4-bd87-40b3-b90f-c87d9cf21593": {
+      "id": "db8c1da4-bd87-40b3-b90f-c87d9cf21593",
+      "sequence_id": "c6d13e28-b4bc-4415-a145-3bc497697bec",
+      "track_type": "audio",
+      "lane_index": 0,
+      "name": "A1",
+      "muted": false,
+      "solo": false,
+      "created_at": "2026-05-23T01:45:04.506556+00:00"
+    }
+  },
+  "clips": {},
+  "clip_effects": {},
+  "scenes": {},
+  "scene_nodes": {},
+  "render_jobs": {}
+}

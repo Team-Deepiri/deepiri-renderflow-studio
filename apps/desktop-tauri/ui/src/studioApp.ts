@@ -85,11 +85,13 @@ export function bootstrapStudioApp(): void {
     selectedClipId: number | null;
     activeTrackId: number | null;
     markers: number[];
+    activeClipIds: number[];
   } = {
     zoom: 1,
     selectedClipId: null,
     activeTrackId: null,
     markers: [240, 1020, 1780],
+    activeClipIds: [],
   };
 
   let activeProjectId: string | null = null;
@@ -336,6 +338,10 @@ export function bootstrapStudioApp(): void {
     outline: 2px solid #eaf1ff;
     box-shadow: 0 0 0 2px rgba(83, 129, 255, 0.6);
   }
+  .clip.active-clip {
+    box-shadow: 0 0 0 2px rgba(255, 78, 117, 0.85);
+    filter: brightness(1.18);
+  }
   .track-row.active .track-name { color: #f8fcff; background: rgba(77, 125, 255, 0.15); }
   .playhead {
     position: absolute;
@@ -386,6 +392,7 @@ export function bootstrapStudioApp(): void {
     background: #0f131b;
     font-size: 12px;
     color: var(--text-dim);
+    white-space: pre-line;
   }
   .drop-zone {
     border: 1.5px dashed #3a4a68;
@@ -415,6 +422,23 @@ export function bootstrapStudioApp(): void {
     transition: border-color 0.1s;
   }
   .asset-item:hover { border-color: var(--accent); }
+  .asset-item { position: relative; }
+  .asset-remove {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 13px;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0 2px;
+    opacity: 0;
+    transition: opacity 0.1s, color 0.1s;
+  }
+  .asset-item:hover .asset-remove { opacity: 1; }
+  .asset-remove:hover { color: var(--danger); }
   .asset-item-name { font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .asset-item-meta { font-size: 10px; color: var(--text-dim); margin-top: 2px; display: flex; gap: 8px; flex-wrap: wrap; }
   .asset-badge {
@@ -561,17 +585,27 @@ export function bootstrapStudioApp(): void {
   }
 
   function updateInspector() {
-    if (timelineUiState.selectedClipId == null) {
-      inspector.textContent = "No clip selected.";
-      return;
+    const lines: string[] = [];
+
+    if (timelineUiState.activeClipIds.length > 0) {
+      const descs = timelineUiState.activeClipIds
+        .map((id) => getClipById(id))
+        .filter((r): r is NonNullable<ReturnType<typeof getClipById>> => r !== null)
+        .map((r) => `${r.track.name}: ${r.clip.label}`);
+      lines.push(`▶ Active: ${descs.join(", ")}`);
+    } else {
+      lines.push("▶ No active clip at playhead");
     }
-    const ref = getClipById(timelineUiState.selectedClipId);
-    if (!ref) {
-      inspector.textContent = "Selected clip is no longer available.";
-      return;
+
+    if (timelineUiState.selectedClipId != null) {
+      const ref = getClipById(timelineUiState.selectedClipId);
+      if (ref) {
+        const duration = ref.clip.outTick - ref.clip.inTick;
+        lines.push(`Selected: ${ref.track.name}: ${ref.clip.label} | in ${ref.clip.inTick} | out ${ref.clip.outTick} | len ${duration}f`);
+      }
     }
-    const duration = ref.clip.outTick - ref.clip.inTick;
-    inspector.textContent = `${ref.track.name}: ${ref.clip.label} | in ${ref.clip.inTick} | out ${ref.clip.outTick} | len ${duration}f`;
+
+    inspector.textContent = lines.join("\n");
   }
 
   function clearPlayTimer() {
@@ -582,9 +616,51 @@ export function bootstrapStudioApp(): void {
     if (button) button.textContent = "Play";
   }
 
+  async function resolveActiveClips(): Promise<void> {
+    try {
+      const result = await timelineResolveActive({
+        playhead_tick: timelineState.playheadTick,
+        sequence: {
+          tracks: timelineState.tracks.map((t) => ({
+            id: t.id,
+            kind: t.kind,
+            lane_index: t.lane_index,
+            name: t.name,
+          })),
+          clips: timelineState.tracks.flatMap((t) =>
+            t.clips.map((c) => ({
+              id: c.id,
+              track_id: t.id,
+              asset_id: c.id + 9000,
+              span: { in_tick: c.inTick, out_tick: c.outTick },
+              src_in_tick: 0,
+            }))
+          ),
+        },
+      });
+      const r = result as { active_clip_ids: number[] };
+      timelineUiState.activeClipIds = r.active_clip_ids ?? [];
+      renderTimeline();
+    } catch {
+      // Tauri IPC unavailable (browser dev mode) — compute active clips in JS
+      const tick = timelineState.playheadTick;
+      const active: number[] = [];
+      for (const track of [...timelineState.tracks].sort((a, b) => a.lane_index - b.lane_index)) {
+        for (const clip of track.clips) {
+          if (tick >= clip.inTick && tick < clip.outTick) {
+            active.push(clip.id);
+          }
+        }
+      }
+      timelineUiState.activeClipIds = active;
+      renderTimeline();
+    }
+  }
+
   function setPlayhead(next: number) {
     timelineState.playheadTick = Math.max(0, Math.min(timelineState.durationTicks, Math.round(next)));
     renderTimeline();
+    void resolveActiveClips();
   }
 
   function renderTimeline() {
@@ -624,6 +700,7 @@ export function bootstrapStudioApp(): void {
         const clipNode = document.createElement("div");
         clipNode.className = "clip";
         if (clip.id === timelineUiState.selectedClipId) clipNode.classList.add("selected");
+        if (timelineUiState.activeClipIds.includes(clip.id)) clipNode.classList.add("active-clip");
         clipNode.style.left = `${((clip.inTick * timelineUiState.zoom) / scaledDuration) * 100}%`;
         clipNode.style.width = `${(((clip.outTick - clip.inTick) * timelineUiState.zoom) / scaledDuration) * 100}%`;
         clipNode.style.background = clip.color;
@@ -732,6 +809,7 @@ export function bootstrapStudioApp(): void {
       const proxyClass = proxyStatus === "ready" ? "proxy-ready" : proxyStatus === "failed" ? "proxy-failed" : "proxy-pending";
 
       li.innerHTML = `
+        <button class="asset-remove" title="Remove from project">×</button>
         <div class="asset-item-name" title="${asset.uri}">${name}</div>
         <div class="asset-item-meta">
           <span class="asset-badge ${badgeClass}">${asset.kind}</span>
@@ -741,6 +819,12 @@ export function bootstrapStudioApp(): void {
           ${proxyLabel ? `<span class="${proxyClass}">${proxyLabel}</span>` : ""}
         </div>
       `;
+
+      li.querySelector(".asset-remove")!.addEventListener("click", (e) => {
+        e.stopPropagation();
+        registeredAssets = registeredAssets.filter((a) => a.id !== asset.id);
+        renderAssetList();
+      });
 
       li.addEventListener("click", () => {
         const track = timelineState.tracks.find((t) => t.id === timelineUiState.activeTrackId) ?? timelineState.tracks[0];
@@ -1255,4 +1339,5 @@ export function bootstrapStudioApp(): void {
   renderAssetList();
   timelineUiState.activeTrackId = timelineState.tracks[0]?.id ?? null;
   renderTimeline();
+  void resolveActiveClips();
 }
