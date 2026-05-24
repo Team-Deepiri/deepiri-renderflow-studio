@@ -1177,6 +1177,25 @@ export function bootstrapStudioApp(): void {
       shuttle(-2);
       return;
     }
+    if (event.key === "Home") {
+      event.preventDefault();
+      setPlayhead(0);
+      writeOutput({
+        action: "seek_start",
+        playheadTick: timelineState.playheadTick,
+      });
+      return;
+    }
+
+    if (event.key === "End") {
+      event.preventDefault();
+      setPlayhead(Math.max(0, timelineState.durationTicks - 24));
+      writeOutput({
+        action: "seek_end",
+        playheadTick: timelineState.playheadTick,
+      });
+      return;
+    }
     if (event.key.toLowerCase() === "k") {
       event.preventDefault();
       clearPlayTimer();
