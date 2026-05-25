@@ -532,6 +532,18 @@ export function bootstrapStudioApp(): void {
     renderTimeline();
   }
 
+  function updatePreviewForActiveClip(activeClips: unknown[]) {
+    const preview = document.querySelector<HTMLDivElement>("#preview");
+    if (!preview) return;
+
+    if (activeClips.length === 0) {
+      preview.innerHTML = `<div class="preview-overlay"><span>No active clip at playhead</span></div>`;
+      return;
+    }
+
+    preview.innerHTML = `<div class="preview-overlay"><span>Active clip ready for preview</span></div>`;
+  }
+
   function saveProjectToStorage() {
     const projectName = (document.querySelector<HTMLInputElement>("#project-name")?.value ?? "Untitled").trim();
     const payload = {
@@ -585,6 +597,10 @@ export function bootstrapStudioApp(): void {
   function setPlayhead(next: number) {
     timelineState.playheadTick = Math.max(0, Math.min(timelineState.durationTicks, Math.round(next)));
     renderTimeline();
+
+    if (typeof resolveActiveAtPlayhead === "function") {
+      void resolveActiveAtPlayhead();
+    }
   }
 
   function renderTimeline() {
@@ -903,8 +919,8 @@ export function bootstrapStudioApp(): void {
       writeOutput(e);
     }
   });
-
-  document.querySelector("#btn-timeline")!.addEventListener("click", async () => {
+  
+  async function resolveActiveAtPlayhead() {
     try {
       const r = await timelineResolveActive({
         playhead_tick: timelineState.playheadTick,
@@ -926,11 +942,15 @@ export function bootstrapStudioApp(): void {
           ),
         },
       });
+
       writeOutput(r);
+      updatePreviewForActiveClip((r as { active_clips?: unknown[] }).active_clips ?? []);
     } catch (e) {
       writeOutput(e);
     }
-  });
+  }
+
+  document.querySelector("#btn-timeline")!.addEventListener("click", resolveActiveAtPlayhead);
 
   document.querySelector("#btn-probe")!.addEventListener("click", async () => {
     const path = window.prompt("Path or URL to probe (ffprobe):", "/tmp/sample.mp4");
