@@ -111,3 +111,8 @@ class SceneNodeCreate(BaseModel):
 class RenderSubmit(BaseModel):
     sequence_id: UUID | None = None
     preset: str = "h264_1080p"
+
+
+class FrameBody(BaseModel):
+    path: str
+    time_seconds: float = 0.0
