@@ -16,7 +16,6 @@ import {
   importMedia,
   listProjectAssets,
   getAsset,
-  fetchFrame,
   type Asset,
 } from "./backendApi";
 
@@ -25,6 +24,30 @@ export function bootstrapStudioApp(): void {
   if (!app) {
     throw new Error("Missing #app root element");
   }
+
+  type Clip = {
+    id: number;
+    serverId?: string;
+    label: string;
+    inTick: number;
+    outTick: number;
+    color: string;
+  };
+
+  type Track = {
+    id: number;
+    serverId?: string;
+    name: string;
+    kind: "Video" | "Audio";
+    lane_index: number;
+    clips: Clip[];
+  };
+
+  type TimelineSnapshot = {
+    timelineState: { fps: number; durationTicks: number; playheadTick: number; tracks: Track[] };
+    timelineUiState: { zoom: number; selectedClipId: number | null; activeTrackId: number | null; markers: number[] };
+  };
+
 
   type Clip = {
     id: number;
@@ -93,16 +116,12 @@ export function bootstrapStudioApp(): void {
     selectedClipId: null,
     activeTrackId: null,
     markers: [240, 1020, 1780],
-    activeClipIds: [],
   };
-
-  const ORCH_BASE = "http://127.0.0.1:8080";
 
   let activeProjectId: string | null = null;
   let activeSequenceId: string | null = null;
   let registeredAssets: Asset[] = [];
   let proxyPollTimer: number | undefined;
-  let activePreviewClip: Clip | null = null;
   const PLACEHOLDER_ASSET_ID = "00000000-0000-0000-0000-000000000001";
 
   app.innerHTML = `
@@ -1501,39 +1520,7 @@ export function bootstrapStudioApp(): void {
     }
   })();
 
-  // Sync the timeline playhead while the video is playing
-  const previewVideoEl = document.querySelector<HTMLVideoElement>("#preview-video")!;
-
-  previewVideoEl.addEventListener("error", () => {
-    const e = previewVideoEl.error;
-    writeOutput({ play_video_error: e ? `code ${e.code}: ${e.message}` : "unknown", src: previewVideoEl.src });
-    if (playing) clearPlayTimer();
-  });
-
-  previewVideoEl.addEventListener("timeupdate", () => {
-    if (!playing || !activePreviewClip) return;
-    const clip = activePreviewClip;
-    const newTick = clip.inTick + Math.round(previewVideoEl.currentTime * timelineState.fps);
-    if (newTick >= clip.outTick) {
-      clearPlayTimer();
-      setPlayhead(clip.outTick);
-      return;
-    }
-    timelineState.playheadTick = newTick;
-    timecode.textContent = tickToTimecode(newTick, timelineState.fps);
-    slider.value = String(newTick);
-    // Move playhead needle on every track row without rebuilding the whole grid
-    document.querySelectorAll<HTMLDivElement>(".playhead").forEach((el) => {
-      const scaledDuration = timelineState.durationTicks * timelineUiState.zoom;
-      el.style.left = `${((newTick * timelineUiState.zoom) / scaledDuration) * 100}%`;
-    });
-  });
-  previewVideoEl.addEventListener("ended", () => {
-    if (playing) clearPlayTimer();
-  });
-
   renderAssetList();
   timelineUiState.activeTrackId = timelineState.tracks[0]?.id ?? null;
   renderTimeline();
-  void resolveActiveClips();
 }
