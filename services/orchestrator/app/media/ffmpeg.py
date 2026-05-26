@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +82,8 @@ def transcode_proxy(
                 "aac",
                 "-b:a",
                 "128k",
+                "-movflags",
+                "+faststart",
                 output_path,
             ],
             capture_output=True,
@@ -136,6 +140,39 @@ def extract_thumbnail(
         return {"ok": True, "output": output_path}
     except (OSError, subprocess.TimeoutExpired) as e:
         logger.warning("extract_thumbnail: %s", e)
+        return {"ok": False, "error": str(e)}
+
+
+def extract_frame_base64(input_path: str, time_seconds: float, width: int = 854) -> dict[str, Any]:
+    """Extract a single frame at time_seconds and return it as a base64-encoded JPEG string."""
+    exe = shutil.which("ffmpeg")
+    if not exe:
+        return {"ok": False, "error": "ffmpeg not found on PATH"}
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp_path = tmp.name
+        proc = subprocess.run(
+            [
+                exe, "-y",
+                "-ss", str(max(0.0, time_seconds)),
+                "-i", input_path,
+                "-vframes", "1",
+                "-vf", f"scale={width}:-1",
+                tmp_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if proc.returncode != 0:
+            Path(tmp_path).unlink(missing_ok=True)
+            return {"ok": False, "error": (proc.stderr or "ffmpeg failed").strip()[:500]}
+        data = Path(tmp_path).read_bytes()
+        Path(tmp_path).unlink(missing_ok=True)
+        return {"ok": True, "base64": base64.b64encode(data).decode()}
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.warning("extract_frame_base64: %s", e)
         return {"ok": False, "error": str(e)}
 
 

@@ -148,8 +148,10 @@ export function bootstrapStudioApp(): void {
             </div>
           </div>
           <div id="preview" class="preview">
-            <div class="preview-overlay">
-              <span>Vulkan preview surface placeholder</span>
+            <img id="preview-frame" class="preview-frame" style="display:none" alt="" />
+            <video id="preview-video" class="preview-frame" style="display:none" preload="auto"></video>
+            <div id="preview-empty" class="preview-overlay">
+              <span>No clip at playhead</span>
               <button class="btn narrow" id="btn-vulkan" type="button">Query Vulkan Devices</button>
             </div>
           </div>
@@ -276,6 +278,7 @@ export function bootstrapStudioApp(): void {
     color: var(--text-dim);
     font-size: 12px;
   }
+  .preview-frame { width: 100%; height: 100%; object-fit: contain; border-radius: 8px; display: block; }
   .timeline { padding: 12px; background: #111621; }
   .timeline-controls { display: flex; align-items: center; gap: 6px; width: 64%; }
   .timeline-grid {
@@ -336,6 +339,10 @@ export function bootstrapStudioApp(): void {
     outline: 2px solid #eaf1ff;
     box-shadow: 0 0 0 2px rgba(83, 129, 255, 0.6);
   }
+  .clip.active-clip {
+    box-shadow: 0 0 0 2px rgba(255, 78, 117, 0.85);
+    filter: brightness(1.18);
+  }
   .track-row.active .track-name { color: #f8fcff; background: rgba(77, 125, 255, 0.15); }
   .playhead {
     position: absolute;
@@ -386,6 +393,63 @@ export function bootstrapStudioApp(): void {
     background: #0f131b;
     font-size: 12px;
     color: var(--text-dim);
+    white-space: pre-line;
+  }
+  .drop-zone {
+    border: 1.5px dashed #3a4a68;
+    border-radius: 7px;
+    padding: 10px;
+    text-align: center;
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+    transition: border-color 0.15s, background 0.15s;
+    cursor: default;
+  }
+  .drop-zone.drag-over {
+    border-color: var(--accent);
+    background: rgba(77, 125, 255, 0.08);
+    color: var(--accent);
+  }
+  .asset-actions { display: flex; gap: 6px; margin-top: 4px; }
+  .asset-list { margin: 0 0 6px; padding: 0; list-style: none; }
+  .asset-item {
+    padding: 7px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: #0f131b;
+    margin-bottom: 5px;
+    cursor: pointer;
+    transition: border-color 0.1s;
+  }
+  .asset-item:hover { border-color: var(--accent); }
+  .asset-item { position: relative; }
+  .asset-remove {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 13px;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0 2px;
+    opacity: 0;
+    transition: opacity 0.1s, color 0.1s;
+  }
+  .asset-item:hover .asset-remove { opacity: 1; }
+  .asset-remove:hover { color: var(--danger); }
+  .asset-item-name { font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .asset-item-meta { font-size: 10px; color: var(--text-dim); margin-top: 2px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .asset-badge {
+    display: inline-block;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
   }
   .drop-zone {
     border: 1.5px dashed #3a4a68;
@@ -450,6 +514,7 @@ export function bootstrapStudioApp(): void {
   let aiVisible = true;
   let playing = false;
   let playTimer: number | undefined;
+  let frameDebounceTimer: number | undefined;
   let lastJobId = "";
   let nextClipId = 1000;
   let suppressHistory = false;
@@ -624,6 +689,7 @@ export function bootstrapStudioApp(): void {
         const clipNode = document.createElement("div");
         clipNode.className = "clip";
         if (clip.id === timelineUiState.selectedClipId) clipNode.classList.add("selected");
+        if (timelineUiState.activeClipIds.includes(clip.id)) clipNode.classList.add("active-clip");
         clipNode.style.left = `${((clip.inTick * timelineUiState.zoom) / scaledDuration) * 100}%`;
         clipNode.style.width = `${(((clip.outTick - clip.inTick) * timelineUiState.zoom) / scaledDuration) * 100}%`;
         clipNode.style.background = clip.color;
@@ -700,6 +766,7 @@ export function bootstrapStudioApp(): void {
       timelineGrid.appendChild(row);
     }
     timecode.textContent = tickToTimecode(timelineState.playheadTick, timelineState.fps);
+    slider.max = String(timelineState.durationTicks);
     slider.value = String(timelineState.playheadTick);
     updateInspector();
   }
@@ -732,6 +799,7 @@ export function bootstrapStudioApp(): void {
       const proxyClass = proxyStatus === "ready" ? "proxy-ready" : proxyStatus === "failed" ? "proxy-failed" : "proxy-pending";
 
       li.innerHTML = `
+        <button class="asset-remove" title="Remove from project">×</button>
         <div class="asset-item-name" title="${asset.uri}">${name}</div>
         <div class="asset-item-meta">
           <span class="asset-badge ${badgeClass}">${asset.kind}</span>
@@ -741,6 +809,73 @@ export function bootstrapStudioApp(): void {
           ${proxyLabel ? `<span class="${proxyClass}">${proxyLabel}</span>` : ""}
         </div>
       `;
+
+      li.querySelector(".asset-remove")!.addEventListener("click", (e) => {
+        e.stopPropagation();
+        registeredAssets = registeredAssets.filter((a) => a.id !== asset.id);
+        renderAssetList();
+      });
+
+      li.addEventListener("click", () => {
+        const track = timelineState.tracks.find((t) => t.id === timelineUiState.activeTrackId) ?? timelineState.tracks[0];
+        if (!track) return;
+        commitHistory("insert_clip_from_asset");
+        const clipDurationTicks = asset.duration_ms != null
+          ? Math.round((asset.duration_ms / 1000) * timelineState.fps)
+          : 160;
+        const inTick = Math.max(0, timelineState.playheadTick);
+        const outTick = inTick + clipDurationTicks;
+        const nextClip: Clip = {
+          id: nextClipId++,
+          label: name,
+          inTick,
+          outTick,
+          color: asset.kind === "audio" ? "var(--clip-gold)" : "var(--clip-blue)",
+          assetId: asset.id,
+        };
+        // Extend the timeline so the full clip fits
+        if (outTick > timelineState.durationTicks) {
+          timelineState.durationTicks = outTick + timelineState.fps * 2;
+          slider.max = String(timelineState.durationTicks);
+        }
+        track.clips.push(nextClip);
+        track.clips.sort((a, b) => a.inTick - b.inTick);
+        timelineUiState.selectedClipId = nextClip.id;
+        timelineUiState.activeTrackId = track.id;
+        renderTimeline();
+        fetchFrameForPlayhead(true);
+      });
+
+      assetList.appendChild(li);
+    }
+  }
+
+  function startProxyPolling() {
+    if (proxyPollTimer) return;
+    proxyPollTimer = window.setInterval(async () => {
+      const pending = registeredAssets.filter((a) => a.meta_jsonb?.proxy_status === "pending");
+      if (pending.length === 0) {
+        window.clearInterval(proxyPollTimer);
+        proxyPollTimer = undefined;
+        return;
+      }
+      let changed = false;
+      for (const asset of pending) {
+        try {
+          const fresh = await getAsset(asset.id);
+          if (fresh.meta_jsonb?.proxy_status !== "pending") {
+            const idx = registeredAssets.findIndex((a) => a.id === asset.id);
+            if (idx >= 0) { registeredAssets[idx] = fresh; changed = true; }
+          }
+        } catch { /* ignore */ }
+      }
+      if (changed) {
+        renderAssetList();
+        fetchFrameForPlayhead(true);  // re-check preview now that a proxy may be ready
+      }
+    }, 3000);
+  }
+
 
       li.addEventListener("click", () => {
         const track = timelineState.tracks.find((t) => t.id === timelineUiState.activeTrackId) ?? timelineState.tracks[0];
@@ -904,42 +1039,185 @@ export function bootstrapStudioApp(): void {
     }
   });
 
-  document.querySelector("#btn-timeline")!.addEventListener("click", async () => {
+  document.querySelector("#btn-submit-job")!.addEventListener("click", async () => {
+    const prompt = aiPrompt.value.trim();
+    if (!prompt) {
+      writeOutput("Enter an AI prompt first.");
+      return;
+    }
     try {
-      const r = await timelineResolveActive({
-        playhead_tick: timelineState.playheadTick,
-        sequence: {
-          tracks: timelineState.tracks.map((t) => ({
-            id: t.id,
-            kind: t.kind,
-            lane_index: t.lane_index,
-            name: t.name,
-          })),
-          clips: timelineState.tracks.flatMap((t) =>
-            t.clips.map((c) => ({
-              id: c.id,
-              track_id: t.id,
-              asset_id: c.id + 9000,
-              span: { in_tick: c.inTick, out_tick: c.outTick },
-              src_in_tick: 0,
-            })),
-          ),
-        },
-      });
-      writeOutput(r);
+      const result = await submitAiJob(prompt);
+      lastJobId = result.job_id;
+      writeOutput({ submitted: result, hint: "Use Refresh Job to poll status." });
     } catch (e) {
       writeOutput(e);
     }
   });
 
-  document.querySelector("#btn-probe")!.addEventListener("click", async () => {
-    const path = window.prompt("Path or URL to probe (ffprobe):", "/tmp/sample.mp4");
-    if (!path) return;
+  document.querySelector("#btn-refresh-job")!.addEventListener("click", async () => {
+    if (!lastJobId) {
+      writeOutput("No known job id yet. Submit a job first.");
+      return;
+    }
     try {
-      writeOutput(await probeMedia(path));
+      const result = await getAiJob(lastJobId);
+      writeOutput(result);
     } catch (e) {
       writeOutput(e);
     }
+  });
+
+  document.querySelector("#btn-toggle-ai")!.addEventListener("click", () => {
+    aiVisible = !aiVisible;
+    aiPanel.style.display = aiVisible ? "block" : "none";
+    workspace.classList.toggle("ai-hidden", !aiVisible);
+    const button = document.querySelector<HTMLButtonElement>("#btn-toggle-ai")!;
+    button.textContent = aiVisible ? "Hide AI Panel" : "Show AI Panel";
+  });
+
+  document.querySelector("#btn-toggle-theme")!.addEventListener("click", () => {
+    const current = document.body.style.filter;
+    document.body.style.filter = current ? "" : "hue-rotate(18deg) saturate(1.05)";
+  });
+
+  document.querySelector("#btn-add-marker")!.addEventListener("click", () => {
+    timelineUiState.markers.push(timelineState.playheadTick);
+    timelineUiState.markers = Array.from(new Set(timelineUiState.markers)).sort((a, b) => a - b);
+    renderTimeline();
+  });
+
+  document.querySelector("#btn-jump-next-marker")!.addEventListener("click", () => {
+    const next = timelineUiState.markers.find((m) => m > timelineState.playheadTick);
+    if (next == null) {
+      setPlayhead(0);
+      return;
+    }
+    setPlayhead(next);
+  });
+
+  document.querySelector("#btn-new-project")!.addEventListener("click", async () => {
+    commitHistory("new_project");
+    const projectNameInput = document.querySelector<HTMLInputElement>("#project-name");
+    const projectName = `Untitled ${new Date().toLocaleTimeString()}`;
+    if (projectNameInput) projectNameInput.value = projectName;
+    try {
+      const project = await orchestratorCreateProject(projectName);
+      activeProjectId = project.id;
+      const seq = await orchestratorCreateSequence(project.id, "Main Sequence");
+      activeSequenceId = seq.id;
+      const v1Server = await orchestratorCreateTrack(seq.id, "video", 0, "V1");
+      const a1Server = await orchestratorCreateTrack(seq.id, "audio", 0, "A1");
+      const v1Id = nextClipId++;
+      const a1Id = nextClipId++;
+      timelineState.tracks = [
+        { id: v1Id, serverId: v1Server.id, name: "V1", kind: "Video", lane_index: 0, clips: [] },
+        { id: a1Id, serverId: a1Server.id, name: "A1", kind: "Audio", lane_index: 0, clips: [] },
+      ];
+      timelineState.playheadTick = 0;
+      timelineUiState.selectedClipId = null;
+      timelineUiState.activeTrackId = v1Id;
+      timelineUiState.markers = [];
+      registeredAssets = [];
+      renderAssetList();
+      writeOutput({ action: "new_project", projectId: project.id, sequenceId: seq.id });
+    } catch (e) {
+      writeOutput({ action: "new_project_error", error: String(e) });
+    }
+    renderTimeline();
+  });
+
+  document.querySelector("#btn-save-project")!.addEventListener("click", async () => {
+    if (!activeProjectId || !activeSequenceId) {
+      writeOutput("No active server project. Click New Project first.");
+      return;
+    }
+    try {
+      for (const track of timelineState.tracks) {
+        if (!track.serverId) {
+          const t = await orchestratorCreateTrack(activeSequenceId, track.kind.toLowerCase(), track.lane_index, track.name);
+          track.serverId = t.id;
+        }
+        for (const clip of track.clips) {
+          if (!clip.serverId && track.serverId) {
+            const c = await orchestratorCreateClip(activeSequenceId, track.serverId, PLACEHOLDER_ASSET_ID, clip.inTick, clip.outTick);
+            clip.serverId = c.id;
+          }
+        }
+      }
+      writeOutput({ action: "save_project", projectId: activeProjectId, tracks: timelineState.tracks.length });
+    } catch (e) {
+      writeOutput({ action: "save_error", error: String(e) });
+    }
+  });
+
+  document.querySelector("#btn-load-project")!.addEventListener("click", async () => {
+    try {
+      const result = await orchestratorListProjects();
+      if (!result.items.length) {
+        writeOutput("No projects found on orchestrator.");
+        return;
+      }
+      writeOutput({ available_projects: result.items.map((p, i) => `${i + 1}. ${p.name} (${p.id})`) });
+      const project = result.items[0];
+
+      activeProjectId = project.id;
+      const sequences = await orchestratorListSequences(project.id) as any[];
+      if (!sequences.length) { writeOutput("Project has no sequences."); return; }
+      const seq = sequences[0];
+      activeSequenceId = seq.id;
+
+      const tracks = await orchestratorListTracks(seq.id);
+      const clips = await orchestratorListClips(seq.id);
+
+      let nextId = Date.now();
+      timelineState.tracks = tracks.map((t) => ({
+        id: nextId++,
+        serverId: t.id,
+        name: t.name,
+        kind: (t.track_type === "audio" ? "Audio" : "Video") as "Video" | "Audio",
+        lane_index: t.lane_index,
+        clips: clips
+          .filter((c: any) => c.track_id === t.id)
+          .map((c: any) => ({
+            id: nextId++,
+            serverId: c.id,
+            label: c.name || "Clip",
+            inTick: c.in_tick,
+            outTick: c.out_tick,
+            color: "var(--clip-blue)",
+          })),
+      }));
+
+      timelineUiState.activeTrackId = timelineState.tracks[0]?.id ?? null;
+
+      // Grow the timeline to fit all loaded clips
+      const maxOutTick = timelineState.tracks
+        .flatMap((t) => t.clips)
+        .reduce((m, c) => Math.max(m, c.outTick), 0);
+      if (maxOutTick > timelineState.durationTicks) {
+        timelineState.durationTicks = maxOutTick + timelineState.fps * 2;
+      }
+
+      const projectNameInput = document.querySelector<HTMLInputElement>("#project-name");
+      if (projectNameInput) projectNameInput.value = project.name;
+      try {
+        registeredAssets = await listProjectAssets(project.id);
+        renderAssetList();
+        if (registeredAssets.some((a) => a.meta_jsonb?.proxy_status === "pending")) startProxyPolling();
+      } catch { /* orchestrator may not have assets yet */ }
+      renderTimeline();
+      writeOutput({ action: "load_project", projectId: project.id, tracks: tracks.length, clips: clips.length, assets: registeredAssets.length });
+    } catch (e) {
+      writeOutput({ action: "load_error", error: String(e) });
+    }
+  });
+
+  document.querySelector("#btn-undo")!.addEventListener("click", () => {
+    undoHistory();
+  });
+
+  document.querySelector("#btn-redo")!.addEventListener("click", () => {
+    redoHistory();
   });
 
   document.querySelector("#btn-submit-job")!.addEventListener("click", async () => {
@@ -1130,6 +1408,20 @@ export function bootstrapStudioApp(): void {
     shuttle(1);
   });
 
+  let wasPlayingBeforeScrub = false;
+
+  slider.addEventListener("pointerdown", () => {
+    wasPlayingBeforeScrub = playing;
+    if (playing) clearPlayTimer();
+  });
+
+  slider.addEventListener("pointerup", () => {
+    if (wasPlayingBeforeScrub) {
+      wasPlayingBeforeScrub = false;
+      shuttle(1);
+    }
+  });
+
   slider.addEventListener("input", () => {
     setPlayhead(Number(slider.value));
   });
@@ -1224,6 +1516,15 @@ export function bootstrapStudioApp(): void {
     if (!path?.trim()) return;
     await handleImportFile(path.trim());
   });
+
+  const dropZone = document.querySelector<HTMLDivElement>("#drop-zone")!;
+  dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.classList.add("drag-over"); });
+  dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
+  dropZone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dropZone.classList.remove("drag-over");
+  });
+
 
   const dropZone = document.querySelector<HTMLDivElement>("#drop-zone")!;
   dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.classList.add("drag-over"); });

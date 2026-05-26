@@ -6,6 +6,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 
 from app.api.schemas.studio import AssetCreate, AssetImportBody, ProbeBody
 from app.media import ffmpeg as ffmpeg_util
@@ -94,3 +95,19 @@ def get_asset_by_id(asset_id: UUID) -> dict[str, Any]:
 @router.post("/v1/media/probe", tags=["media"])
 def media_probe(body: ProbeBody) -> dict[str, Any]:
     return ffmpeg_util.probe(body.path)
+
+
+@router.post("/v1/media/frame", tags=["media"])
+def media_frame(body: FrameBody) -> dict[str, Any]:
+    result = ffmpeg_util.extract_frame_base64(body.path, body.time_seconds)
+    if not result.get("ok"):
+        raise HTTPException(500, result.get("error", "frame extraction failed"))
+    return result
+
+
+@router.api_route("/v1/media/stream", methods=["GET", "HEAD"], tags=["media"])
+def media_stream(path: str) -> FileResponse:
+    p = Path(path)
+    if not p.exists() or not p.is_file():
+        raise HTTPException(404, "file not found")
+    return FileResponse(str(p), media_type="video/mp4")
