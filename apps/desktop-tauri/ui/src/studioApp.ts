@@ -48,6 +48,31 @@ export function bootstrapStudioApp(): void {
     timelineUiState: { zoom: number; selectedClipId: number | null; activeTrackId: number | null; markers: number[] };
   };
 
+
+  type Clip = {
+    id: number;
+    serverId?: string;
+    label: string;
+    inTick: number;
+    outTick: number;
+    color: string;
+    assetId?: string;
+  };
+
+  type Track = {
+    id: number;
+    serverId?: string;
+    name: string;
+    kind: "Video" | "Audio";
+    lane_index: number;
+    clips: Clip[];
+  };
+
+  type TimelineSnapshot = {
+    timelineState: { fps: number; durationTicks: number; playheadTick: number; tracks: Track[] };
+    timelineUiState: { zoom: number; selectedClipId: number | null; activeTrackId: number | null; markers: number[] };
+  };
+
   const timelineState: { fps: number; durationTicks: number; playheadTick: number; tracks: Track[] } = {
     fps: 24,
     durationTicks: 2400,
@@ -85,6 +110,7 @@ export function bootstrapStudioApp(): void {
     selectedClipId: number | null;
     activeTrackId: number | null;
     markers: number[];
+    activeClipIds: number[];
   } = {
     zoom: 1,
     selectedClipId: null,
@@ -148,8 +174,10 @@ export function bootstrapStudioApp(): void {
             </div>
           </div>
           <div id="preview" class="preview">
-            <div class="preview-overlay">
-              <span>Vulkan preview surface placeholder</span>
+            <img id="preview-frame" class="preview-frame" style="display:none" alt="" />
+            <video id="preview-video" class="preview-frame" style="display:none" preload="auto"></video>
+            <div id="preview-empty" class="preview-overlay">
+              <span>No clip at playhead</span>
               <button class="btn narrow" id="btn-vulkan" type="button">Query Vulkan Devices</button>
             </div>
           </div>
@@ -276,6 +304,7 @@ export function bootstrapStudioApp(): void {
     color: var(--text-dim);
     font-size: 12px;
   }
+  .preview-frame { width: 100%; height: 100%; object-fit: contain; border-radius: 8px; display: block; }
   .timeline { padding: 12px; background: #111621; }
   .timeline-controls { display: flex; align-items: center; gap: 6px; width: 64%; }
   .timeline-grid {
@@ -336,6 +365,10 @@ export function bootstrapStudioApp(): void {
     outline: 2px solid #eaf1ff;
     box-shadow: 0 0 0 2px rgba(83, 129, 255, 0.6);
   }
+  .clip.active-clip {
+    box-shadow: 0 0 0 2px rgba(255, 78, 117, 0.85);
+    filter: brightness(1.18);
+  }
   .track-row.active .track-name { color: #f8fcff; background: rgba(77, 125, 255, 0.15); }
   .playhead {
     position: absolute;
@@ -386,6 +419,7 @@ export function bootstrapStudioApp(): void {
     background: #0f131b;
     font-size: 12px;
     color: var(--text-dim);
+    white-space: pre-line;
   }
   .drop-zone {
     border: 1.5px dashed #3a4a68;
@@ -415,6 +449,23 @@ export function bootstrapStudioApp(): void {
     transition: border-color 0.1s;
   }
   .asset-item:hover { border-color: var(--accent); }
+  .asset-item { position: relative; }
+  .asset-remove {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 13px;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0 2px;
+    opacity: 0;
+    transition: opacity 0.1s, color 0.1s;
+  }
+  .asset-item:hover .asset-remove { opacity: 1; }
+  .asset-remove:hover { color: var(--danger); }
   .asset-item-name { font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .asset-item-meta { font-size: 10px; color: var(--text-dim); margin-top: 2px; display: flex; gap: 8px; flex-wrap: wrap; }
   .asset-badge {
@@ -450,6 +501,7 @@ export function bootstrapStudioApp(): void {
   let aiVisible = true;
   let playing = false;
   let playTimer: number | undefined;
+  let frameDebounceTimer: number | undefined;
   let lastJobId = "";
   let nextClipId = 1000;
   let suppressHistory = false;
@@ -532,18 +584,6 @@ export function bootstrapStudioApp(): void {
     renderTimeline();
   }
 
-  function updatePreviewForActiveClip(activeClips: unknown[]) {
-    const preview = document.querySelector<HTMLDivElement>("#preview");
-    if (!preview) return;
-
-    if (activeClips.length === 0) {
-      preview.innerHTML = `<div class="preview-overlay"><span>No active clip at playhead</span></div>`;
-      return;
-    }
-
-    preview.innerHTML = `<div class="preview-overlay"><span>Active clip ready for preview</span></div>`;
-  }
-
   function saveProjectToStorage() {
     const projectName = (document.querySelector<HTMLInputElement>("#project-name")?.value ?? "Untitled").trim();
     const payload = {
@@ -573,17 +613,27 @@ export function bootstrapStudioApp(): void {
   }
 
   function updateInspector() {
-    if (timelineUiState.selectedClipId == null) {
-      inspector.textContent = "No clip selected.";
-      return;
+    const lines: string[] = [];
+
+    if (timelineUiState.activeClipIds.length > 0) {
+      const descs = timelineUiState.activeClipIds
+        .map((id) => getClipById(id))
+        .filter((r): r is NonNullable<ReturnType<typeof getClipById>> => r !== null)
+        .map((r) => `${r.track.name}: ${r.clip.label}`);
+      lines.push(`▶ Active: ${descs.join(", ")}`);
+    } else {
+      lines.push("▶ No active clip at playhead");
     }
-    const ref = getClipById(timelineUiState.selectedClipId);
-    if (!ref) {
-      inspector.textContent = "Selected clip is no longer available.";
-      return;
+
+    if (timelineUiState.selectedClipId != null) {
+      const ref = getClipById(timelineUiState.selectedClipId);
+      if (ref) {
+        const duration = ref.clip.outTick - ref.clip.inTick;
+        lines.push(`Selected: ${ref.track.name}: ${ref.clip.label} | in ${ref.clip.inTick} | out ${ref.clip.outTick} | len ${duration}f`);
+      }
     }
-    const duration = ref.clip.outTick - ref.clip.inTick;
-    inspector.textContent = `${ref.track.name}: ${ref.clip.label} | in ${ref.clip.inTick} | out ${ref.clip.outTick} | len ${duration}f`;
+
+    inspector.textContent = lines.join("\n");
   }
 
   function clearPlayTimer() {
@@ -592,18 +642,132 @@ export function bootstrapStudioApp(): void {
     playing = false;
     const button = document.querySelector<HTMLButtonElement>("#btn-play");
     if (button) button.textContent = "Play";
+    const vid = document.querySelector<HTMLVideoElement>("#preview-video");
+    if (vid) { vid.pause(); vid.style.display = "none"; }
+    // Re-fetch a JPEG for the position the user stopped at
+    fetchFrameForPlayhead(true);
+  }
+
+  async function resolveActiveClips(): Promise<void> {
+    try {
+      const result = await timelineResolveActive({
+        playhead_tick: timelineState.playheadTick,
+        sequence: {
+          tracks: timelineState.tracks.map((t) => ({
+            id: t.id,
+            kind: t.kind,
+            lane_index: t.lane_index,
+            name: t.name,
+          })),
+          clips: timelineState.tracks.flatMap((t) =>
+            t.clips.map((c) => ({
+              id: c.id,
+              track_id: t.id,
+              asset_id: c.id + 9000,
+              span: { in_tick: c.inTick, out_tick: c.outTick },
+              src_in_tick: 0,
+            }))
+          ),
+        },
+      });
+      const r = result as { active_clip_ids: number[] };
+      timelineUiState.activeClipIds = r.active_clip_ids ?? [];
+      renderTimeline();
+    } catch {
+      // Tauri IPC unavailable (browser dev mode) — compute active clips in JS
+      const tick = timelineState.playheadTick;
+      const active: number[] = [];
+      for (const track of [...timelineState.tracks].sort((a, b) => a.lane_index - b.lane_index)) {
+        for (const clip of track.clips) {
+          if (tick >= clip.inTick && tick < clip.outTick) {
+            active.push(clip.id);
+          }
+        }
+      }
+      timelineUiState.activeClipIds = active;
+      renderTimeline();
+    }
+  }
+
+  function showPreviewEmpty(msg: string) {
+    const previewEmpty = document.querySelector<HTMLDivElement>("#preview-empty")!;
+    const label = previewEmpty.querySelector("span");
+    if (label) label.textContent = msg;
+    activePreviewClip = null;
+    document.querySelector<HTMLVideoElement>("#preview-video")?.pause();
+    document.querySelector<HTMLVideoElement>("#preview-video")!.style.display = "none";
+    document.querySelector<HTMLImageElement>("#preview-frame")!.style.display = "none";
+    previewEmpty.style.display = "";
+  }
+
+  function fetchFrameForPlayhead(immediate = false) {
+    if (frameDebounceTimer) window.clearTimeout(frameDebounceTimer);
+    frameDebounceTimer = window.setTimeout(async () => {
+      // Don't interrupt video while it's playing — it drives itself via timeupdate
+      if (playing) return;
+
+      const tick = timelineState.playheadTick;
+
+      let foundClip: Clip | undefined;
+      for (const track of timelineState.tracks) {
+        foundClip = track.clips.find((c) => tick >= c.inTick && tick < c.outTick);
+        if (foundClip) break;
+      }
+
+      if (!foundClip?.assetId) { showPreviewEmpty("No clip at playhead"); return; }
+
+      const asset = registeredAssets.find((a) => a.id === foundClip!.assetId);
+      const proxyStatus = asset?.meta_jsonb?.proxy_status;
+      const proxyPath = asset?.meta_jsonb?.proxy_path;
+
+      if (proxyStatus === "pending") { showPreviewEmpty("Proxy still transcoding…"); return; }
+      if (proxyStatus === "failed" || !proxyPath) { showPreviewEmpty("Proxy unavailable"); return; }
+      if (proxyStatus !== "ready") { showPreviewEmpty("No clip at playhead"); return; }
+
+      activePreviewClip = foundClip;
+
+      const timeSec = Math.max(0, (tick - foundClip.inTick) / timelineState.fps);
+      try {
+        const b64 = await fetchFrame(proxyPath, timeSec);
+        const previewFrame = document.querySelector<HTMLImageElement>("#preview-frame")!;
+        previewFrame.src = `data:image/jpeg;base64,${b64}`;
+        previewFrame.style.display = "";
+        document.querySelector<HTMLVideoElement>("#preview-video")!.style.display = "none";
+        document.querySelector<HTMLDivElement>("#preview-empty")!.style.display = "none";
+      } catch {
+        showPreviewEmpty("Frame unavailable");
+      }
+    }, immediate ? 0 : 150);
   }
 
   function setPlayhead(next: number) {
     timelineState.playheadTick = Math.max(0, Math.min(timelineState.durationTicks, Math.round(next)));
     renderTimeline();
-
-    if (typeof resolveActiveAtPlayhead === "function") {
-      void resolveActiveAtPlayhead();
-    }
+    void resolveActiveClips();
+    fetchFrameForPlayhead();
   }
 
   function renderTimeline() {
+    // Auto-correct clamped outTick values and extend durationTicks to fit all clips
+    let maxTick = 0;
+    for (const track of timelineState.tracks) {
+      for (const clip of track.clips) {
+        if (clip.assetId) {
+          const asset = registeredAssets.find((a) => a.id === clip.assetId);
+          if (asset?.duration_ms != null) {
+            const assetDurTicks = Math.round((asset.duration_ms / 1000) * timelineState.fps);
+            const correctOut = clip.inTick + assetDurTicks;
+            if (correctOut > clip.outTick) clip.outTick = correctOut;
+          }
+        }
+        maxTick = Math.max(maxTick, clip.outTick);
+      }
+    }
+    if (maxTick > 0 && maxTick + timelineState.fps * 2 > timelineState.durationTicks) {
+      timelineState.durationTicks = maxTick + timelineState.fps * 2;
+      slider.max = String(timelineState.durationTicks);
+    }
+
     const duration = timelineState.durationTicks;
     const scaledDuration = duration * timelineUiState.zoom;
     timelineGrid.innerHTML = "";
@@ -640,6 +804,7 @@ export function bootstrapStudioApp(): void {
         const clipNode = document.createElement("div");
         clipNode.className = "clip";
         if (clip.id === timelineUiState.selectedClipId) clipNode.classList.add("selected");
+        if (timelineUiState.activeClipIds.includes(clip.id)) clipNode.classList.add("active-clip");
         clipNode.style.left = `${((clip.inTick * timelineUiState.zoom) / scaledDuration) * 100}%`;
         clipNode.style.width = `${(((clip.outTick - clip.inTick) * timelineUiState.zoom) / scaledDuration) * 100}%`;
         clipNode.style.background = clip.color;
@@ -716,6 +881,7 @@ export function bootstrapStudioApp(): void {
       timelineGrid.appendChild(row);
     }
     timecode.textContent = tickToTimecode(timelineState.playheadTick, timelineState.fps);
+    slider.max = String(timelineState.durationTicks);
     slider.value = String(timelineState.playheadTick);
     updateInspector();
   }
@@ -748,6 +914,7 @@ export function bootstrapStudioApp(): void {
       const proxyClass = proxyStatus === "ready" ? "proxy-ready" : proxyStatus === "failed" ? "proxy-failed" : "proxy-pending";
 
       li.innerHTML = `
+        <button class="asset-remove" title="Remove from project">×</button>
         <div class="asset-item-name" title="${asset.uri}">${name}</div>
         <div class="asset-item-meta">
           <span class="asset-badge ${badgeClass}">${asset.kind}</span>
@@ -758,24 +925,40 @@ export function bootstrapStudioApp(): void {
         </div>
       `;
 
+      li.querySelector(".asset-remove")!.addEventListener("click", (e) => {
+        e.stopPropagation();
+        registeredAssets = registeredAssets.filter((a) => a.id !== asset.id);
+        renderAssetList();
+      });
+
       li.addEventListener("click", () => {
         const track = timelineState.tracks.find((t) => t.id === timelineUiState.activeTrackId) ?? timelineState.tracks[0];
         if (!track) return;
         commitHistory("insert_clip_from_asset");
-        const durationTicks = asset.duration_ms != null ? Math.round((asset.duration_ms / 1000) * timelineState.fps) : 160;
-        const inTick = Math.min(timelineState.playheadTick, timelineState.durationTicks - durationTicks);
+        const clipDurationTicks = asset.duration_ms != null
+          ? Math.round((asset.duration_ms / 1000) * timelineState.fps)
+          : 160;
+        const inTick = Math.max(0, timelineState.playheadTick);
+        const outTick = inTick + clipDurationTicks;
         const nextClip: Clip = {
           id: nextClipId++,
           label: name,
-          inTick: Math.max(0, inTick),
-          outTick: Math.min(timelineState.durationTicks, Math.max(0, inTick) + durationTicks),
+          inTick,
+          outTick,
           color: asset.kind === "audio" ? "var(--clip-gold)" : "var(--clip-blue)",
+          assetId: asset.id,
         };
+        // Extend the timeline so the full clip fits
+        if (outTick > timelineState.durationTicks) {
+          timelineState.durationTicks = outTick + timelineState.fps * 2;
+          slider.max = String(timelineState.durationTicks);
+        }
         track.clips.push(nextClip);
         track.clips.sort((a, b) => a.inTick - b.inTick);
         timelineUiState.selectedClipId = nextClip.id;
         timelineUiState.activeTrackId = track.id;
         renderTimeline();
+        fetchFrameForPlayhead(true);
       });
 
       assetList.appendChild(li);
@@ -801,7 +984,10 @@ export function bootstrapStudioApp(): void {
           }
         } catch { /* ignore */ }
       }
-      if (changed) renderAssetList();
+      if (changed) {
+        renderAssetList();
+        fetchFrameForPlayhead(true);  // re-check preview now that a proxy may be ready
+      }
     }, 3000);
   }
 
@@ -873,24 +1059,67 @@ export function bootstrapStudioApp(): void {
     setPlayhead(timelineState.playheadTick + direction);
   }
 
+  function startIntervalShuttle(multiplier: number) {
+    playTimer = window.setInterval(() => {
+      const next = timelineState.playheadTick + multiplier;
+      if (next > timelineState.durationTicks) { setPlayhead(0); return; }
+      if (next < 0) { setPlayhead(timelineState.durationTicks); return; }
+      setPlayhead(next);
+    }, Math.max(15, Math.round(1000 / timelineState.fps)));
+  }
+
   function shuttle(multiplier: number) {
     clearPlayTimer();
     if (multiplier === 0) return;
     playing = true;
     const button = document.querySelector<HTMLButtonElement>("#btn-play");
     if (button) button.textContent = "Pause";
-    playTimer = window.setInterval(() => {
-      const next = timelineState.playheadTick + multiplier;
-      if (next > timelineState.durationTicks) {
-        setPlayhead(0);
-        return;
+
+    const clip = activePreviewClip;
+    const asset = clip ? registeredAssets.find((a) => a.id === clip.assetId) : null;
+    const proxyPath = asset?.meta_jsonb?.proxy_path;
+
+    if (multiplier !== 1 || !clip || !proxyPath || asset?.meta_jsonb?.proxy_status !== "ready") {
+      startIntervalShuttle(multiplier);
+      return;
+    }
+
+    // Real video playback via the stream endpoint
+    const previewVideo = document.querySelector<HTMLVideoElement>("#preview-video")!;
+    const streamSrc = `${ORCH_BASE}/v1/media/stream?path=${encodeURIComponent(proxyPath)}`;
+    const timeSec = Math.max(0, (timelineState.playheadTick - clip.inTick) / timelineState.fps);
+
+    writeOutput({ action: "play_start", streamSrc, timeSec });
+
+    if (previewVideo.dataset.proxySrc !== streamSrc) {
+      previewVideo.src = streamSrc;
+      previewVideo.dataset.proxySrc = streamSrc;
+    }
+    document.querySelector<HTMLImageElement>("#preview-frame")!.style.display = "none";
+    previewVideo.style.display = "";
+    document.querySelector<HTMLDivElement>("#preview-empty")!.style.display = "none";
+
+    const seekAndPlay = () => {
+      previewVideo.play().catch((err) => {
+        writeOutput({ play_error: String(err) });
+        clearPlayTimer();
+      });
+    };
+
+    const doPlay = () => {
+      if (timeSec > 0.05) {
+        previewVideo.currentTime = timeSec;
+        previewVideo.addEventListener("seeked", seekAndPlay, { once: true });
+      } else {
+        seekAndPlay();
       }
-      if (next < 0) {
-        setPlayhead(timelineState.durationTicks);
-        return;
-      }
-      setPlayhead(next);
-    }, Math.max(15, Math.round(1000 / timelineState.fps)));
+    };
+
+    if (previewVideo.readyState >= 2) {
+      doPlay();
+    } else {
+      previewVideo.addEventListener("loadeddata", doPlay, { once: true });
+    }
   }
 
   document.querySelector("#btn-health")!.addEventListener("click", async () => {
@@ -919,8 +1148,8 @@ export function bootstrapStudioApp(): void {
       writeOutput(e);
     }
   });
-  
-  async function resolveActiveAtPlayhead() {
+
+  document.querySelector("#btn-timeline")!.addEventListener("click", async () => {
     try {
       const r = await timelineResolveActive({
         playhead_tick: timelineState.playheadTick,
@@ -942,15 +1171,11 @@ export function bootstrapStudioApp(): void {
           ),
         },
       });
-
       writeOutput(r);
-      updatePreviewForActiveClip((r as { active_clips?: unknown[] }).active_clips ?? []);
     } catch (e) {
       writeOutput(e);
     }
-  }
-
-  document.querySelector("#btn-timeline")!.addEventListener("click", resolveActiveAtPlayhead);
+  });
 
   document.querySelector("#btn-probe")!.addEventListener("click", async () => {
     const path = window.prompt("Path or URL to probe (ffprobe):", "/tmp/sample.mp4");
@@ -1112,6 +1337,15 @@ export function bootstrapStudioApp(): void {
       }));
 
       timelineUiState.activeTrackId = timelineState.tracks[0]?.id ?? null;
+
+      // Grow the timeline to fit all loaded clips
+      const maxOutTick = timelineState.tracks
+        .flatMap((t) => t.clips)
+        .reduce((m, c) => Math.max(m, c.outTick), 0);
+      if (maxOutTick > timelineState.durationTicks) {
+        timelineState.durationTicks = maxOutTick + timelineState.fps * 2;
+      }
+
       const projectNameInput = document.querySelector<HTMLInputElement>("#project-name");
       if (projectNameInput) projectNameInput.value = project.name;
       try {
@@ -1148,6 +1382,20 @@ export function bootstrapStudioApp(): void {
       return;
     }
     shuttle(1);
+  });
+
+  let wasPlayingBeforeScrub = false;
+
+  slider.addEventListener("pointerdown", () => {
+    wasPlayingBeforeScrub = playing;
+    if (playing) clearPlayTimer();
+  });
+
+  slider.addEventListener("pointerup", () => {
+    if (wasPlayingBeforeScrub) {
+      wasPlayingBeforeScrub = false;
+      shuttle(1);
+    }
   });
 
   slider.addEventListener("input", () => {
@@ -1195,25 +1443,6 @@ export function bootstrapStudioApp(): void {
     if (event.key.toLowerCase() === "j") {
       event.preventDefault();
       shuttle(-2);
-      return;
-    }
-    if (event.key === "Home") {
-      event.preventDefault();
-      setPlayhead(0);
-      writeOutput({
-        action: "seek_start",
-        playheadTick: timelineState.playheadTick,
-      });
-      return;
-    }
-
-    if (event.key === "End") {
-      event.preventDefault();
-      setPlayhead(Math.max(0, timelineState.durationTicks - 24));
-      writeOutput({
-        action: "seek_end",
-        playheadTick: timelineState.playheadTick,
-      });
       return;
     }
     if (event.key.toLowerCase() === "k") {
