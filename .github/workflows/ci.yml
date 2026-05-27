@@ -1,0 +1,153 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, dev]
+  push:
+    branches: [main, dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-core:
+    name: Rust core
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --workspace --all-features
+
+  desktop-tauri:
+    name: Desktop Tauri
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            curl \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            patchelf \
+            pkg-config
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop-tauri/ui/package-lock.json
+
+      - name: Install UI dependencies
+        run: npm ci
+        working-directory: apps/desktop-tauri/ui
+
+      - name: Build UI
+        run: npm run build
+        working-directory: apps/desktop-tauri/ui
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            apps/desktop-tauri/src-tauri
+
+      - name: Check desktop Rust formatting
+        run: cargo fmt --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml -- --check
+
+      - name: Run desktop Clippy
+        run: cargo clippy --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+
+      - name: Run desktop Rust tests
+        run: cargo test --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml --all-targets
+
+  python:
+    name: Python services
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: poetry
+          cache-dependency-path: |
+            services/orchestrator/poetry.lock
+            services/model-workers/poetry.lock
+
+      - name: Install Poetry
+        run: python -m pip install poetry
+
+      - name: Install orchestrator dependencies
+        run: poetry install --no-interaction --no-ansi
+        working-directory: services/orchestrator
+
+      - name: Run orchestrator tests
+        run: poetry run pytest
+        working-directory: services/orchestrator
+
+      - name: Install model worker dependencies
+        run: poetry install --no-interaction --no-ansi
+        working-directory: services/model-workers
+
+      - name: Install shared queue dependencies
+        run: poetry install --no-interaction --no-ansi
+        working-directory: lib/renderflow_queue
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build orchestrator image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/Dockerfile.orchestrator
+          tags: deepiri-renderflow-orchestrator:ci
+          push: false
