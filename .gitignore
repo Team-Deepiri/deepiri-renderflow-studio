@@ -19,3 +19,4 @@ apps/desktop-tauri/src-tauri/gen/
 services/orchestrator/app/data/store.json
 services/orchestrator/app/data/proxies/
 services/orchestrator/data/proxies/
+.gstack/
