@@ -48,7 +48,11 @@ pub fn stop_audio_recording() -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub fn generate_tts(text: String, output_path: String, voice: Option<String>) -> Result<Value, String> {
+pub fn generate_tts(
+    text: String,
+    output_path: String,
+    voice: Option<String>,
+) -> Result<Value, String> {
     let voice = voice.unwrap_or_else(|| "en-US-AriaNeural".to_string());
 
     let output = Command::new("edge-tts")
