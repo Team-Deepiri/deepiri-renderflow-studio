@@ -876,54 +876,6 @@ export function bootstrapStudioApp(): void {
     }, 3000);
   }
 
-
-      li.addEventListener("click", () => {
-        const track = timelineState.tracks.find((t) => t.id === timelineUiState.activeTrackId) ?? timelineState.tracks[0];
-        if (!track) return;
-        commitHistory("insert_clip_from_asset");
-        const durationTicks = asset.duration_ms != null ? Math.round((asset.duration_ms / 1000) * timelineState.fps) : 160;
-        const inTick = Math.min(timelineState.playheadTick, timelineState.durationTicks - durationTicks);
-        const nextClip: Clip = {
-          id: nextClipId++,
-          label: name,
-          inTick: Math.max(0, inTick),
-          outTick: Math.min(timelineState.durationTicks, Math.max(0, inTick) + durationTicks),
-          color: asset.kind === "audio" ? "var(--clip-gold)" : "var(--clip-blue)",
-        };
-        track.clips.push(nextClip);
-        track.clips.sort((a, b) => a.inTick - b.inTick);
-        timelineUiState.selectedClipId = nextClip.id;
-        timelineUiState.activeTrackId = track.id;
-        renderTimeline();
-      });
-
-      assetList.appendChild(li);
-    }
-  }
-
-  function startProxyPolling() {
-    if (proxyPollTimer) return;
-    proxyPollTimer = window.setInterval(async () => {
-      const pending = registeredAssets.filter((a) => a.meta_jsonb?.proxy_status === "pending");
-      if (pending.length === 0) {
-        window.clearInterval(proxyPollTimer);
-        proxyPollTimer = undefined;
-        return;
-      }
-      let changed = false;
-      for (const asset of pending) {
-        try {
-          const fresh = await getAsset(asset.id);
-          if (fresh.meta_jsonb?.proxy_status !== "pending") {
-            const idx = registeredAssets.findIndex((a) => a.id === asset.id);
-            if (idx >= 0) { registeredAssets[idx] = fresh; changed = true; }
-          }
-        } catch { /* ignore */ }
-      }
-      if (changed) renderAssetList();
-    }, 3000);
-  }
-
   async function handleImportFile(filePath: string) {
     if (!activeProjectId) {
       writeOutput("Create or load a project first, then import media.");

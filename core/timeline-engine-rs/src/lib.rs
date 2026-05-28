@@ -154,18 +154,13 @@ impl TimelineClock {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum TransportState {
+    #[default]
     Stopped,
     Playing,
     Paused,
     Scrubbing,
-}
-
-impl Default for TransportState {
-    fn default() -> Self {
-        Self::Stopped
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
