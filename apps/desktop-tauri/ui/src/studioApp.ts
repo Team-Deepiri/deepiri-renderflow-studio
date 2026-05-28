@@ -1477,15 +1477,6 @@ export function bootstrapStudioApp(): void {
     dropZone.classList.remove("drag-over");
   });
 
-
-  const dropZone = document.querySelector<HTMLDivElement>("#drop-zone")!;
-  dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.classList.add("drag-over"); });
-  dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
-  dropZone.addEventListener("drop", (e) => {
-    e.preventDefault();
-    dropZone.classList.remove("drag-over");
-  });
-
   // Tauri drag-drop: fires when files are dragged from the OS onto the window
   (async () => {
     try {

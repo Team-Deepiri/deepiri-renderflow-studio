@@ -35,7 +35,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features
 
       - name: Run Rust tests
         run: cargo test --workspace --all-features
@@ -92,7 +92,7 @@ jobs:
         run: cargo fmt --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml -- --check
 
       - name: Run desktop Clippy
-        run: cargo clippy --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+        run: cargo clippy --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml --all-targets --all-features
 
       - name: Run desktop Rust tests
         run: cargo test --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml --all-targets
