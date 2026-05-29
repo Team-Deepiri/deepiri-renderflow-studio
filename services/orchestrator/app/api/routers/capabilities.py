@@ -6,17 +6,29 @@ import asyncio
 from typing import Any
 from uuid import UUID
 
-from deepiri_gpu_utils.detect import detect
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
 from app.api.utils import EventEmitter, get_event_emitter
 
+try:
+    from deepiri_gpu_utils.detect import detect as detect_gpu
+except ModuleNotFoundError:
+    detect_gpu = None
+
 router = APIRouter(tags=["system"])
 
 
 def _gpu_capabilities() -> dict[str, Any]:
-    r = detect()
+    if detect_gpu is None:
+        return {
+            "backend": "unavailable",
+            "confidence": 0.0,
+            "details": {"reason": "deepiri_gpu_utils is not installed"},
+            "warnings": ["GPU detection dependency is unavailable in this environment."],
+        }
+
+    r = detect_gpu()
     return {
         "backend": r.backend,
         "confidence": r.confidence,

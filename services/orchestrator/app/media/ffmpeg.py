@@ -144,12 +144,12 @@ def extract_thumbnail(
 
 
 def extract_frame_base64(input_path: str, time_seconds: float, width: int = 854) -> dict[str, Any]:
-    """Extract a single frame at time_seconds and return it as a base64-encoded JPEG string."""
+    """Extract a single frame at time_seconds and return it as a base64-encoded PNG string."""
     exe = shutil.which("ffmpeg")
     if not exe:
         return {"ok": False, "error": "ffmpeg not found on PATH"}
     try:
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
             tmp_path = tmp.name
         proc = subprocess.run(
             [
@@ -158,6 +158,7 @@ def extract_frame_base64(input_path: str, time_seconds: float, width: int = 854)
                 "-i", input_path,
                 "-vframes", "1",
                 "-vf", f"scale={width}:-1",
+                "-f", "image2",
                 tmp_path,
             ],
             capture_output=True,

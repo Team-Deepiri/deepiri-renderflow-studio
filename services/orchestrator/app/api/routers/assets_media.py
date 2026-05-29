@@ -8,7 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
-from app.api.schemas.studio import AssetCreate, AssetImportBody, ProbeBody
+from app.api.schemas.studio import AssetCreate, AssetImportBody, FrameBody, ProbeBody
 from app.media import ffmpeg as ffmpeg_util
 from app.services import studio
 

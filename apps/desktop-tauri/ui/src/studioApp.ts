@@ -11,8 +11,8 @@ import {
   orchestratorListClips,
   probeMedia,
   submitAiJob,
-  timelineResolveActive,
   vulkanDiscover,
+  fetchMediaFrame,
   importMedia,
   listProjectAssets,
   getAsset,
@@ -28,6 +28,7 @@ export function bootstrapStudioApp(): void {
   type Clip = {
     id: number;
     serverId?: string;
+    assetId?: string;
     label: string;
     inTick: number;
     outTick: number;
@@ -43,9 +44,16 @@ export function bootstrapStudioApp(): void {
     clips: Clip[];
   };
 
+  type ActiveClipRef = {
+    track: Track;
+    clip: Clip;
+    asset?: Asset;
+    trackIndex: number;
+  };
+
   type TimelineSnapshot = {
     timelineState: { fps: number; durationTicks: number; playheadTick: number; tracks: Track[] };
-    timelineUiState: { zoom: number; selectedClipId: number | null; activeTrackId: number | null; markers: number[] };
+    timelineUiState: { zoom: number; selectedClipId: number | null; activeTrackId: number | null; activeClipIds: number[]; markers: number[] };
   };
 
   const timelineState: { fps: number; durationTicks: number; playheadTick: number; tracks: Track[] } = {
@@ -84,11 +92,13 @@ export function bootstrapStudioApp(): void {
     zoom: number;
     selectedClipId: number | null;
     activeTrackId: number | null;
+    activeClipIds: number[];
     markers: number[];
   } = {
     zoom: 1,
     selectedClipId: null,
     activeTrackId: null,
+    activeClipIds: [],
     markers: [240, 1020, 1780],
   };
 
@@ -96,7 +106,6 @@ export function bootstrapStudioApp(): void {
   let activeSequenceId: string | null = null;
   let registeredAssets: Asset[] = [];
   let proxyPollTimer: number | undefined;
-  const PLACEHOLDER_ASSET_ID = "00000000-0000-0000-0000-000000000001";
 
   app.innerHTML = `
   <div class="studio">
@@ -148,8 +157,7 @@ export function bootstrapStudioApp(): void {
             </div>
           </div>
           <div id="preview" class="preview">
-            <img id="preview-frame" class="preview-frame" style="display:none" alt="" />
-            <video id="preview-video" class="preview-frame" style="display:none" preload="auto"></video>
+            <div id="preview-stage" class="preview-stage"></div>
             <div id="preview-empty" class="preview-overlay">
               <span>No clip at playhead</span>
               <button class="btn narrow" id="btn-vulkan" type="button">Query Vulkan Devices</button>
@@ -267,18 +275,58 @@ export function bootstrapStudioApp(): void {
     margin-top: 10px;
     border: 1px dashed #536180;
     border-radius: 10px;
-    display: grid;
-    place-items: center;
-    background: linear-gradient(145deg, #0d1119, #0a0c12);
+    position: relative;
+    overflow: hidden;
+    background: #0d1119;
+  }
+  .preview-stage {
+    position: absolute;
+    inset: 0;
   }
   .preview-overlay {
+    position: absolute;
+    inset: 0;
     text-align: center;
     display: grid;
+    place-items: center;
+    align-content: center;
     gap: 10px;
     color: var(--text-dim);
     font-size: 12px;
+    padding: 16px;
+    background: rgba(13, 17, 25, 0.82);
+    pointer-events: none;
   }
-  .preview-frame { width: 100%; height: 100%; object-fit: contain; border-radius: 8px; display: block; }
+  .preview-overlay .btn { pointer-events: auto; }
+  .preview-layer {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+  }
+  .preview-layer img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+  }
+  .preview-layer-list {
+    position: absolute;
+    left: 12px;
+    top: 12px;
+    display: grid;
+    gap: 8px;
+    z-index: 20;
+    pointer-events: none;
+  }
+  .preview-layer-item {
+    padding: 9px 12px;
+    border-radius: 8px;
+    background: rgba(13, 17, 25, 0.86);
+    color: #f3f6ff;
+    font-size: 13px;
+    line-height: 1.25;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+  }
   .timeline { padding: 12px; background: #111621; }
   .timeline-controls { display: flex; align-items: center; gap: 6px; width: 64%; }
   .timeline-grid {
@@ -510,11 +558,14 @@ export function bootstrapStudioApp(): void {
   const aiPrompt = document.querySelector<HTMLTextAreaElement>("#ai-prompt")!;
   const inspector = document.querySelector<HTMLDivElement>("#inspector")!;
   const zoomInput = document.querySelector<HTMLInputElement>("#timeline-zoom")!;
+  const previewEmpty = document.querySelector<HTMLDivElement>("#preview-empty")!;
+  const previewStage = document.querySelector<HTMLDivElement>("#preview-stage")!;
 
   let aiVisible = true;
   let playing = false;
   let playTimer: number | undefined;
   let frameDebounceTimer: number | undefined;
+  let previewRequestSerial = 0;
   let lastJobId = "";
   let nextClipId = 1000;
   let suppressHistory = false;
@@ -522,6 +573,7 @@ export function bootstrapStudioApp(): void {
   const historyPast: TimelineSnapshot[] = [];
   const historyFuture: TimelineSnapshot[] = [];
   const PROJECT_STORAGE_KEY = "renderflow.studio.project";
+  const frameCache = new Map<string, string>();
 
   function tickToTimecode(tick: number, fps: number): string {
     const totalFrames = Math.max(0, Math.floor(tick));
@@ -541,6 +593,30 @@ export function bootstrapStudioApp(): void {
     return null;
   }
 
+  async function ensureTrackServerId(track: Track): Promise<string> {
+    if (track.serverId) return track.serverId;
+    if (!activeSequenceId) {
+      throw new Error("No active sequence. Create or load a project first.");
+    }
+    const createdTrack = await orchestratorCreateTrack(activeSequenceId, track.kind.toLowerCase(), track.lane_index, track.name);
+    track.serverId = createdTrack.id;
+    return createdTrack.id;
+  }
+
+  async function persistClipToOrchestrator(track: Track, clip: Clip): Promise<void> {
+    if (clip.serverId) return;
+    if (!activeSequenceId) {
+      throw new Error("No active sequence. Create or load a project first.");
+    }
+    if (!clip.assetId) {
+      throw new Error(`Clip "${clip.label}" is not linked to an imported asset.`);
+    }
+    const trackServerId = await ensureTrackServerId(track);
+    const createdClip = await orchestratorCreateClip(activeSequenceId, trackServerId, clip.assetId, clip.inTick, clip.outTick);
+    clip.serverId = createdClip.id;
+    clip.assetId = createdClip.asset_id;
+  }
+
   function serializeSnapshot(): TimelineSnapshot {
     return {
       timelineState: JSON.parse(JSON.stringify(timelineState)) as TimelineSnapshot["timelineState"],
@@ -557,6 +633,7 @@ export function bootstrapStudioApp(): void {
     timelineUiState.zoom = snapshot.timelineUiState.zoom;
     timelineUiState.selectedClipId = snapshot.timelineUiState.selectedClipId;
     timelineUiState.activeTrackId = snapshot.timelineUiState.activeTrackId;
+    timelineUiState.activeClipIds = snapshot.timelineUiState.activeClipIds ?? [];
     timelineUiState.markers = snapshot.timelineUiState.markers;
 
     fpsInput.value = String(timelineState.fps);
@@ -652,9 +729,152 @@ export function bootstrapStudioApp(): void {
     renderTimeline();
   }
 
+  function syncActiveClipIds() {
+    timelineUiState.activeClipIds = timelineState.tracks
+      .flatMap((track) => track.clips)
+      .filter((clip) => timelineState.playheadTick >= clip.inTick && timelineState.playheadTick < clip.outTick)
+      .map((clip) => clip.id);
+  }
+
+  function getActiveClipRefs(): ActiveClipRef[] {
+    return timelineState.tracks.flatMap((track, trackIndex) =>
+      track.clips
+        .filter((clip) => timelineUiState.activeClipIds.includes(clip.id))
+        .map((clip) => ({
+          track,
+          clip,
+          asset: clip.assetId ? registeredAssets.find((asset) => asset.id === clip.assetId) : undefined,
+          trackIndex,
+        })),
+    );
+  }
+
+  function getActiveVisualLayers(): ActiveClipRef[] {
+    return getActiveClipRefs()
+      .filter((ref) => ref.track.kind === "Video")
+      .sort((a, b) => a.trackIndex - b.trackIndex || a.track.lane_index - b.track.lane_index);
+  }
+
+  function getPreviewMediaPath(asset: Asset | undefined): string | null {
+    if (!asset) return null;
+    const proxyPath = asset.meta_jsonb?.proxy_status === "ready" ? asset.meta_jsonb.proxy_path ?? null : null;
+    return proxyPath ?? asset.uri;
+  }
+
+  function getPreviewFrameCacheKey(path: string, timeSeconds: number): string {
+    return `${path}::${timeSeconds.toFixed(3)}`;
+  }
+
+  async function getPreviewFrameDataUrl(path: string, timeSeconds: number): Promise<string> {
+    const cacheKey = getPreviewFrameCacheKey(path, timeSeconds);
+    const cached = frameCache.get(cacheKey);
+    if (cached) return cached;
+    const frameDataUrl = await fetchMediaFrame(path, timeSeconds);
+    frameCache.set(cacheKey, frameDataUrl);
+    if (frameCache.size > 80) {
+      const firstKey = frameCache.keys().next().value;
+      if (firstKey) frameCache.delete(firstKey);
+    }
+    return frameDataUrl;
+  }
+
+  function buildPreviewLayerNode(ref: ActiveClipRef, dataUrl: string | null, layerIndex: number): HTMLDivElement {
+    const layerNode = document.createElement("div");
+    layerNode.className = "preview-layer";
+    layerNode.style.zIndex = String(layerIndex + 1);
+
+    if (dataUrl) {
+      const img = document.createElement("img");
+      img.alt = ref.clip.label;
+      img.src = dataUrl;
+      layerNode.appendChild(img);
+    }
+
+    return layerNode;
+  }
+
+  function buildPreviewLayerListNode(refs: ActiveClipRef[]): HTMLDivElement {
+    const listNode = document.createElement("div");
+    listNode.className = "preview-layer-list";
+    for (const ref of refs) {
+      const meta = ref.asset?.meta_jsonb ?? {};
+      const assetName = meta.name ?? ref.asset?.uri.split("/").pop() ?? ref.clip.label;
+      const item = document.createElement("div");
+      item.className = "preview-layer-item";
+      item.textContent = `${ref.track.name}: ${assetName}`;
+      listNode.appendChild(item);
+    }
+    return listNode;
+  }
+
+  function fetchFrameForPlayhead(immediate = false) {
+    if (frameDebounceTimer) {
+      window.clearTimeout(frameDebounceTimer);
+      frameDebounceTimer = undefined;
+    }
+
+    const updatePreview = async () => {
+      const requestSerial = ++previewRequestSerial;
+      const activeRefs = getActiveClipRefs();
+      const visualLayers = getActiveVisualLayers();
+      const overlayLabel = previewEmpty.querySelector("span");
+
+      previewStage.innerHTML = "";
+
+      if (visualLayers.length === 0) {
+        if (activeRefs.some((ref) => ref.track.kind === "Audio")) {
+          if (overlayLabel) overlayLabel.textContent = "Audio is active at the playhead, but there is no visible video/image layer.";
+        } else if (overlayLabel) {
+          overlayLabel.textContent = "No clip at playhead";
+        }
+        previewEmpty.style.display = "grid";
+        return;
+      }
+
+      previewEmpty.style.display = "none";
+
+      const layerResults = await Promise.all(visualLayers.map(async (ref) => {
+        const mediaPath = getPreviewMediaPath(ref.asset);
+        if (!mediaPath) return { ref, dataUrl: null };
+        const clipTimeSeconds = Math.max(0, (timelineState.playheadTick - ref.clip.inTick) / timelineState.fps);
+        try {
+          const dataUrl = await getPreviewFrameDataUrl(mediaPath, clipTimeSeconds);
+          return { ref, dataUrl };
+        } catch {
+          return { ref, dataUrl: null };
+        }
+      }));
+
+      if (requestSerial !== previewRequestSerial) {
+        return;
+      }
+
+      if (layerResults.length === 0) {
+        if (overlayLabel) overlayLabel.textContent = "No clip at playhead";
+        previewEmpty.style.display = "grid";
+        return;
+      }
+
+      for (const [layerIndex, result] of layerResults.entries()) {
+        previewStage.appendChild(buildPreviewLayerNode(result.ref, result.dataUrl, layerIndex));
+      }
+      previewStage.appendChild(buildPreviewLayerListNode(layerResults.map((result) => result.ref)));
+    };
+
+    if (immediate) {
+      void updatePreview();
+      return;
+    }
+
+    frameDebounceTimer = window.setTimeout(() => {
+      void updatePreview();
+    }, 50);
+  }
+
   function renderTimeline() {
     const duration = timelineState.durationTicks;
     const scaledDuration = duration * timelineUiState.zoom;
+    syncActiveClipIds();
     timelineGrid.innerHTML = "";
     for (const track of timelineState.tracks) {
       const row = document.createElement("div");
@@ -769,6 +989,7 @@ export function bootstrapStudioApp(): void {
     slider.max = String(timelineState.durationTicks);
     slider.value = String(timelineState.playheadTick);
     updateInspector();
+    fetchFrameForPlayhead();
   }
 
   function fmtDuration(ms: number | null): string {
@@ -816,10 +1037,9 @@ export function bootstrapStudioApp(): void {
         renderAssetList();
       });
 
-      li.addEventListener("click", () => {
+      li.addEventListener("click", async () => {
         const track = timelineState.tracks.find((t) => t.id === timelineUiState.activeTrackId) ?? timelineState.tracks[0];
         if (!track) return;
-        commitHistory("insert_clip_from_asset");
         const clipDurationTicks = asset.duration_ms != null
           ? Math.round((asset.duration_ms / 1000) * timelineState.fps)
           : 160;
@@ -833,6 +1053,13 @@ export function bootstrapStudioApp(): void {
           color: asset.kind === "audio" ? "var(--clip-gold)" : "var(--clip-blue)",
           assetId: asset.id,
         };
+        try {
+          await persistClipToOrchestrator(track, nextClip);
+        } catch (e) {
+          writeOutput({ action: "insert_clip_error", assetId: asset.id, error: String(e) });
+          return;
+        }
+        commitHistory("insert_clip_from_asset");
         // Extend the timeline so the full clip fits
         if (outTick > timelineState.durationTicks) {
           timelineState.durationTicks = outTick + timelineState.fps * 2;
@@ -844,6 +1071,7 @@ export function bootstrapStudioApp(): void {
         timelineUiState.activeTrackId = track.id;
         renderTimeline();
         fetchFrameForPlayhead(true);
+        writeOutput({ action: "insert_clip_from_asset", assetId: asset.id, clipId: nextClip.id, serverClipId: nextClip.serverId });
       });
 
       assetList.appendChild(li);
@@ -915,6 +1143,7 @@ export function bootstrapStudioApp(): void {
       inTick: rightIn,
       outTick: ref.clip.outTick,
       color: ref.clip.color,
+      assetId: ref.clip.assetId,
     };
     ref.clip.outTick = leftOut;
     ref.clip.label = `${ref.clip.label} A`;
@@ -1090,10 +1319,7 @@ export function bootstrapStudioApp(): void {
           track.serverId = t.id;
         }
         for (const clip of track.clips) {
-          if (!clip.serverId && track.serverId) {
-            const c = await orchestratorCreateClip(activeSequenceId, track.serverId, PLACEHOLDER_ASSET_ID, clip.inTick, clip.outTick);
-            clip.serverId = c.id;
-          }
+          await persistClipToOrchestrator(track, clip);
         }
       }
       writeOutput({ action: "save_project", projectId: activeProjectId, tracks: timelineState.tracks.length });
@@ -1133,10 +1359,11 @@ export function bootstrapStudioApp(): void {
           .map((c: any) => ({
             id: nextId++,
             serverId: c.id,
+            assetId: c.asset_id,
             label: c.name || "Clip",
             inTick: c.in_tick,
             outTick: c.out_tick,
-            color: "var(--clip-blue)",
+            color: t.track_type === "audio" ? "var(--clip-gold)" : "var(--clip-blue)",
           })),
       }));
 
@@ -1271,10 +1498,7 @@ export function bootstrapStudioApp(): void {
           track.serverId = t.id;
         }
         for (const clip of track.clips) {
-          if (!clip.serverId && track.serverId) {
-            const c = await orchestratorCreateClip(activeSequenceId, track.serverId, PLACEHOLDER_ASSET_ID, clip.inTick, clip.outTick);
-            clip.serverId = c.id;
-          }
+          await persistClipToOrchestrator(track, clip);
         }
       }
       writeOutput({ action: "save_project", projectId: activeProjectId, tracks: timelineState.tracks.length });
@@ -1314,10 +1538,11 @@ export function bootstrapStudioApp(): void {
           .map((c: any) => ({
             id: nextId++,
             serverId: c.id,
+            assetId: c.asset_id,
             label: c.name || "Clip",
             inTick: c.in_tick,
             outTick: c.out_tick,
-            color: "var(--clip-blue)",
+            color: t.track_type === "audio" ? "var(--clip-gold)" : "var(--clip-blue)",
           })),
       }));
 
