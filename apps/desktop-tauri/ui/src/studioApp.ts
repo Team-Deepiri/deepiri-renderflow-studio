@@ -16,6 +16,8 @@ import {
   importMedia,
   listProjectAssets,
   getAsset,
+  fetchFrame,
+  getStreamUrl,
   type Asset,
 } from "./backendApi";
 
@@ -28,6 +30,7 @@ export function bootstrapStudioApp(): void {
   type Clip = {
     id: number;
     serverId?: string;
+    assetId?: string;
     label: string;
     inTick: number;
     outTick: number;
@@ -85,11 +88,13 @@ export function bootstrapStudioApp(): void {
     selectedClipId: number | null;
     activeTrackId: number | null;
     markers: number[];
+    activeClipIds: number[];
   } = {
     zoom: 1,
     selectedClipId: null,
     activeTrackId: null,
     markers: [240, 1020, 1780],
+    activeClipIds: [],
   };
 
   let activeProjectId: string | null = null;
@@ -515,6 +520,7 @@ export function bootstrapStudioApp(): void {
   let playing = false;
   let playTimer: number | undefined;
   let frameDebounceTimer: number | undefined;
+  let activePreviewClip: Clip | null = null;
   let lastJobId = "";
   let nextClipId = 1000;
   let suppressHistory = false;
@@ -643,16 +649,146 @@ export function bootstrapStudioApp(): void {
     if (playTimer) window.clearInterval(playTimer);
     playTimer = undefined;
     playing = false;
+    const vid = document.querySelector<HTMLVideoElement>("#preview-video");
+    if (vid) { vid.pause(); vid.style.display = "none"; }
     const button = document.querySelector<HTMLButtonElement>("#btn-play");
     if (button) button.textContent = "Play";
+    // Re-fetch a still frame for where the user stopped
+    fetchFrameForPlayhead(true);
   }
+
+  let _nativeResolveTimer: number | undefined;
 
   function setPlayhead(next: number) {
     timelineState.playheadTick = Math.max(0, Math.min(timelineState.durationTicks, Math.round(next)));
+    // Instant JS resolution — keeps highlights and playhead responsive on every tick
+    timelineUiState.activeClipIds = timelineState.tracks
+      .flatMap((t) => t.clips)
+      .filter((c) => timelineState.playheadTick >= c.inTick && timelineState.playheadTick < c.outTick)
+      .map((c) => c.id);
     renderTimeline();
+    if (!playing) fetchFrameForPlayhead();
+    // Debounced Rust engine call: fires 120 ms after scrubbing/stepping settles.
+    // Gives authoritative lane-ordered active_clip_ids and updates the debug panel.
+    window.clearTimeout(_nativeResolveTimer);
+    _nativeResolveTimer = window.setTimeout(() => resolveActiveAtPlayhead(), 120);
+  }
+
+  function buildNativeSequence() {
+    return {
+      tracks: timelineState.tracks.map((t) => ({
+        id: t.id,
+        kind: t.kind === "Audio" ? "Audio" : "Video",
+        lane_index: t.lane_index,
+        name: t.name,
+      })),
+      clips: timelineState.tracks.flatMap((t) =>
+        t.clips.map((c) => ({
+          id: c.id,
+          track_id: t.id,
+          asset_id: 0,
+          span: { in_tick: c.inTick, out_tick: c.outTick },
+          src_in_tick: 0,
+        }))
+      ),
+    };
+  }
+
+  async function resolveActiveAtPlayhead() {
+    try {
+      const result = await timelineResolveActive({
+        sequence: buildNativeSequence(),
+        playhead_tick: timelineState.playheadTick,
+      }) as { active_clip_ids: number[]; active_clips: unknown[] };
+      // Rust engine is authoritative for lane ordering (overlapping clips)
+      timelineUiState.activeClipIds = result.active_clip_ids;
+      renderTimeline();
+      fetchFrameForPlayhead();
+      writeOutput({ playhead_tick: timelineState.playheadTick, active_clip_ids: result.active_clip_ids, active_clips: result.active_clips });
+    } catch {
+      // JS fallback already applied — nothing extra needed
+    }
+  }
+
+  function showPreviewEmpty(msg: string) {
+    const previewEmpty = document.querySelector<HTMLDivElement>("#preview-empty")!;
+    const label = previewEmpty.querySelector("span");
+    if (label) label.textContent = msg;
+    activePreviewClip = null;
+    document.querySelector<HTMLVideoElement>("#preview-video")?.pause();
+    document.querySelector<HTMLVideoElement>("#preview-video")!.style.display = "none";
+    document.querySelector<HTMLImageElement>("#preview-frame")!.style.display = "none";
+    previewEmpty.style.display = "";
+  }
+
+  function fetchFrameForPlayhead(immediate = false) {
+    if (frameDebounceTimer) window.clearTimeout(frameDebounceTimer);
+    frameDebounceTimer = window.setTimeout(async () => {
+      if (playing) return;
+      const tick = timelineState.playheadTick;
+
+      // Search tracks directly — more reliable than activeClipIds which may be stale
+      let foundClip: Clip | undefined;
+      for (const track of timelineState.tracks) {
+        foundClip = track.clips.find((c) => tick >= c.inTick && tick < c.outTick);
+        if (foundClip) break;
+      }
+
+      if (!foundClip?.assetId) { showPreviewEmpty("No clip at playhead"); return; }
+      const asset = registeredAssets.find((a) => a.id === foundClip!.assetId);
+      const proxyStatus = asset?.meta_jsonb?.proxy_status;
+      const proxyPath = asset?.meta_jsonb?.proxy_path;
+
+      if (proxyStatus === "pending") { showPreviewEmpty("Proxy still transcoding…"); return; }
+      if (proxyStatus === "failed" || !proxyPath) { showPreviewEmpty("Proxy unavailable"); return; }
+      if (proxyStatus !== "ready") { showPreviewEmpty("No clip at playhead"); return; }
+
+      if (asset?.kind === "image") {
+        document.querySelector<HTMLDivElement>("#preview-empty")!.style.display = "none";
+        document.querySelector<HTMLVideoElement>("#preview-video")!.style.display = "none";
+        const previewFrame = document.querySelector<HTMLImageElement>("#preview-frame")!;
+        previewFrame.style.display = "";
+        previewFrame.src = asset.uri;
+        return;
+      }
+
+      activePreviewClip = foundClip;
+      const timeSec = Math.max(0, (tick - foundClip.inTick) / timelineState.fps);
+      try {
+        const b64 = await fetchFrame(proxyPath, timeSec);
+        document.querySelector<HTMLVideoElement>("#preview-video")!.style.display = "none";
+        document.querySelector<HTMLDivElement>("#preview-empty")!.style.display = "none";
+        const previewFrame = document.querySelector<HTMLImageElement>("#preview-frame")!;
+        previewFrame.src = `data:image/jpeg;base64,${b64}`;
+        previewFrame.style.display = "";
+      } catch (err) {
+        writeOutput({ preview_frame_error: String(err), path: proxyPath, timeSec });
+        showPreviewEmpty("Frame unavailable");
+      }
+    }, immediate ? 0 : 150);
   }
 
   function renderTimeline() {
+    // Auto-correct outTick for clips whose asset duration is known but was stored short
+    let maxTick = 0;
+    for (const track of timelineState.tracks) {
+      for (const clip of track.clips) {
+        if (clip.assetId) {
+          const asset = registeredAssets.find((a) => a.id === clip.assetId);
+          if (asset?.duration_ms != null) {
+            const assetDurTicks = Math.round((asset.duration_ms / 1000) * timelineState.fps);
+            const correctOut = clip.inTick + assetDurTicks;
+            if (correctOut > clip.outTick) clip.outTick = correctOut;
+          }
+        }
+        maxTick = Math.max(maxTick, clip.outTick);
+      }
+    }
+    if (maxTick > 0 && maxTick + timelineState.fps * 2 > timelineState.durationTicks) {
+      timelineState.durationTicks = maxTick + timelineState.fps * 2;
+      slider.max = String(timelineState.durationTicks);
+    }
+
     const duration = timelineState.durationTicks;
     const scaledDuration = duration * timelineUiState.zoom;
     timelineGrid.innerHTML = "";
@@ -842,8 +978,8 @@ export function bootstrapStudioApp(): void {
         track.clips.sort((a, b) => a.inTick - b.inTick);
         timelineUiState.selectedClipId = nextClip.id;
         timelineUiState.activeTrackId = track.id;
-        renderTimeline();
-        fetchFrameForPlayhead(true);
+        // setPlayhead refreshes activeClipIds so the new clip is immediately recognized
+        setPlayhead(timelineState.playheadTick);
       });
 
       assetList.appendChild(li);
@@ -876,53 +1012,6 @@ export function bootstrapStudioApp(): void {
     }, 3000);
   }
 
-
-      li.addEventListener("click", () => {
-        const track = timelineState.tracks.find((t) => t.id === timelineUiState.activeTrackId) ?? timelineState.tracks[0];
-        if (!track) return;
-        commitHistory("insert_clip_from_asset");
-        const durationTicks = asset.duration_ms != null ? Math.round((asset.duration_ms / 1000) * timelineState.fps) : 160;
-        const inTick = Math.min(timelineState.playheadTick, timelineState.durationTicks - durationTicks);
-        const nextClip: Clip = {
-          id: nextClipId++,
-          label: name,
-          inTick: Math.max(0, inTick),
-          outTick: Math.min(timelineState.durationTicks, Math.max(0, inTick) + durationTicks),
-          color: asset.kind === "audio" ? "var(--clip-gold)" : "var(--clip-blue)",
-        };
-        track.clips.push(nextClip);
-        track.clips.sort((a, b) => a.inTick - b.inTick);
-        timelineUiState.selectedClipId = nextClip.id;
-        timelineUiState.activeTrackId = track.id;
-        renderTimeline();
-      });
-
-      assetList.appendChild(li);
-    }
-  }
-
-  function startProxyPolling() {
-    if (proxyPollTimer) return;
-    proxyPollTimer = window.setInterval(async () => {
-      const pending = registeredAssets.filter((a) => a.meta_jsonb?.proxy_status === "pending");
-      if (pending.length === 0) {
-        window.clearInterval(proxyPollTimer);
-        proxyPollTimer = undefined;
-        return;
-      }
-      let changed = false;
-      for (const asset of pending) {
-        try {
-          const fresh = await getAsset(asset.id);
-          if (fresh.meta_jsonb?.proxy_status !== "pending") {
-            const idx = registeredAssets.findIndex((a) => a.id === asset.id);
-            if (idx >= 0) { registeredAssets[idx] = fresh; changed = true; }
-          }
-        } catch { /* ignore */ }
-      }
-      if (changed) renderAssetList();
-    }, 3000);
-  }
 
   async function handleImportFile(filePath: string) {
     if (!activeProjectId) {
@@ -992,24 +1081,64 @@ export function bootstrapStudioApp(): void {
     setPlayhead(timelineState.playheadTick + direction);
   }
 
+  function startIntervalShuttle(multiplier: number) {
+    playTimer = window.setInterval(() => {
+      const next = timelineState.playheadTick + multiplier;
+      if (next > timelineState.durationTicks) { setPlayhead(0); return; }
+      if (next < 0) { setPlayhead(timelineState.durationTicks); return; }
+      setPlayhead(next);
+    }, Math.max(15, Math.round(1000 / timelineState.fps)));
+  }
+
   function shuttle(multiplier: number) {
     clearPlayTimer();
     if (multiplier === 0) return;
     playing = true;
     const button = document.querySelector<HTMLButtonElement>("#btn-play");
     if (button) button.textContent = "Pause";
-    playTimer = window.setInterval(() => {
-      const next = timelineState.playheadTick + multiplier;
-      if (next > timelineState.durationTicks) {
-        setPlayhead(0);
-        return;
+
+    const clip = activePreviewClip;
+    const asset = clip ? registeredAssets.find((a) => a.id === clip.assetId) : null;
+    const proxyPath = asset?.meta_jsonb?.proxy_path;
+
+    if (multiplier !== 1 || !clip || !proxyPath || asset?.meta_jsonb?.proxy_status !== "ready") {
+      startIntervalShuttle(multiplier);
+      return;
+    }
+
+    // Real video+audio stream via orchestrator
+    const previewVideo = document.querySelector<HTMLVideoElement>("#preview-video")!;
+    const streamSrc = getStreamUrl(proxyPath);
+    const timeSec = Math.max(0, (timelineState.playheadTick - clip.inTick) / timelineState.fps);
+    writeOutput({ action: "play_start", streamSrc, timeSec });
+
+    if (previewVideo.dataset.proxySrc !== streamSrc) {
+      previewVideo.src = streamSrc;
+      previewVideo.dataset.proxySrc = streamSrc;
+    }
+    document.querySelector<HTMLImageElement>("#preview-frame")!.style.display = "none";
+    previewVideo.style.display = "";
+    document.querySelector<HTMLDivElement>("#preview-empty")!.style.display = "none";
+
+    const seekAndPlay = () => {
+      previewVideo.play().catch((err) => {
+        writeOutput({ play_error: String(err) });
+        clearPlayTimer();
+      });
+    };
+    const doPlay = () => {
+      if (timeSec > 0.05) {
+        previewVideo.currentTime = timeSec;
+        previewVideo.addEventListener("seeked", seekAndPlay, { once: true });
+      } else {
+        seekAndPlay();
       }
-      if (next < 0) {
-        setPlayhead(timelineState.durationTicks);
-        return;
-      }
-      setPlayhead(next);
-    }, Math.max(15, Math.round(1000 / timelineState.fps)));
+    };
+    if (previewVideo.readyState >= 2) {
+      doPlay();
+    } else {
+      previewVideo.addEventListener("loadeddata", doPlay, { once: true });
+    }
   }
 
   document.querySelector("#btn-health")!.addEventListener("click", async () => {
@@ -1220,178 +1349,6 @@ export function bootstrapStudioApp(): void {
     redoHistory();
   });
 
-  document.querySelector("#btn-submit-job")!.addEventListener("click", async () => {
-    const prompt = aiPrompt.value.trim();
-    if (!prompt) {
-      writeOutput("Enter an AI prompt first.");
-      return;
-    }
-    try {
-      const result = await submitAiJob(prompt);
-      lastJobId = result.job_id;
-      writeOutput({ submitted: result, hint: "Use Refresh Job to poll status." });
-    } catch (e) {
-      writeOutput(e);
-    }
-  });
-
-  document.querySelector("#btn-refresh-job")!.addEventListener("click", async () => {
-    if (!lastJobId) {
-      writeOutput("No known job id yet. Submit a job first.");
-      return;
-    }
-    try {
-      const result = await getAiJob(lastJobId);
-      writeOutput(result);
-    } catch (e) {
-      writeOutput(e);
-    }
-  });
-
-  document.querySelector("#btn-toggle-ai")!.addEventListener("click", () => {
-    aiVisible = !aiVisible;
-    aiPanel.style.display = aiVisible ? "block" : "none";
-    workspace.classList.toggle("ai-hidden", !aiVisible);
-    const button = document.querySelector<HTMLButtonElement>("#btn-toggle-ai")!;
-    button.textContent = aiVisible ? "Hide AI Panel" : "Show AI Panel";
-  });
-
-  document.querySelector("#btn-toggle-theme")!.addEventListener("click", () => {
-    const current = document.body.style.filter;
-    document.body.style.filter = current ? "" : "hue-rotate(18deg) saturate(1.05)";
-  });
-
-  document.querySelector("#btn-add-marker")!.addEventListener("click", () => {
-    timelineUiState.markers.push(timelineState.playheadTick);
-    timelineUiState.markers = Array.from(new Set(timelineUiState.markers)).sort((a, b) => a - b);
-    renderTimeline();
-  });
-
-  document.querySelector("#btn-jump-next-marker")!.addEventListener("click", () => {
-    const next = timelineUiState.markers.find((m) => m > timelineState.playheadTick);
-    if (next == null) {
-      setPlayhead(0);
-      return;
-    }
-    setPlayhead(next);
-  });
-
-  document.querySelector("#btn-new-project")!.addEventListener("click", async () => {
-    commitHistory("new_project");
-    const projectNameInput = document.querySelector<HTMLInputElement>("#project-name");
-    const projectName = `Untitled ${new Date().toLocaleTimeString()}`;
-    if (projectNameInput) projectNameInput.value = projectName;
-    try {
-      const project = await orchestratorCreateProject(projectName);
-      activeProjectId = project.id;
-      const seq = await orchestratorCreateSequence(project.id, "Main Sequence");
-      activeSequenceId = seq.id;
-      const v1Server = await orchestratorCreateTrack(seq.id, "video", 0, "V1");
-      const a1Server = await orchestratorCreateTrack(seq.id, "audio", 0, "A1");
-      const v1Id = nextClipId++;
-      const a1Id = nextClipId++;
-      timelineState.tracks = [
-        { id: v1Id, serverId: v1Server.id, name: "V1", kind: "Video", lane_index: 0, clips: [] },
-        { id: a1Id, serverId: a1Server.id, name: "A1", kind: "Audio", lane_index: 0, clips: [] },
-      ];
-      timelineState.playheadTick = 0;
-      timelineUiState.selectedClipId = null;
-      timelineUiState.activeTrackId = v1Id;
-      timelineUiState.markers = [];
-      registeredAssets = [];
-      renderAssetList();
-      writeOutput({ action: "new_project", projectId: project.id, sequenceId: seq.id });
-    } catch (e) {
-      writeOutput({ action: "new_project_error", error: String(e) });
-    }
-    renderTimeline();
-  });
-
-  document.querySelector("#btn-save-project")!.addEventListener("click", async () => {
-    if (!activeProjectId || !activeSequenceId) {
-      writeOutput("No active server project. Click New Project first.");
-      return;
-    }
-    try {
-      for (const track of timelineState.tracks) {
-        if (!track.serverId) {
-          const t = await orchestratorCreateTrack(activeSequenceId, track.kind.toLowerCase(), track.lane_index, track.name);
-          track.serverId = t.id;
-        }
-        for (const clip of track.clips) {
-          if (!clip.serverId && track.serverId) {
-            const c = await orchestratorCreateClip(activeSequenceId, track.serverId, PLACEHOLDER_ASSET_ID, clip.inTick, clip.outTick);
-            clip.serverId = c.id;
-          }
-        }
-      }
-      writeOutput({ action: "save_project", projectId: activeProjectId, tracks: timelineState.tracks.length });
-    } catch (e) {
-      writeOutput({ action: "save_error", error: String(e) });
-    }
-  });
-
-  document.querySelector("#btn-load-project")!.addEventListener("click", async () => {
-    try {
-      const result = await orchestratorListProjects();
-      if (!result.items.length) {
-        writeOutput("No projects found on orchestrator.");
-        return;
-      }
-      writeOutput({ available_projects: result.items.map((p, i) => `${i + 1}. ${p.name} (${p.id})`) });
-      const project = result.items[0];
-
-      activeProjectId = project.id;
-      const sequences = await orchestratorListSequences(project.id) as any[];
-      if (!sequences.length) { writeOutput("Project has no sequences."); return; }
-      const seq = sequences[0];
-      activeSequenceId = seq.id;
-
-      const tracks = await orchestratorListTracks(seq.id);
-      const clips = await orchestratorListClips(seq.id);
-
-      let nextId = Date.now();
-      timelineState.tracks = tracks.map((t) => ({
-        id: nextId++,
-        serverId: t.id,
-        name: t.name,
-        kind: (t.track_type === "audio" ? "Audio" : "Video") as "Video" | "Audio",
-        lane_index: t.lane_index,
-        clips: clips
-          .filter((c: any) => c.track_id === t.id)
-          .map((c: any) => ({
-            id: nextId++,
-            serverId: c.id,
-            label: c.name || "Clip",
-            inTick: c.in_tick,
-            outTick: c.out_tick,
-            color: "var(--clip-blue)",
-          })),
-      }));
-
-      timelineUiState.activeTrackId = timelineState.tracks[0]?.id ?? null;
-      const projectNameInput = document.querySelector<HTMLInputElement>("#project-name");
-      if (projectNameInput) projectNameInput.value = project.name;
-      try {
-        registeredAssets = await listProjectAssets(project.id);
-        renderAssetList();
-        if (registeredAssets.some((a) => a.meta_jsonb?.proxy_status === "pending")) startProxyPolling();
-      } catch { /* orchestrator may not have assets yet */ }
-      renderTimeline();
-      writeOutput({ action: "load_project", projectId: project.id, tracks: tracks.length, clips: clips.length, assets: registeredAssets.length });
-    } catch (e) {
-      writeOutput({ action: "load_error", error: String(e) });
-    }
-  });
-
-  document.querySelector("#btn-undo")!.addEventListener("click", () => {
-    undoHistory();
-  });
-
-  document.querySelector("#btn-redo")!.addEventListener("click", () => {
-    redoHistory();
-  });
-
   document.querySelector("#btn-back")!.addEventListener("click", () => {
     jog(-1);
   });
@@ -1511,20 +1468,17 @@ export function bootstrapStudioApp(): void {
     }
   });
 
+  document.querySelector("#btn-timeline")!.addEventListener("click", async () => {
+    await resolveActiveAtPlayhead();
+    renderTimeline();
+    fetchFrameForPlayhead();
+  });
+
   document.querySelector("#btn-import-media")!.addEventListener("click", async () => {
     const path = window.prompt("Absolute path to media file:");
     if (!path?.trim()) return;
     await handleImportFile(path.trim());
   });
-
-  const dropZone = document.querySelector<HTMLDivElement>("#drop-zone")!;
-  dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.classList.add("drag-over"); });
-  dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
-  dropZone.addEventListener("drop", (e) => {
-    e.preventDefault();
-    dropZone.classList.remove("drag-over");
-  });
-
 
   const dropZone = document.querySelector<HTMLDivElement>("#drop-zone")!;
   dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.classList.add("drag-over"); });
@@ -1552,6 +1506,37 @@ export function bootstrapStudioApp(): void {
       // Not running inside Tauri (e.g. browser dev mode) — drag-drop via Tauri unavailable
     }
   })();
+
+  const previewVideoEl = document.querySelector<HTMLVideoElement>("#preview-video")!;
+
+  previewVideoEl.addEventListener("error", () => {
+    const e = previewVideoEl.error;
+    writeOutput({ preview_video_error: e ? `code ${e.code}: ${e.message}` : "unknown", src: previewVideoEl.src });
+    if (playing) clearPlayTimer();
+  });
+
+  // Sync timeline playhead needle during video playback without rebuilding the whole grid
+  previewVideoEl.addEventListener("timeupdate", () => {
+    if (!playing || !activePreviewClip) return;
+    const clip = activePreviewClip;
+    const newTick = clip.inTick + Math.round(previewVideoEl.currentTime * timelineState.fps);
+    if (newTick >= clip.outTick) {
+      clearPlayTimer();
+      setPlayhead(clip.outTick);
+      return;
+    }
+    timelineState.playheadTick = newTick;
+    timecode.textContent = tickToTimecode(newTick, timelineState.fps);
+    slider.value = String(newTick);
+    document.querySelectorAll<HTMLDivElement>(".playhead").forEach((el) => {
+      const scaledDuration = timelineState.durationTicks * timelineUiState.zoom;
+      el.style.left = `${((newTick * timelineUiState.zoom) / scaledDuration) * 100}%`;
+    });
+  });
+
+  previewVideoEl.addEventListener("ended", () => {
+    if (playing) clearPlayTimer();
+  });
 
   renderAssetList();
   timelineUiState.activeTrackId = timelineState.tracks[0]?.id ?? null;
