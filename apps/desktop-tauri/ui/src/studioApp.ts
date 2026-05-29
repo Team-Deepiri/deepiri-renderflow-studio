@@ -19,6 +19,8 @@ import {
   type Asset,
 } from "./backendApi";
 
+const ORCH_BASE = "http://127.0.0.1:8080";
+
 export function bootstrapStudioApp(): void {
   const app = document.querySelector<HTMLDivElement>("#app");
   if (!app) {
@@ -28,35 +30,11 @@ export function bootstrapStudioApp(): void {
   type Clip = {
     id: number;
     serverId?: string;
-    label: string;
-    inTick: number;
-    outTick: number;
-    color: string;
-  };
-
-  type Track = {
-    id: number;
-    serverId?: string;
-    name: string;
-    kind: "Video" | "Audio";
-    lane_index: number;
-    clips: Clip[];
-  };
-
-  type TimelineSnapshot = {
-    timelineState: { fps: number; durationTicks: number; playheadTick: number; tracks: Track[] };
-    timelineUiState: { zoom: number; selectedClipId: number | null; activeTrackId: number | null; markers: number[] };
-  };
-
-
-  type Clip = {
-    id: number;
-    serverId?: string;
-    label: string;
-    inTick: number;
-    outTick: number;
-    color: string;
     assetId?: string;
+    label: string;
+    inTick: number;
+    outTick: number;
+    color: string;
   };
 
   type Track = {
@@ -116,12 +94,15 @@ export function bootstrapStudioApp(): void {
     selectedClipId: null,
     activeTrackId: null,
     markers: [240, 1020, 1780],
+    activeClipIds: [],
   };
 
   let activeProjectId: string | null = null;
   let activeSequenceId: string | null = null;
   let registeredAssets: Asset[] = [];
   let proxyPollTimer: number | undefined;
+
+  let activePreviewClip: Clip | null = null;
   const PLACEHOLDER_ASSET_ID = "00000000-0000-0000-0000-000000000001";
 
   app.innerHTML = `
@@ -728,7 +709,17 @@ export function bootstrapStudioApp(): void {
 
       const timeSec = Math.max(0, (tick - foundClip.inTick) / timelineState.fps);
       try {
-        const b64 = await fetchFrame(proxyPath, timeSec);
+        const res = await fetch(`${ORCH_BASE}/v1/media/frame`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            path: proxyPath,
+            time_seconds: timeSec
+          })
+        });
+
+        const json = await res.json();
+        const b64 = json.base64;
         const previewFrame = document.querySelector<HTMLImageElement>("#preview-frame")!;
         previewFrame.src = `data:image/jpeg;base64,${b64}`;
         previewFrame.style.display = "";
@@ -1287,7 +1278,7 @@ export function bootstrapStudioApp(): void {
         }
         for (const clip of track.clips) {
           if (!clip.serverId && track.serverId) {
-            const c = await orchestratorCreateClip(activeSequenceId, track.serverId, PLACEHOLDER_ASSET_ID, clip.inTick, clip.outTick);
+            const c = await orchestratorCreateClip(activeSequenceId, track.serverId, clip.assetId ?? PLACEHOLDER_ASSET_ID, clip.inTick, clip.outTick);
             clip.serverId = c.id;
           }
         }
