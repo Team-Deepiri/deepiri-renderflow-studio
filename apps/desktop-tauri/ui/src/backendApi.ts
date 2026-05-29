@@ -218,7 +218,7 @@ export async function orchestratorListTracks(sequenceId: string): Promise<Track[
 export async function orchestratorCreateClip(
   sequenceId: string,
   trackId: string,
-  assetId: string,
+  assetId: string | number,
   inTick: number,
   outTick: number,
 ): Promise<Clip> {
