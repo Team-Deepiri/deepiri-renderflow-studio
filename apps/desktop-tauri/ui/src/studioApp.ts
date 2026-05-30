@@ -11,11 +11,13 @@ import {
   orchestratorListClips,
   probeMedia,
   submitAiJob,
+  timelineResolveActive,
   vulkanDiscover,
-  fetchMediaFrame,
   importMedia,
   listProjectAssets,
   getAsset,
+  fetchFrame,
+  getStreamUrl,
   type Asset,
 } from "./backendApi";
 
@@ -92,20 +94,21 @@ export function bootstrapStudioApp(): void {
     zoom: number;
     selectedClipId: number | null;
     activeTrackId: number | null;
-    activeClipIds: number[];
     markers: number[];
+    activeClipIds: number[];
   } = {
     zoom: 1,
     selectedClipId: null,
     activeTrackId: null,
-    activeClipIds: [],
     markers: [240, 1020, 1780],
+    activeClipIds: [],
   };
 
   let activeProjectId: string | null = null;
   let activeSequenceId: string | null = null;
   let registeredAssets: Asset[] = [];
   let proxyPollTimer: number | undefined;
+  const PLACEHOLDER_ASSET_ID = "00000000-0000-0000-0000-000000000001";
 
   app.innerHTML = `
   <div class="studio">
@@ -157,7 +160,8 @@ export function bootstrapStudioApp(): void {
             </div>
           </div>
           <div id="preview" class="preview">
-            <div id="preview-stage" class="preview-stage"></div>
+            <img id="preview-frame" class="preview-frame" style="display:none" alt="" />
+            <video id="preview-video" class="preview-frame" style="display:none" preload="auto"></video>
             <div id="preview-empty" class="preview-overlay">
               <span>No clip at playhead</span>
               <button class="btn narrow" id="btn-vulkan" type="button">Query Vulkan Devices</button>
@@ -720,161 +724,148 @@ export function bootstrapStudioApp(): void {
     if (playTimer) window.clearInterval(playTimer);
     playTimer = undefined;
     playing = false;
+    const vid = document.querySelector<HTMLVideoElement>("#preview-video");
+    if (vid) { vid.pause(); vid.style.display = "none"; }
     const button = document.querySelector<HTMLButtonElement>("#btn-play");
     if (button) button.textContent = "Play";
+    // Re-fetch a still frame for where the user stopped
+    fetchFrameForPlayhead(true);
   }
+
+  let _nativeResolveTimer: number | undefined;
 
   function setPlayhead(next: number) {
     timelineState.playheadTick = Math.max(0, Math.min(timelineState.durationTicks, Math.round(next)));
-    renderTimeline();
-  }
-
-  function syncActiveClipIds() {
+    // Instant JS resolution — keeps highlights and playhead responsive on every tick
     timelineUiState.activeClipIds = timelineState.tracks
-      .flatMap((track) => track.clips)
-      .filter((clip) => timelineState.playheadTick >= clip.inTick && timelineState.playheadTick < clip.outTick)
-      .map((clip) => clip.id);
+      .flatMap((t) => t.clips)
+      .filter((c) => timelineState.playheadTick >= c.inTick && timelineState.playheadTick < c.outTick)
+      .map((c) => c.id);
+    renderTimeline();
+    if (!playing) fetchFrameForPlayhead();
+    // Debounced Rust engine call: fires 120 ms after scrubbing/stepping settles.
+    // Gives authoritative lane-ordered active_clip_ids and updates the debug panel.
+    window.clearTimeout(_nativeResolveTimer);
+    _nativeResolveTimer = window.setTimeout(() => resolveActiveAtPlayhead(), 120);
   }
 
-  function getActiveClipRefs(): ActiveClipRef[] {
-    return timelineState.tracks.flatMap((track, trackIndex) =>
-      track.clips
-        .filter((clip) => timelineUiState.activeClipIds.includes(clip.id))
-        .map((clip) => ({
-          track,
-          clip,
-          asset: clip.assetId ? registeredAssets.find((asset) => asset.id === clip.assetId) : undefined,
-          trackIndex,
-        })),
-    );
+  function buildNativeSequence() {
+    return {
+      tracks: timelineState.tracks.map((t) => ({
+        id: t.id,
+        kind: t.kind === "Audio" ? "Audio" : "Video",
+        lane_index: t.lane_index,
+        name: t.name,
+      })),
+      clips: timelineState.tracks.flatMap((t) =>
+        t.clips.map((c) => ({
+          id: c.id,
+          track_id: t.id,
+          asset_id: 0,
+          span: { in_tick: c.inTick, out_tick: c.outTick },
+          src_in_tick: 0,
+        }))
+      ),
+    };
   }
 
-  function getActiveVisualLayers(): ActiveClipRef[] {
-    return getActiveClipRefs()
-      .filter((ref) => ref.track.kind === "Video")
-      .sort((a, b) => a.trackIndex - b.trackIndex || a.track.lane_index - b.track.lane_index);
-  }
-
-  function getPreviewMediaPath(asset: Asset | undefined): string | null {
-    if (!asset) return null;
-    const proxyPath = asset.meta_jsonb?.proxy_status === "ready" ? asset.meta_jsonb.proxy_path ?? null : null;
-    return proxyPath ?? asset.uri;
-  }
-
-  function getPreviewFrameCacheKey(path: string, timeSeconds: number): string {
-    return `${path}::${timeSeconds.toFixed(3)}`;
-  }
-
-  async function getPreviewFrameDataUrl(path: string, timeSeconds: number): Promise<string> {
-    const cacheKey = getPreviewFrameCacheKey(path, timeSeconds);
-    const cached = frameCache.get(cacheKey);
-    if (cached) return cached;
-    const frameDataUrl = await fetchMediaFrame(path, timeSeconds);
-    frameCache.set(cacheKey, frameDataUrl);
-    if (frameCache.size > 80) {
-      const firstKey = frameCache.keys().next().value;
-      if (firstKey) frameCache.delete(firstKey);
+  async function resolveActiveAtPlayhead() {
+    try {
+      const result = await timelineResolveActive({
+        sequence: buildNativeSequence(),
+        playhead_tick: timelineState.playheadTick,
+      }) as { active_clip_ids: number[]; active_clips: unknown[] };
+      // Rust engine is authoritative for lane ordering (overlapping clips)
+      timelineUiState.activeClipIds = result.active_clip_ids;
+      renderTimeline();
+      fetchFrameForPlayhead();
+      writeOutput({ playhead_tick: timelineState.playheadTick, active_clip_ids: result.active_clip_ids, active_clips: result.active_clips });
+    } catch {
+      // JS fallback already applied — nothing extra needed
     }
-    return frameDataUrl;
   }
 
-  function buildPreviewLayerNode(ref: ActiveClipRef, dataUrl: string | null, layerIndex: number): HTMLDivElement {
-    const layerNode = document.createElement("div");
-    layerNode.className = "preview-layer";
-    layerNode.style.zIndex = String(layerIndex + 1);
-
-    if (dataUrl) {
-      const img = document.createElement("img");
-      img.alt = ref.clip.label;
-      img.src = dataUrl;
-      layerNode.appendChild(img);
-    }
-
-    return layerNode;
-  }
-
-  function buildPreviewLayerListNode(refs: ActiveClipRef[]): HTMLDivElement {
-    const listNode = document.createElement("div");
-    listNode.className = "preview-layer-list";
-    for (const ref of refs) {
-      const meta = ref.asset?.meta_jsonb ?? {};
-      const assetName = meta.name ?? ref.asset?.uri.split("/").pop() ?? ref.clip.label;
-      const item = document.createElement("div");
-      item.className = "preview-layer-item";
-      item.textContent = `${ref.track.name}: ${assetName}`;
-      listNode.appendChild(item);
-    }
-    return listNode;
+  function showPreviewEmpty(msg: string) {
+    const previewEmpty = document.querySelector<HTMLDivElement>("#preview-empty")!;
+    const label = previewEmpty.querySelector("span");
+    if (label) label.textContent = msg;
+    activePreviewClip = null;
+    document.querySelector<HTMLVideoElement>("#preview-video")?.pause();
+    document.querySelector<HTMLVideoElement>("#preview-video")!.style.display = "none";
+    document.querySelector<HTMLImageElement>("#preview-frame")!.style.display = "none";
+    previewEmpty.style.display = "";
   }
 
   function fetchFrameForPlayhead(immediate = false) {
-    if (frameDebounceTimer) {
-      window.clearTimeout(frameDebounceTimer);
-      frameDebounceTimer = undefined;
-    }
+    if (frameDebounceTimer) window.clearTimeout(frameDebounceTimer);
+    frameDebounceTimer = window.setTimeout(async () => {
+      if (playing) return;
+      const tick = timelineState.playheadTick;
 
-    const updatePreview = async () => {
-      const requestSerial = ++previewRequestSerial;
-      const activeRefs = getActiveClipRefs();
-      const visualLayers = getActiveVisualLayers();
-      const overlayLabel = previewEmpty.querySelector("span");
+      // Search tracks directly — more reliable than activeClipIds which may be stale
+      let foundClip: Clip | undefined;
+      for (const track of timelineState.tracks) {
+        foundClip = track.clips.find((c) => tick >= c.inTick && tick < c.outTick);
+        if (foundClip) break;
+      }
 
-      previewStage.innerHTML = "";
+      if (!foundClip?.assetId) { showPreviewEmpty("No clip at playhead"); return; }
+      const asset = registeredAssets.find((a) => a.id === foundClip!.assetId);
+      const proxyStatus = asset?.meta_jsonb?.proxy_status;
+      const proxyPath = asset?.meta_jsonb?.proxy_path;
 
-      if (visualLayers.length === 0) {
-        if (activeRefs.some((ref) => ref.track.kind === "Audio")) {
-          if (overlayLabel) overlayLabel.textContent = "Audio is active at the playhead, but there is no visible video/image layer.";
-        } else if (overlayLabel) {
-          overlayLabel.textContent = "No clip at playhead";
-        }
-        previewEmpty.style.display = "grid";
+      if (proxyStatus === "pending") { showPreviewEmpty("Proxy still transcoding…"); return; }
+      if (proxyStatus === "failed" || !proxyPath) { showPreviewEmpty("Proxy unavailable"); return; }
+      if (proxyStatus !== "ready") { showPreviewEmpty("No clip at playhead"); return; }
+
+      if (asset?.kind === "image") {
+        document.querySelector<HTMLDivElement>("#preview-empty")!.style.display = "none";
+        document.querySelector<HTMLVideoElement>("#preview-video")!.style.display = "none";
+        const previewFrame = document.querySelector<HTMLImageElement>("#preview-frame")!;
+        previewFrame.style.display = "";
+        previewFrame.src = asset.uri;
         return;
       }
 
-      previewEmpty.style.display = "none";
-
-      const layerResults = await Promise.all(visualLayers.map(async (ref) => {
-        const mediaPath = getPreviewMediaPath(ref.asset);
-        if (!mediaPath) return { ref, dataUrl: null };
-        const clipTimeSeconds = Math.max(0, (timelineState.playheadTick - ref.clip.inTick) / timelineState.fps);
-        try {
-          const dataUrl = await getPreviewFrameDataUrl(mediaPath, clipTimeSeconds);
-          return { ref, dataUrl };
-        } catch {
-          return { ref, dataUrl: null };
-        }
-      }));
-
-      if (requestSerial !== previewRequestSerial) {
-        return;
+      activePreviewClip = foundClip;
+      const timeSec = Math.max(0, (tick - foundClip.inTick) / timelineState.fps);
+      try {
+        const b64 = await fetchFrame(proxyPath, timeSec);
+        document.querySelector<HTMLVideoElement>("#preview-video")!.style.display = "none";
+        document.querySelector<HTMLDivElement>("#preview-empty")!.style.display = "none";
+        const previewFrame = document.querySelector<HTMLImageElement>("#preview-frame")!;
+        previewFrame.src = `data:image/jpeg;base64,${b64}`;
+        previewFrame.style.display = "";
+      } catch (err) {
+        writeOutput({ preview_frame_error: String(err), path: proxyPath, timeSec });
+        showPreviewEmpty("Frame unavailable");
       }
-
-      if (layerResults.length === 0) {
-        if (overlayLabel) overlayLabel.textContent = "No clip at playhead";
-        previewEmpty.style.display = "grid";
-        return;
-      }
-
-      for (const [layerIndex, result] of layerResults.entries()) {
-        previewStage.appendChild(buildPreviewLayerNode(result.ref, result.dataUrl, layerIndex));
-      }
-      previewStage.appendChild(buildPreviewLayerListNode(layerResults.map((result) => result.ref)));
-    };
-
-    if (immediate) {
-      void updatePreview();
-      return;
-    }
-
-    frameDebounceTimer = window.setTimeout(() => {
-      void updatePreview();
-    }, 50);
+    }, immediate ? 0 : 150);
   }
 
   function renderTimeline() {
+    // Auto-correct outTick for clips whose asset duration is known but was stored short
+    let maxTick = 0;
+    for (const track of timelineState.tracks) {
+      for (const clip of track.clips) {
+        if (clip.assetId) {
+          const asset = registeredAssets.find((a) => a.id === clip.assetId);
+          if (asset?.duration_ms != null) {
+            const assetDurTicks = Math.round((asset.duration_ms / 1000) * timelineState.fps);
+            const correctOut = clip.inTick + assetDurTicks;
+            if (correctOut > clip.outTick) clip.outTick = correctOut;
+          }
+        }
+        maxTick = Math.max(maxTick, clip.outTick);
+      }
+    }
+    if (maxTick > 0 && maxTick + timelineState.fps * 2 > timelineState.durationTicks) {
+      timelineState.durationTicks = maxTick + timelineState.fps * 2;
+      slider.max = String(timelineState.durationTicks);
+    }
+
     const duration = timelineState.durationTicks;
     const scaledDuration = duration * timelineUiState.zoom;
-    syncActiveClipIds();
     timelineGrid.innerHTML = "";
     for (const track of timelineState.tracks) {
       const row = document.createElement("div");
@@ -1037,9 +1028,10 @@ export function bootstrapStudioApp(): void {
         renderAssetList();
       });
 
-      li.addEventListener("click", async () => {
+      li.addEventListener("click", () => {
         const track = timelineState.tracks.find((t) => t.id === timelineUiState.activeTrackId) ?? timelineState.tracks[0];
         if (!track) return;
+        commitHistory("insert_clip_from_asset");
         const clipDurationTicks = asset.duration_ms != null
           ? Math.round((asset.duration_ms / 1000) * timelineState.fps)
           : 160;
@@ -1103,6 +1095,7 @@ export function bootstrapStudioApp(): void {
       }
     }, 3000);
   }
+
 
   async function handleImportFile(filePath: string) {
     if (!activeProjectId) {
@@ -1173,24 +1166,64 @@ export function bootstrapStudioApp(): void {
     setPlayhead(timelineState.playheadTick + direction);
   }
 
+  function startIntervalShuttle(multiplier: number) {
+    playTimer = window.setInterval(() => {
+      const next = timelineState.playheadTick + multiplier;
+      if (next > timelineState.durationTicks) { setPlayhead(0); return; }
+      if (next < 0) { setPlayhead(timelineState.durationTicks); return; }
+      setPlayhead(next);
+    }, Math.max(15, Math.round(1000 / timelineState.fps)));
+  }
+
   function shuttle(multiplier: number) {
     clearPlayTimer();
     if (multiplier === 0) return;
     playing = true;
     const button = document.querySelector<HTMLButtonElement>("#btn-play");
     if (button) button.textContent = "Pause";
-    playTimer = window.setInterval(() => {
-      const next = timelineState.playheadTick + multiplier;
-      if (next > timelineState.durationTicks) {
-        setPlayhead(0);
-        return;
+
+    const clip = activePreviewClip;
+    const asset = clip ? registeredAssets.find((a) => a.id === clip.assetId) : null;
+    const proxyPath = asset?.meta_jsonb?.proxy_path;
+
+    if (multiplier !== 1 || !clip || !proxyPath || asset?.meta_jsonb?.proxy_status !== "ready") {
+      startIntervalShuttle(multiplier);
+      return;
+    }
+
+    // Real video+audio stream via orchestrator
+    const previewVideo = document.querySelector<HTMLVideoElement>("#preview-video")!;
+    const streamSrc = getStreamUrl(proxyPath);
+    const timeSec = Math.max(0, (timelineState.playheadTick - clip.inTick) / timelineState.fps);
+    writeOutput({ action: "play_start", streamSrc, timeSec });
+
+    if (previewVideo.dataset.proxySrc !== streamSrc) {
+      previewVideo.src = streamSrc;
+      previewVideo.dataset.proxySrc = streamSrc;
+    }
+    document.querySelector<HTMLImageElement>("#preview-frame")!.style.display = "none";
+    previewVideo.style.display = "";
+    document.querySelector<HTMLDivElement>("#preview-empty")!.style.display = "none";
+
+    const seekAndPlay = () => {
+      previewVideo.play().catch((err) => {
+        writeOutput({ play_error: String(err) });
+        clearPlayTimer();
+      });
+    };
+    const doPlay = () => {
+      if (timeSec > 0.05) {
+        previewVideo.currentTime = timeSec;
+        previewVideo.addEventListener("seeked", seekAndPlay, { once: true });
+      } else {
+        seekAndPlay();
       }
-      if (next < 0) {
-        setPlayhead(timelineState.durationTicks);
-        return;
-      }
-      setPlayhead(next);
-    }, Math.max(15, Math.round(1000 / timelineState.fps)));
+    };
+    if (previewVideo.readyState >= 2) {
+      doPlay();
+    } else {
+      previewVideo.addEventListener("loadeddata", doPlay, { once: true });
+    }
   }
 
   document.querySelector("#btn-health")!.addEventListener("click", async () => {
@@ -1547,6 +1580,15 @@ export function bootstrapStudioApp(): void {
       }));
 
       timelineUiState.activeTrackId = timelineState.tracks[0]?.id ?? null;
+
+      // Grow the timeline to fit all loaded clips
+      const maxOutTick = timelineState.tracks
+        .flatMap((t) => t.clips)
+        .reduce((m, c) => Math.max(m, c.outTick), 0);
+      if (maxOutTick > timelineState.durationTicks) {
+        timelineState.durationTicks = maxOutTick + timelineState.fps * 2;
+      }
+
       const projectNameInput = document.querySelector<HTMLInputElement>("#project-name");
       if (projectNameInput) projectNameInput.value = project.name;
       try {
@@ -1688,6 +1730,12 @@ export function bootstrapStudioApp(): void {
     }
   });
 
+  document.querySelector("#btn-timeline")!.addEventListener("click", async () => {
+    await resolveActiveAtPlayhead();
+    renderTimeline();
+    fetchFrameForPlayhead();
+  });
+
   document.querySelector("#btn-import-media")!.addEventListener("click", async () => {
     const path = window.prompt("Absolute path to media file:");
     if (!path?.trim()) return;
@@ -1720,6 +1768,37 @@ export function bootstrapStudioApp(): void {
       // Not running inside Tauri (e.g. browser dev mode) — drag-drop via Tauri unavailable
     }
   })();
+
+  const previewVideoEl = document.querySelector<HTMLVideoElement>("#preview-video")!;
+
+  previewVideoEl.addEventListener("error", () => {
+    const e = previewVideoEl.error;
+    writeOutput({ preview_video_error: e ? `code ${e.code}: ${e.message}` : "unknown", src: previewVideoEl.src });
+    if (playing) clearPlayTimer();
+  });
+
+  // Sync timeline playhead needle during video playback without rebuilding the whole grid
+  previewVideoEl.addEventListener("timeupdate", () => {
+    if (!playing || !activePreviewClip) return;
+    const clip = activePreviewClip;
+    const newTick = clip.inTick + Math.round(previewVideoEl.currentTime * timelineState.fps);
+    if (newTick >= clip.outTick) {
+      clearPlayTimer();
+      setPlayhead(clip.outTick);
+      return;
+    }
+    timelineState.playheadTick = newTick;
+    timecode.textContent = tickToTimecode(newTick, timelineState.fps);
+    slider.value = String(newTick);
+    document.querySelectorAll<HTMLDivElement>(".playhead").forEach((el) => {
+      const scaledDuration = timelineState.durationTicks * timelineUiState.zoom;
+      el.style.left = `${((newTick * timelineUiState.zoom) / scaledDuration) * 100}%`;
+    });
+  });
+
+  previewVideoEl.addEventListener("ended", () => {
+    if (playing) clearPlayTimer();
+  });
 
   renderAssetList();
   timelineUiState.activeTrackId = timelineState.tracks[0]?.id ?? null;

@@ -266,3 +266,18 @@ export async function getAsset(assetId: string): Promise<Asset> {
   const res = await fetch(`${BASE}/v1/assets/${assetId}`);
   return res.json();
 }
+
+export async function fetchFrame(path: string, timeSeconds: number): Promise<string> {
+  const res = await fetch(`${BASE}/v1/media/frame`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, time_seconds: timeSeconds }),
+  });
+  if (!res.ok) throw new Error(`frame fetch failed: ${res.status}`);
+  const data = await res.json() as { base64: string };
+  return data.base64;
+}
+
+export function getStreamUrl(path: string): string {
+  return `${BASE}/v1/media/stream?path=${encodeURIComponent(path)}`;
+}
