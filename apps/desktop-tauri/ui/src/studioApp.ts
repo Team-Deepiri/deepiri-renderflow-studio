@@ -568,6 +568,7 @@ export function bootstrapStudioApp(): void {
   let aiVisible = true;
   let playing = false;
   let playTimer: number | undefined;
+  let activePreviewClip: Clip | null = null;
   let frameDebounceTimer: number | undefined;
   let previewRequestSerial = 0;
   let lastJobId = "";
@@ -1028,7 +1029,7 @@ export function bootstrapStudioApp(): void {
         renderAssetList();
       });
 
-      li.addEventListener("click", () => {
+      li.addEventListener("click", async () => {
         const track = timelineState.tracks.find((t) => t.id === timelineUiState.activeTrackId) ?? timelineState.tracks[0];
         if (!track) return;
         commitHistory("insert_clip_from_asset");
