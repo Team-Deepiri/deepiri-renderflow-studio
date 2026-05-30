@@ -1029,6 +1029,7 @@ export function bootstrapStudioApp(): void {
         renderAssetList();
       });
 
+
       li.addEventListener("click", async () => {
         const track = timelineState.tracks.find((t) => t.id === timelineUiState.activeTrackId) ?? timelineState.tracks[0];
         if (!track) return;
