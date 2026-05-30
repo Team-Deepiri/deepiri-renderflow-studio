@@ -196,6 +196,18 @@ export async function probeMedia(path: string): Promise<string> {
   return res.text();
 }
 
+export async function fetchMediaFrame(path: string, timeSeconds: number): Promise<string> {
+  const res = await fetch(`${BASE}/v1/media/frame`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, time_seconds: timeSeconds }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const payload = await res.json();
+  if (!payload.base64) throw new Error("Missing frame payload.");
+  return `data:image/png;base64,${payload.base64}`;
+}
+
 export async function orchestratorCreateTrack(
   sequenceId: string,
   trackType: string,

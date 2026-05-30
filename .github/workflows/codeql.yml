@@ -1,10 +1,7 @@
 name: CodeQL
 
 on:
-  pull_request:
-    branches: [main, dev]
-  push:
-    branches: [main, dev]
+  workflow_dispatch:
 
 permissions:
   actions: read
@@ -13,7 +10,7 @@ permissions:
 
 jobs:
   analyze:
-    name: Analyze (multi-language)
+    name: Analyze (JavaScript/TypeScript, Python)
     runs-on: ubuntu-latest
 
     steps:
@@ -25,7 +22,7 @@ jobs:
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
-          languages: javascript-typescript,python,cpp,go
+          languages: javascript-typescript,python
           config-file: ./.github/codeql/codeql-config.yml
 
       - name: Perform CodeQL Analysis

@@ -30,7 +30,13 @@ async def lifespan(app: FastAPI):
     db.init_db(settings.database_url)
     bootstrap()
     start_worker(settings)
-    _grpc_server = start_grpc_server()
+    try:
+        _grpc_server = start_grpc_server()
+    except Exception:
+        if settings.readiness_mode == "prod":
+            raise
+        logger.exception("gRPC server failed to start; continuing without gRPC in dev mode")
+        _grpc_server = None
     yield
     stop_worker()
     if _grpc_server:
