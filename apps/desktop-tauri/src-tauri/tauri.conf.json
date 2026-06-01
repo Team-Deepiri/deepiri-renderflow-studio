@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "identifier": "ai.deepiri.renderflow",
   "build": {
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "npm run dev --prefix ui",
+    "beforeBuildCommand": "npm run build --prefix ui",
     "devUrl": "http://127.0.0.1:1420",
     "frontendDist": "../ui/dist"
   },
