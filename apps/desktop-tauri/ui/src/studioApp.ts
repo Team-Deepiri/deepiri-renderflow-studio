@@ -108,7 +108,6 @@ export function bootstrapStudioApp(): void {
   let activeSequenceId: string | null = null;
   let registeredAssets: Asset[] = [];
   let proxyPollTimer: number | undefined;
-  const PLACEHOLDER_ASSET_ID = "00000000-0000-0000-0000-000000000001";
 
   app.innerHTML = `
   <div class="studio">
@@ -577,8 +576,6 @@ export function bootstrapStudioApp(): void {
 
   const historyPast: TimelineSnapshot[] = [];
   const historyFuture: TimelineSnapshot[] = [];
-  const PROJECT_STORAGE_KEY = "renderflow.studio.project";
-  const frameCache = new Map<string, string>();
 
   function tickToTimecode(tick: number, fps: number): string {
     const totalFrames = Math.max(0, Math.floor(tick));
@@ -677,34 +674,6 @@ export function bootstrapStudioApp(): void {
     applySnapshot(next);
     suppressHistory = false;
     renderTimeline();
-  }
-
-  function saveProjectToStorage() {
-    const projectName = (document.querySelector<HTMLInputElement>("#project-name")?.value ?? "Untitled").trim();
-    const payload = {
-      projectName,
-      snapshot: serializeSnapshot(),
-      savedAt: new Date().toISOString(),
-    };
-    window.localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(payload));
-    writeOutput({ action: "save_project", projectName, savedAt: payload.savedAt });
-  }
-
-  function loadProjectFromStorage() {
-    const raw = window.localStorage.getItem(PROJECT_STORAGE_KEY);
-    if (!raw) {
-      writeOutput("No saved project in localStorage yet.");
-      return;
-    }
-    const parsed = JSON.parse(raw) as { projectName: string; snapshot: TimelineSnapshot; savedAt: string };
-    const projectNameInput = document.querySelector<HTMLInputElement>("#project-name");
-    if (projectNameInput) projectNameInput.value = parsed.projectName;
-    commitHistory("before_load_project");
-    suppressHistory = true;
-    applySnapshot(parsed.snapshot);
-    suppressHistory = false;
-    renderTimeline();
-    writeOutput({ action: "load_project", projectName: parsed.projectName, savedAt: parsed.savedAt });
   }
 
   function updateInspector() {
@@ -1033,7 +1002,6 @@ export function bootstrapStudioApp(): void {
       li.addEventListener("click", async () => {
         const track = timelineState.tracks.find((t) => t.id === timelineUiState.activeTrackId) ?? timelineState.tracks[0];
         if (!track) return;
-        commitHistory("insert_clip_from_asset");
         const clipDurationTicks = asset.duration_ms != null
           ? Math.round((asset.duration_ms / 1000) * timelineState.fps)
           : 160;
@@ -1253,185 +1221,6 @@ export function bootstrapStudioApp(): void {
     } catch (e) {
       writeOutput(e);
     }
-  });
-
-  document.querySelector("#btn-submit-job")!.addEventListener("click", async () => {
-    const prompt = aiPrompt.value.trim();
-    if (!prompt) {
-      writeOutput("Enter an AI prompt first.");
-      return;
-    }
-    try {
-      const result = await submitAiJob(prompt);
-      lastJobId = result.job_id;
-      writeOutput({ submitted: result, hint: "Use Refresh Job to poll status." });
-    } catch (e) {
-      writeOutput(e);
-    }
-  });
-
-  document.querySelector("#btn-refresh-job")!.addEventListener("click", async () => {
-    if (!lastJobId) {
-      writeOutput("No known job id yet. Submit a job first.");
-      return;
-    }
-    try {
-      const result = await getAiJob(lastJobId);
-      writeOutput(result);
-    } catch (e) {
-      writeOutput(e);
-    }
-  });
-
-  document.querySelector("#btn-toggle-ai")!.addEventListener("click", () => {
-    aiVisible = !aiVisible;
-    aiPanel.style.display = aiVisible ? "block" : "none";
-    workspace.classList.toggle("ai-hidden", !aiVisible);
-    const button = document.querySelector<HTMLButtonElement>("#btn-toggle-ai")!;
-    button.textContent = aiVisible ? "Hide AI Panel" : "Show AI Panel";
-  });
-
-  document.querySelector("#btn-toggle-theme")!.addEventListener("click", () => {
-    const current = document.body.style.filter;
-    document.body.style.filter = current ? "" : "hue-rotate(18deg) saturate(1.05)";
-  });
-
-  document.querySelector("#btn-add-marker")!.addEventListener("click", () => {
-    timelineUiState.markers.push(timelineState.playheadTick);
-    timelineUiState.markers = Array.from(new Set(timelineUiState.markers)).sort((a, b) => a - b);
-    renderTimeline();
-  });
-
-  document.querySelector("#btn-jump-next-marker")!.addEventListener("click", () => {
-    const next = timelineUiState.markers.find((m) => m > timelineState.playheadTick);
-    if (next == null) {
-      setPlayhead(0);
-      return;
-    }
-    setPlayhead(next);
-  });
-
-  document.querySelector("#btn-new-project")!.addEventListener("click", async () => {
-    commitHistory("new_project");
-    const projectNameInput = document.querySelector<HTMLInputElement>("#project-name");
-    const projectName = `Untitled ${new Date().toLocaleTimeString()}`;
-    if (projectNameInput) projectNameInput.value = projectName;
-    try {
-      const project = await orchestratorCreateProject(projectName);
-      activeProjectId = project.id;
-      const seq = await orchestratorCreateSequence(project.id, "Main Sequence");
-      activeSequenceId = seq.id;
-      const v1Server = await orchestratorCreateTrack(seq.id, "video", 0, "V1");
-      const a1Server = await orchestratorCreateTrack(seq.id, "audio", 0, "A1");
-      const v1Id = nextClipId++;
-      const a1Id = nextClipId++;
-      timelineState.tracks = [
-        { id: v1Id, serverId: v1Server.id, name: "V1", kind: "Video", lane_index: 0, clips: [] },
-        { id: a1Id, serverId: a1Server.id, name: "A1", kind: "Audio", lane_index: 0, clips: [] },
-      ];
-      timelineState.playheadTick = 0;
-      timelineUiState.selectedClipId = null;
-      timelineUiState.activeTrackId = v1Id;
-      timelineUiState.markers = [];
-      registeredAssets = [];
-      renderAssetList();
-      writeOutput({ action: "new_project", projectId: project.id, sequenceId: seq.id });
-    } catch (e) {
-      writeOutput({ action: "new_project_error", error: String(e) });
-    }
-    renderTimeline();
-  });
-
-  document.querySelector("#btn-save-project")!.addEventListener("click", async () => {
-    if (!activeProjectId || !activeSequenceId) {
-      writeOutput("No active server project. Click New Project first.");
-      return;
-    }
-    try {
-      for (const track of timelineState.tracks) {
-        if (!track.serverId) {
-          const t = await orchestratorCreateTrack(activeSequenceId, track.kind.toLowerCase(), track.lane_index, track.name);
-          track.serverId = t.id;
-        }
-        for (const clip of track.clips) {
-          await persistClipToOrchestrator(track, clip);
-        }
-      }
-      writeOutput({ action: "save_project", projectId: activeProjectId, tracks: timelineState.tracks.length });
-    } catch (e) {
-      writeOutput({ action: "save_error", error: String(e) });
-    }
-  });
-
-  document.querySelector("#btn-load-project")!.addEventListener("click", async () => {
-    try {
-      const result = await orchestratorListProjects();
-      if (!result.items.length) {
-        writeOutput("No projects found on orchestrator.");
-        return;
-      }
-      writeOutput({ available_projects: result.items.map((p, i) => `${i + 1}. ${p.name} (${p.id})`) });
-      const project = result.items[0];
-
-      activeProjectId = project.id;
-      const sequences = await orchestratorListSequences(project.id) as any[];
-      if (!sequences.length) { writeOutput("Project has no sequences."); return; }
-      const seq = sequences[0];
-      activeSequenceId = seq.id;
-
-      const tracks = await orchestratorListTracks(seq.id);
-      const clips = await orchestratorListClips(seq.id);
-
-      let nextId = Date.now();
-      timelineState.tracks = tracks.map((t) => ({
-        id: nextId++,
-        serverId: t.id,
-        name: t.name,
-        kind: (t.track_type === "audio" ? "Audio" : "Video") as "Video" | "Audio",
-        lane_index: t.lane_index,
-        clips: clips
-          .filter((c: any) => c.track_id === t.id)
-          .map((c: any) => ({
-            id: nextId++,
-            serverId: c.id,
-            assetId: c.asset_id,
-            label: c.name || "Clip",
-            inTick: c.in_tick,
-            outTick: c.out_tick,
-            color: t.track_type === "audio" ? "var(--clip-gold)" : "var(--clip-blue)",
-          })),
-      }));
-
-      timelineUiState.activeTrackId = timelineState.tracks[0]?.id ?? null;
-
-      // Grow the timeline to fit all loaded clips
-      const maxOutTick = timelineState.tracks
-        .flatMap((t) => t.clips)
-        .reduce((m, c) => Math.max(m, c.outTick), 0);
-      if (maxOutTick > timelineState.durationTicks) {
-        timelineState.durationTicks = maxOutTick + timelineState.fps * 2;
-      }
-
-      const projectNameInput = document.querySelector<HTMLInputElement>("#project-name");
-      if (projectNameInput) projectNameInput.value = project.name;
-      try {
-        registeredAssets = await listProjectAssets(project.id);
-        renderAssetList();
-        if (registeredAssets.some((a) => a.meta_jsonb?.proxy_status === "pending")) startProxyPolling();
-      } catch { /* orchestrator may not have assets yet */ }
-      renderTimeline();
-      writeOutput({ action: "load_project", projectId: project.id, tracks: tracks.length, clips: clips.length, assets: registeredAssets.length });
-    } catch (e) {
-      writeOutput({ action: "load_error", error: String(e) });
-    }
-  });
-
-  document.querySelector("#btn-undo")!.addEventListener("click", () => {
-    undoHistory();
-  });
-
-  document.querySelector("#btn-redo")!.addEventListener("click", () => {
-    redoHistory();
   });
 
   document.querySelector("#btn-submit-job")!.addEventListener("click", async () => {
