@@ -107,4 +107,14 @@ mod tests {
         assert_eq!(act[0].track_id, 2);
         assert_eq!(act[1].track_id, 1);
     }
+
+    #[test]
+    fn empty_sequence_has_no_active_clips() {
+        let seq = Sequence {
+            tracks: vec![],
+            clips: vec![],
+        };
+        assert!(seq.active_clips_at(0).is_empty());
+        assert!(seq.active_clips_at(100).is_empty());
+    }
 }
