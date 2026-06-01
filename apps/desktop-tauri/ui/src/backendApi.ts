@@ -106,6 +106,12 @@ export interface Capabilities {
   service: string;
 }
 
+interface MediaFrameResponse {
+  ok?: boolean;
+  base64?: string;
+  error?: string;
+}
+
 export async function orchestratorHealth(): Promise<{ status: string }> {
   const res = await fetch(`${BASE}/health`);
   return res.json();
@@ -196,18 +202,6 @@ export async function probeMedia(path: string): Promise<string> {
   return res.text();
 }
 
-export async function fetchMediaFrame(path: string, timeSeconds: number): Promise<string> {
-  const res = await fetch(`${BASE}/v1/media/frame`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path, time_seconds: timeSeconds }),
-  });
-  if (!res.ok) throw new Error(await res.text());
-  const payload = await res.json();
-  if (!payload.base64) throw new Error("Missing frame payload.");
-  return `data:image/png;base64,${payload.base64}`;
-}
-
 export async function orchestratorCreateTrack(
   sequenceId: string,
   trackType: string,
@@ -273,8 +267,19 @@ export async function fetchFrame(path: string, timeSeconds: number): Promise<str
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path, time_seconds: timeSeconds }),
   });
-  if (!res.ok) throw new Error(`frame fetch failed: ${res.status}`);
-  const data = await res.json() as { base64: string };
+  if (!res.ok) {
+    const text = await res.text();
+    try {
+      const err = JSON.parse(text) as { detail?: string };
+      throw new Error(err.detail ?? text);
+    } catch {
+      throw new Error(text || `frame fetch failed: ${res.status}`);
+    }
+  }
+  const data = (await res.json()) as MediaFrameResponse;
+  if (!data.base64) {
+    throw new Error(data.error ?? "Missing frame payload");
+  }
   return data.base64;
 }
 
