@@ -1146,6 +1146,7 @@ export function bootstrapStudioApp(): void {
 
 
       li.addEventListener("click", async () => {
+
         if (!activeProjectId || !activeSequenceId) {
           writeOutput("Create or load a project first (New Project), then place clips.");
           return;
