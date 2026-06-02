@@ -18,6 +18,8 @@ import {
   getAsset,
   fetchFrame,
   getStreamUrl,
+  acceptAiJob,
+  rejectAiJob,
   type Asset,
 } from "./backendApi";
 
@@ -191,6 +193,10 @@ export function bootstrapStudioApp(): void {
           <button class="btn" id="btn-projects" type="button">List Projects</button>
           <button class="btn" id="btn-submit-job" type="button">Submit AI Job</button>
           <button class="btn" id="btn-refresh-job" type="button">Refresh Job</button>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-accept" id="btn-accept-job" type="button" disabled>Accept</button>
+            <button class="btn btn-reject" id="btn-reject-job" type="button" disabled>Reject</button>
+          </div>
           <button class="btn" id="btn-timeline" type="button">Resolve Active Clips (native)</button>
         </div>
         <div id="inspector" class="inspector">No clip selected.</div>
@@ -547,6 +553,9 @@ export function bootstrapStudioApp(): void {
   .proxy-pending { color: #a8b2c7; }
   .proxy-ready { color: #4addb5; }
   .proxy-failed { color: var(--danger); }
+  .btn-accept { background: #18b487; flex: 1; }
+  .btn-reject { background: #ff4e75; flex: 1; }
+  .btn-accept:disabled, .btn-reject:disabled { opacity: 0.35; cursor: not-allowed; }
 `;
   document.head.appendChild(style);
 
@@ -571,6 +580,8 @@ export function bootstrapStudioApp(): void {
   let frameDebounceTimer: number | undefined;
   let previewRequestSerial = 0;
   let lastJobId = "";
+  let lastJobStatus = "";
+  let jobPollTimer: number | undefined;
   let nextClipId = 1000;
   let suppressHistory = false;
 
@@ -1223,16 +1234,74 @@ export function bootstrapStudioApp(): void {
     }
   });
 
+  const JOB_TERMINAL = new Set(["completed", "failed", "committed", "rejected"]);
+
+  const btnAccept = document.querySelector<HTMLButtonElement>("#btn-accept-job")!;
+  const btnReject = document.querySelector<HTMLButtonElement>("#btn-reject-job")!;
+
+  function updateJobButtons(status: string) {
+    lastJobStatus = status;
+    btnAccept.disabled = !["review", "committed"].includes(status);
+    btnReject.disabled = !["review", "committed", "accepted"].includes(status);
+  }
+
+  function stopJobPolling() {
+    if (jobPollTimer) window.clearInterval(jobPollTimer);
+    jobPollTimer = undefined;
+  }
+
+  function startJobPolling(jobId: string) {
+    stopJobPolling();
+    jobPollTimer = window.setInterval(async () => {
+      try {
+        const result = await getAiJob(jobId);
+        writeOutput(result);
+        updateJobButtons(result.status);
+        if (JOB_TERMINAL.has(result.status)) stopJobPolling();
+      } catch { /* ignore transient errors, keep polling */ }
+    }, 3000);
+  }
+
+  document.querySelector("#btn-accept-job")!.addEventListener("click", async () => {
+    if (!lastJobId) return;
+    try {
+      const result = await acceptAiJob(lastJobId);
+      writeOutput(result);
+      updateJobButtons(result.status);
+      stopJobPolling();
+    } catch (e) {
+      writeOutput({ accept_error: String(e) });
+    }
+  });
+
+  document.querySelector("#btn-reject-job")!.addEventListener("click", async () => {
+    if (!lastJobId) return;
+    try {
+      const result = await rejectAiJob(lastJobId);
+      writeOutput(result);
+      updateJobButtons(result.status);
+      stopJobPolling();
+    } catch (e) {
+      writeOutput({ reject_error: String(e) });
+    }
+  });
+
   document.querySelector("#btn-submit-job")!.addEventListener("click", async () => {
+    if (!activeProjectId) {
+      writeOutput("Create or load a project first before submitting an AI job.");
+      return;
+    }
     const prompt = aiPrompt.value.trim();
     if (!prompt) {
       writeOutput("Enter an AI prompt first.");
       return;
     }
     try {
-      const result = await submitAiJob(prompt);
+      const result = await submitAiJob(activeProjectId, prompt);
       lastJobId = result.job_id;
-      writeOutput({ submitted: result, hint: "Use Refresh Job to poll status." });
+      updateJobButtons(result.status);
+      writeOutput({ submitted: result, status: result.status });
+      startJobPolling(lastJobId);
     } catch (e) {
       writeOutput(e);
     }

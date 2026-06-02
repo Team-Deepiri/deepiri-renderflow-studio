@@ -126,11 +126,11 @@ export function timelineResolveActive(payload: unknown): Promise<unknown> {
   return invoke("timeline_resolve_active", { payload });
 }
 
-export async function submitAiJob(prompt: string, mode = "scene-generation"): Promise<{ job_id: string; status: string }> {
+export async function submitAiJob(projectId: string, prompt: string, mode = "scene-generation"): Promise<{ job_id: string; status: string }> {
   const res = await fetch(`${BASE}/v1/jobs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ project_id: "renderflow-local-project", mode, prompt, metadata: {} }),
+    body: JSON.stringify({ project_id: projectId, mode, prompt, metadata: {} }),
   });
   const v = await res.json();
   return { job_id: v.id, status: v.status };
@@ -138,6 +138,18 @@ export async function submitAiJob(prompt: string, mode = "scene-generation"): Pr
 
 export async function getAiJob(jobId: string): Promise<AIJob> {
   const res = await fetch(`${BASE}/v1/jobs/${jobId}`);
+  return res.json();
+}
+
+export async function acceptAiJob(jobId: string): Promise<AIJob> {
+  const res = await fetch(`${BASE}/v1/jobs/${jobId}/accept`, { method: "POST" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function rejectAiJob(jobId: string): Promise<AIJob> {
+  const res = await fetch(`${BASE}/v1/jobs/${jobId}/reject`, { method: "POST" });
+  if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
