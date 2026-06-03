@@ -60,8 +60,8 @@ def accept_ai_job(job_id: UUID) -> AiJobOut:
     rec = store.get(job_id)
     if not rec:
         raise HTTPException(status_code=404, detail="job not found")
-    if rec.status != JobStatus.REVIEW:
-        raise HTTPException(status_code=409, detail=f"accept only allowed from {JobStatus.REVIEW.value}")
+    if rec.status not in (JobStatus.REVIEW, JobStatus.COMMITTED):
+        raise HTTPException(status_code=409, detail="accept only allowed from review or committed")
     store.update_status(job_id, JobStatus.ACCEPTED, stages=rec.stages + ["accepted"])
     current = store.get(job_id)
     return AiJobOut.from_record(current or rec)
@@ -72,8 +72,8 @@ def reject_ai_job(job_id: UUID) -> AiJobOut:
     rec = store.get(job_id)
     if not rec:
         raise HTTPException(status_code=404, detail="job not found")
-    if rec.status not in (JobStatus.REVIEW, JobStatus.ACCEPTED):
-        raise HTTPException(status_code=409, detail="reject only allowed from review or accepted")
+    if rec.status not in (JobStatus.REVIEW, JobStatus.COMMITTED, JobStatus.ACCEPTED):
+        raise HTTPException(status_code=409, detail="reject only allowed from review, committed, or accepted")
     store.update_status(job_id, JobStatus.REJECTED, stages=rec.stages + ["rejected"])
     current = store.get(job_id)
     return AiJobOut.from_record(current or rec)

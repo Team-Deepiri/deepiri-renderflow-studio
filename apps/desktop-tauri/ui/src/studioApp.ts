@@ -18,6 +18,9 @@ import {
   getAsset,
   fetchFrame,
   getStreamUrl,
+  acceptAIJob,
+  rejectAIJob,
+  BASE,
   type Asset,
 } from "./backendApi";
 
@@ -191,6 +194,10 @@ export function bootstrapStudioApp(): void {
           <button class="btn" id="btn-projects" type="button">List Projects</button>
           <button class="btn" id="btn-submit-job" type="button">Submit AI Job</button>
           <button class="btn" id="btn-refresh-job" type="button">Refresh Job</button>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-accept" id="btn-accept-job" type="button" disabled>Accept</button>
+            <button class="btn btn-reject" id="btn-reject-job" type="button" disabled>Reject</button>
+          </div>
           <button class="btn" id="btn-timeline" type="button">Resolve Active Clips (native)</button>
         </div>
         <div id="inspector" class="inspector">No clip selected.</div>
@@ -547,6 +554,9 @@ export function bootstrapStudioApp(): void {
   .proxy-pending { color: #a8b2c7; }
   .proxy-ready { color: #4addb5; }
   .proxy-failed { color: var(--danger); }
+  .btn-accept { background: #18b487; flex: 1; }
+  .btn-reject { background: #ff4e75; flex: 1; }
+  .btn-accept:disabled, .btn-reject:disabled { opacity: 0.35; cursor: not-allowed; }
 `;
   document.head.appendChild(style);
 
@@ -571,6 +581,7 @@ export function bootstrapStudioApp(): void {
   let frameDebounceTimer: number | undefined;
   let previewRequestSerial = 0;
   let lastJobId = "";
+  let jobEventSource: EventSource | undefined;
   let nextClipId = 1000;
   let suppressHistory = false;
 
@@ -1223,16 +1234,93 @@ export function bootstrapStudioApp(): void {
     }
   });
 
+  const JOB_TERMINAL = new Set(["completed", "failed", "committed", "rejected"]);
+
+  const btnAccept = document.querySelector<HTMLButtonElement>("#btn-accept-job")!;
+  const btnReject = document.querySelector<HTMLButtonElement>("#btn-reject-job")!;
+
+  function updateJobButtons(status: string) {
+    btnAccept.disabled = !["review", "committed"].includes(status);
+    btnReject.disabled = !["review", "committed", "accepted"].includes(status);
+  }
+
+  function stopJobEvents() {
+    if (jobEventSource) { jobEventSource.close(); jobEventSource = undefined; }
+  }
+
+  function startJobEvents(jobId: string) {
+    stopJobEvents();
+    // Open SSE first so we don't miss events that fire between now and the fetch below
+    jobEventSource = new EventSource(`${BASE}/v1/events`);
+    jobEventSource.onmessage = async (event) => {
+      try {
+        const data = JSON.parse(event.data) as { job_id?: string; status?: string };
+        if (data.job_id !== jobId) return;
+        const result = await getAiJob(jobId);
+        writeOutput(result);
+        updateJobButtons(result.status);
+        if (JOB_TERMINAL.has(result.status)) stopJobEvents();
+      } catch { /* ignore malformed events */ }
+    };
+    jobEventSource.onerror = () => stopJobEvents();
+    // Immediately fetch current state — the mock finishes before SSE can connect
+    getAiJob(jobId).then((result) => {
+      writeOutput(result);
+      updateJobButtons(result.status);
+      if (JOB_TERMINAL.has(result.status)) { stopJobEvents(); return; }
+      // Not terminal yet — schedule one follow-up fetch to catch fast mock completion.
+      // Real pipelines will get updates via SSE instead.
+      window.setTimeout(async () => {
+        try {
+          const r = await getAiJob(jobId);
+          writeOutput(r);
+          updateJobButtons(r.status);
+          if (JOB_TERMINAL.has(r.status)) stopJobEvents();
+        } catch { /* SSE will handle real updates */ }
+      }, 500);
+    }).catch(() => { /* SSE will still deliver if fetch fails */ });
+  }
+
+  document.querySelector("#btn-accept-job")!.addEventListener("click", async () => {
+    if (!lastJobId) return;
+    try {
+      const result = await acceptAIJob(lastJobId);
+      writeOutput(result);
+      updateJobButtons(result.status);
+      stopJobEvents();
+    } catch (e) {
+      writeOutput({ accept_error: String(e) });
+    }
+  });
+
+  document.querySelector("#btn-reject-job")!.addEventListener("click", async () => {
+    if (!lastJobId) return;
+    try {
+      const result = await rejectAIJob(lastJobId);
+      writeOutput(result);
+      updateJobButtons(result.status);
+      stopJobEvents();
+    } catch (e) {
+      writeOutput({ reject_error: String(e) });
+    }
+  });
+
   document.querySelector("#btn-submit-job")!.addEventListener("click", async () => {
+    if (!activeProjectId) {
+      writeOutput("Create or load a project first before submitting an AI job.");
+      return;
+    }
     const prompt = aiPrompt.value.trim();
     if (!prompt) {
       writeOutput("Enter an AI prompt first.");
       return;
     }
     try {
-      const result = await submitAiJob(prompt);
+      const result = await submitAiJob(activeProjectId, prompt);
       lastJobId = result.job_id;
-      writeOutput({ submitted: result, hint: "Use Refresh Job to poll status." });
+      updateJobButtons(result.status);
+      writeOutput({ submitted: result, status: result.status });
+      startJobEvents(lastJobId);
     } catch (e) {
       writeOutput(e);
     }
