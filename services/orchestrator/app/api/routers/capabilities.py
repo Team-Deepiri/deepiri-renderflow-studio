@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 from uuid import UUID
 
@@ -64,7 +65,7 @@ async def _sse_stream():
         while True:
             try:
                 data = await asyncio.wait_for(queue.get(), timeout=30.0)
-                yield f"data: {data!s}\n\n".encode()
+                yield f"data: {json.dumps(data)}\n\n".encode()
             except asyncio.TimeoutError:
                 yield b": keepalive\n\n"
     finally:

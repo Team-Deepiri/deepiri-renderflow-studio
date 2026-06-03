@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-const BASE = "http://127.0.0.1:8080";
+export const BASE = "http://127.0.0.1:8080";
 
 export interface Project {
   id: string;
@@ -141,13 +141,13 @@ export async function getAiJob(jobId: string): Promise<AIJob> {
   return res.json();
 }
 
-export async function acceptAiJob(jobId: string): Promise<AIJob> {
+export async function acceptAIJob(jobId: string): Promise<AIJob> {
   const res = await fetch(`${BASE}/v1/jobs/${jobId}/accept`, { method: "POST" });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
-export async function rejectAiJob(jobId: string): Promise<AIJob> {
+export async function rejectAIJob(jobId: string): Promise<AIJob> {
   const res = await fetch(`${BASE}/v1/jobs/${jobId}/reject`, { method: "POST" });
   if (!res.ok) throw new Error(await res.text());
   return res.json();

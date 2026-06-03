@@ -18,8 +18,9 @@ import {
   getAsset,
   fetchFrame,
   getStreamUrl,
-  acceptAiJob,
-  rejectAiJob,
+  acceptAIJob,
+  rejectAIJob,
+  BASE,
   type Asset,
 } from "./backendApi";
 
@@ -580,8 +581,7 @@ export function bootstrapStudioApp(): void {
   let frameDebounceTimer: number | undefined;
   let previewRequestSerial = 0;
   let lastJobId = "";
-  let lastJobStatus = "";
-  let jobPollTimer: number | undefined;
+  let jobEventSource: EventSource | undefined;
   let nextClipId = 1000;
   let suppressHistory = false;
 
@@ -1240,35 +1240,54 @@ export function bootstrapStudioApp(): void {
   const btnReject = document.querySelector<HTMLButtonElement>("#btn-reject-job")!;
 
   function updateJobButtons(status: string) {
-    lastJobStatus = status;
     btnAccept.disabled = !["review", "committed"].includes(status);
     btnReject.disabled = !["review", "committed", "accepted"].includes(status);
   }
 
-  function stopJobPolling() {
-    if (jobPollTimer) window.clearInterval(jobPollTimer);
-    jobPollTimer = undefined;
+  function stopJobEvents() {
+    if (jobEventSource) { jobEventSource.close(); jobEventSource = undefined; }
   }
 
-  function startJobPolling(jobId: string) {
-    stopJobPolling();
-    jobPollTimer = window.setInterval(async () => {
+  function startJobEvents(jobId: string) {
+    stopJobEvents();
+    // Open SSE first so we don't miss events that fire between now and the fetch below
+    jobEventSource = new EventSource(`${BASE}/v1/events`);
+    jobEventSource.onmessage = async (event) => {
       try {
+        const data = JSON.parse(event.data) as { job_id?: string; status?: string };
+        if (data.job_id !== jobId) return;
         const result = await getAiJob(jobId);
         writeOutput(result);
         updateJobButtons(result.status);
-        if (JOB_TERMINAL.has(result.status)) stopJobPolling();
-      } catch { /* ignore transient errors, keep polling */ }
-    }, 3000);
+        if (JOB_TERMINAL.has(result.status)) stopJobEvents();
+      } catch { /* ignore malformed events */ }
+    };
+    jobEventSource.onerror = () => stopJobEvents();
+    // Immediately fetch current state — the mock finishes before SSE can connect
+    getAiJob(jobId).then((result) => {
+      writeOutput(result);
+      updateJobButtons(result.status);
+      if (JOB_TERMINAL.has(result.status)) { stopJobEvents(); return; }
+      // Not terminal yet — schedule one follow-up fetch to catch fast mock completion.
+      // Real pipelines will get updates via SSE instead.
+      window.setTimeout(async () => {
+        try {
+          const r = await getAiJob(jobId);
+          writeOutput(r);
+          updateJobButtons(r.status);
+          if (JOB_TERMINAL.has(r.status)) stopJobEvents();
+        } catch { /* SSE will handle real updates */ }
+      }, 500);
+    }).catch(() => { /* SSE will still deliver if fetch fails */ });
   }
 
   document.querySelector("#btn-accept-job")!.addEventListener("click", async () => {
     if (!lastJobId) return;
     try {
-      const result = await acceptAiJob(lastJobId);
+      const result = await acceptAIJob(lastJobId);
       writeOutput(result);
       updateJobButtons(result.status);
-      stopJobPolling();
+      stopJobEvents();
     } catch (e) {
       writeOutput({ accept_error: String(e) });
     }
@@ -1277,10 +1296,10 @@ export function bootstrapStudioApp(): void {
   document.querySelector("#btn-reject-job")!.addEventListener("click", async () => {
     if (!lastJobId) return;
     try {
-      const result = await rejectAiJob(lastJobId);
+      const result = await rejectAIJob(lastJobId);
       writeOutput(result);
       updateJobButtons(result.status);
-      stopJobPolling();
+      stopJobEvents();
     } catch (e) {
       writeOutput({ reject_error: String(e) });
     }
@@ -1301,7 +1320,7 @@ export function bootstrapStudioApp(): void {
       lastJobId = result.job_id;
       updateJobButtons(result.status);
       writeOutput({ submitted: result, status: result.status });
-      startJobPolling(lastJobId);
+      startJobEvents(lastJobId);
     } catch (e) {
       writeOutput(e);
     }
