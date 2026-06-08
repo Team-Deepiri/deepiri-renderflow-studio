@@ -113,6 +113,35 @@ class RenderSubmit(BaseModel):
     preset: str = "h264_1080p"
 
 
+class RenderJobOut(BaseModel):
+    id: UUID
+    project_id: UUID
+    sequence_id: UUID | None = None
+    preset: str
+    status: str
+    output_uri: str | None = None
+    progress: float = 0.0
+    error: str | None = None
+    created_at: datetime | None = None
+    ended_at: datetime | None = None
+
+    @classmethod
+    def from_row(cls, row: dict[str, Any]) -> RenderJobOut:
+        metrics = row.get("metrics_jsonb") or {}
+        return cls(
+            id=row["id"],
+            project_id=row["project_id"],
+            sequence_id=row.get("sequence_id"),
+            preset=row.get("preset", "h264_1080p"),
+            status=row.get("status", "queued"),
+            output_uri=row.get("output_uri") or None,
+            progress=float(metrics.get("progress", 0.0)),
+            error=metrics.get("error"),
+            created_at=row.get("created_at"),
+            ended_at=row.get("ended_at"),
+        )
+
+
 class FrameBody(BaseModel):
     path: str
     time_seconds: float = 0.0

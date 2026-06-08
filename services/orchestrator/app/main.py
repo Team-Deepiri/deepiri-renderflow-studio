@@ -14,6 +14,7 @@ from app.config import load_settings
 from app.grpc_service import start_grpc_server
 from app.runtime_state import set_settings
 from app.services.studio import bootstrap
+from app.render_worker import start_render_worker
 from app.worker_loop import start_worker, stop_worker
 
 logging.basicConfig(level=logging.INFO)
@@ -30,6 +31,7 @@ async def lifespan(app: FastAPI):
     db.init_db(settings.database_url)
     bootstrap()
     start_worker(settings)
+    start_render_worker(settings)
     try:
         _grpc_server = start_grpc_server()
     except Exception:

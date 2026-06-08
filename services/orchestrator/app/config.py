@@ -18,6 +18,7 @@ class Settings:
     job_timeout_minutes: int = 60
     enable_sse: bool = True
     readiness_mode: str = "dev"
+    data_dir: str | None = None
 
 
 def load_settings() -> Settings:
@@ -35,5 +36,6 @@ def load_settings() -> Settings:
         database_url=os.environ.get("DATABASE_URL"),
         worker_poll_sec=float(os.environ.get("RENDERFLOW_WORKER_POLL_SEC", "0.25")),
         ai_stages_simulate_ms=int(os.environ.get("RENDERFLOW_AI_STAGE_MS", "50")),
-        readiness_mode=mode
+        data_dir=os.environ.get("RENDERFLOW_DATA_DIR"),
+        readiness_mode=mode,
     )

@@ -391,6 +391,33 @@ def render_job_list(project_id: UUID) -> list[dict[str, Any]]:
         return [r for r in _render_jobs.values() if r["project_id"] == project_id]
 
 
+def render_job_update(
+    job_id: UUID,
+    *,
+    status: str | None = None,
+    output_uri: str | None = None,
+    progress: float | None = None,
+    error: str | None = None,
+    ended: bool = False,
+) -> dict[str, Any] | None:
+    with _lock:
+        row = _render_jobs.get(job_id)
+        if not row:
+            return None
+        if status is not None:
+            row["status"] = status
+        if output_uri is not None:
+            row["output_uri"] = output_uri
+        if progress is not None:
+            row.setdefault("metrics_jsonb", {})["progress"] = progress
+        if error is not None:
+            row.setdefault("metrics_jsonb", {})["error"] = error
+        if ended:
+            row["ended_at"] = _now()
+    _save()
+    return row
+
+
 def project_update(
     project_id: UUID,
     name: str | None = None,

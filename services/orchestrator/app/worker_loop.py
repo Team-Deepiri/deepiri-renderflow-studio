@@ -12,6 +12,10 @@ from app.job_store import JobStatus, store
 from renderflow_queue import REDIS_KEY_JOBS, RedisJobQueue
 from app.stage_runner import run_audio_stages, run_scene_stages
 from app.api.utils import get_event_emitter
+from app.paths import data_subdir
+
+from pathlib import Path
+import subprocess, shutil
 
 logger = logging.getLogger(__name__)
 
@@ -103,22 +107,27 @@ def _process_job(job_id: str, settings: Settings) -> None:
     store.update_status(uid, JobStatus.REVIEW, stages=names)
     _emit(job_id, "review", project_id=pid)
 
-    try:
-        from app import db_repos, memory_store
-
-        uri = f"renderflow://jobs/{job_id}/bundle.json"
-        arow = memory_store.asset_create(rec.project_id, "ai_bundle", uri, sha256="pending")
-        db_repos.insert_asset(arow)
-        aid = str(arow["id"])
-        store.merge_meta(uid, "asset_id", aid)
-        db_repos.insert_ai_job_artifact(str(uid), aid, "ai_bundle", None)
-    except Exception as e:
-        logger.debug("asset commit: %s", e)
-
-    final_stages = names + ["committed"]
-    store.update_status(uid, JobStatus.COMMITTED, stages=final_stages)
-    _emit(job_id, "committed", project_id=pid)
-
+    out_dir = data_subdir("ai_outputs", settings) / str(job_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    output_path = str(out_dir / "scene.mp4")
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        store.merge_meta(uid, "artifact_error", "ffmpeg not found")
+        store.merge_meta(uid, "output_path", None)
+    else:
+        proc = subprocess.run(
+            [ffmpeg, "-y", "-f", "lavfi", "-i", "color=c=blue:s=1920x1080:d=5",
+             "-c:v", "libx264", "-pix_fmt", "yuv420p", output_path],
+            check=False, capture_output=True, text=True,
+        )
+        if Path(output_path).exists():
+            store.merge_meta(uid, "output_path", output_path)
+            store.merge_meta(uid, "artifact_error", None)
+        else:
+            err = (proc.stderr or proc.stdout or "ffmpeg did not produce scene.mp4")[:500]
+            store.merge_meta(uid, "artifact_error", err)
+            store.merge_meta(uid, "output_path", None)
+            logger.warning("AI artifact generation failed for job %s: %s", job_id, err)
 
 def _loop(settings: Settings) -> None:
     if settings.redis_url:

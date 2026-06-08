@@ -53,7 +53,7 @@ def test_audio_stages_output():
 # ── full job path ─────────────────────────────────────────────────────────────
 
 
-def test_scene_job_reaches_committed():
+def test_scene_job_reaches_review():
     from app.worker_loop import _process_job
 
     store = _store()
@@ -63,11 +63,11 @@ def test_scene_job_reaches_committed():
         _process_job(str(job.id), FAST)
 
     final = store.get(job.id)
-    assert final.status == JobStatus.COMMITTED
-    assert "committed" in final.stages
+    assert final.status == JobStatus.REVIEW
+    assert "review" in final.stages
 
 
-def test_audio_job_reaches_committed():
+def test_audio_job_reaches_review():
     from app.worker_loop import _process_job
 
     store = _store()
@@ -76,7 +76,7 @@ def test_audio_job_reaches_committed():
     with patch("app.worker_loop.store", store):
         _process_job(str(job.id), FAST)
 
-    assert store.get(job.id).status == JobStatus.COMMITTED
+    assert store.get(job.id).status == JobStatus.REVIEW
 
 
 def test_voice_mode_uses_audio_stages():
@@ -89,14 +89,14 @@ def test_voice_mode_uses_audio_stages():
         _process_job(str(job.id), FAST)
 
     final = store.get(job.id)
-    assert final.status == JobStatus.COMMITTED
+    assert final.status == JobStatus.REVIEW
     assert "voice_cast" in final.stages
 
 
 # ── SSE events ────────────────────────────────────────────────────────────────
 
 
-def test_job_emits_preparing_and_committed_events():
+def test_job_emits_preparing_and_review_events():
     from app.worker_loop import _process_job
 
     store = _store()
@@ -113,7 +113,7 @@ def test_job_emits_preparing_and_committed_events():
     statuses = {e["status"] for e in emitted if e.get("job_id") == str(job.id)}
     assert "preparing" in statuses
     assert "running" in statuses
-    assert "committed" in statuses
+    assert "review" in statuses
 
 
 def test_job_emits_all_scene_stage_names():
@@ -188,3 +188,53 @@ def test_unknown_job_id_does_not_raise():
     from app.worker_loop import _process_job
 
     _process_job(str(uuid4()), FAST)
+
+
+# ── accept → asset bin ────────────────────────────────────────────────────────
+
+
+def test_accept_creates_video_asset(tmp_path, monkeypatch):
+    import shutil
+    import subprocess
+
+    from app.api.routers.ai_jobs import accept_ai_job
+    from app.job_store import JobStatus
+    from app.services import studio
+
+    output = tmp_path / "scene.mp4"
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg:
+        subprocess.run(
+            [ffmpeg, "-y", "-f", "lavfi", "-i", "color=c=red:s=320x240:d=1",
+             "-c:v", "libx264", "-pix_fmt", "yuv420p", str(output)],
+            check=False, capture_output=True,
+        )
+    if not output.exists():
+        output.write_bytes(b"\x00")
+
+    store = _store()
+    pid = uuid4()
+    job = store.create(pid, "scene", "sunset beach")
+
+    store.update_status(job.id, JobStatus.REVIEW, stages=["preparing", "storyboard", "review"])
+    store.merge_meta(job.id, "output_path", str(output))
+
+    class _NoThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr("app.api.routers.ai_jobs.store", store)
+    monkeypatch.setattr("app.api.routers.ai_jobs.threading.Thread", _NoThread)
+
+    result = accept_ai_job(job.id)
+
+    assert result.status == JobStatus.COMMITTED
+    assert result.metadata.get("asset_id")
+    assets = studio.list_assets(pid)
+    assert len(assets) == 1
+    assert assets[0]["kind"] == "video"
+    assert assets[0]["meta_jsonb"].get("source") == "ai"
+    assert assets[0]["meta_jsonb"].get("proxy_status") == "pending"
