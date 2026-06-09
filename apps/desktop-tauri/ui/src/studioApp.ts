@@ -11,6 +11,9 @@ import {
   orchestratorListClips,
   probeMedia,
   submitAiJob,
+  acceptAiJob,
+  submitRenderJob,
+  getRenderJob,
   timelineResolveActive,
   vulkanDiscover,
   importMedia,
@@ -109,6 +112,12 @@ export function bootstrapStudioApp(): void {
   let registeredAssets: Asset[] = [];
   let proxyPollTimer: number | undefined;
 
+  function findRegisteredAsset(assetId: string | undefined): Asset | undefined {
+    if (!assetId) return undefined;
+    const key = String(assetId);
+    return registeredAssets.find((a) => String(a.id) === key);
+  }
+
   app.innerHTML = `
   <div class="studio">
     <header class="topbar">
@@ -121,6 +130,7 @@ export function bootstrapStudioApp(): void {
         <button class="btn subtle" id="btn-load-project" type="button">Load</button>
         <button class="btn" id="btn-new-project" type="button">New Project</button>
         <button class="btn" id="btn-save-project" type="button">Save</button>
+        <button class="btn" id="btn-export" type="button">Export</button>
       </div>
     </header>
 
@@ -191,6 +201,7 @@ export function bootstrapStudioApp(): void {
           <button class="btn" id="btn-projects" type="button">List Projects</button>
           <button class="btn" id="btn-submit-job" type="button">Submit AI Job</button>
           <button class="btn" id="btn-refresh-job" type="button">Refresh Job</button>
+          <button class="btn" id="btn-accept-job" type="button" disabled>Accept Result</button>
         </div>
         <div id="inspector" class="inspector">No clip selected.</div>
         <pre id="out"></pre>
@@ -490,6 +501,23 @@ export function bootstrapStudioApp(): void {
   }
   .asset-item:hover .asset-remove { opacity: 1; }
   .asset-remove:hover { color: var(--danger); }
+  .asset-add-timeline {
+    position: absolute;
+    top: 6px;
+    right: 28px;
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-dim);
+    font-size: 9px;
+    cursor: pointer;
+    line-height: 1;
+    padding: 1px 4px;
+    opacity: 0;
+    transition: opacity 0.1s, border-color 0.1s, color 0.1s;
+  }
+  .asset-item:hover .asset-add-timeline { opacity: 1; }
+  .asset-add-timeline:hover { border-color: var(--accent); color: var(--accent); }
   .asset-item-name { font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .asset-item-meta { font-size: 10px; color: var(--text-dim); margin-top: 2px; display: flex; gap: 8px; flex-wrap: wrap; }
   .asset-badge {
@@ -575,6 +603,8 @@ export function bootstrapStudioApp(): void {
   let frameDebounceTimer: number | undefined;
   let previewRequestSerial = 0;
   let lastJobId = "";
+  let lastRenderJobId = "";
+  let renderPollTimer: number | undefined;
   let nextClipId = 1000;
   let suppressHistory = false;
 
@@ -608,9 +638,7 @@ export function bootstrapStudioApp(): void {
       if (ref) {
         out.push({
           ...ref,
-          asset: ref.clip.assetId
-            ? registeredAssets.find((a) => a.id === ref.clip.assetId)
-            : undefined,
+          asset: findRegisteredAsset(ref.clip.assetId),
           trackIndex: timelineState.tracks.indexOf(ref.track),
         });
       }
@@ -647,6 +675,70 @@ export function bootstrapStudioApp(): void {
     const createdClip = await orchestratorCreateClip(activeSequenceId, trackServerId, clip.assetId, clip.inTick, clip.outTick);
     clip.serverId = createdClip.id;
     clip.assetId = createdClip.asset_id;
+  }
+
+  async function placeAssetAtPlayhead(asset: Asset): Promise<Clip | null> {
+    if (!activeProjectId || !activeSequenceId) {
+      writeOutput("Create or load a project first (New Project), then place clips.");
+      return null;
+    }
+  
+    let track =
+      timelineState.tracks.find((t) => t.id === timelineUiState.activeTrackId) ??
+      timelineState.tracks[0];
+    if (asset.kind === "audio") {
+      track = timelineState.tracks.find((t) => t.kind === "Audio") ?? track;
+    } else {
+      track = timelineState.tracks.find((t) => t.kind === "Video") ?? track;
+    }
+    if (!track) {
+      writeOutput("No timeline track available. Create a project first.");
+      return null;
+    }
+  
+    const meta = asset.meta_jsonb ?? {};
+    const name = meta.name ?? asset.uri.split("/").pop() ?? asset.uri;
+    const clipDurationTicks = asset.duration_ms != null
+      ? Math.round((asset.duration_ms / 1000) * timelineState.fps)
+      : 160;
+    const inTick = Math.max(0, timelineState.playheadTick);
+    const outTick = inTick + clipDurationTicks;
+  
+    const nextClip: Clip = {
+      id: nextClipId++,
+      label: name,
+      inTick,
+      outTick,
+      color: asset.kind === "audio" ? "var(--clip-gold)" : "var(--clip-blue)",
+      assetId: String(asset.id),
+    };
+  
+    try {
+      await persistClipToOrchestrator(track, nextClip);
+    } catch (e) {
+      writeOutput({ action: "insert_clip_error", assetId: asset.id, error: String(e) });
+      return null;
+    }
+  
+    if (outTick > timelineState.durationTicks) {
+      timelineState.durationTicks = outTick + timelineState.fps * 2;
+      slider.max = String(timelineState.durationTicks);
+    }
+    track.clips.push(nextClip);
+    track.clips.sort((a, b) => a.inTick - b.inTick);
+    timelineUiState.selectedClipId = nextClip.id;
+    timelineUiState.activeTrackId = track.id;
+    setPlayhead(inTick, { immediateNative: true });
+    commitHistory("insert_clip_from_asset");
+    writeOutput({
+      action: "insert_clip_from_asset",
+      assetId: asset.id,
+      clipId: nextClip.id,
+      serverClipId: nextClip.serverId,
+      in_tick: inTick,
+      out_tick: outTick,
+    });
+    return nextClip;
   }
 
   function serializeSnapshot(): TimelineSnapshot {
@@ -906,7 +998,7 @@ export function bootstrapStudioApp(): void {
         );
         return;
       }
-      const asset = registeredAssets.find((a) => a.id === foundClip.assetId);
+      const asset = findRegisteredAsset(foundClip.assetId);
       const proxyStatus = asset?.meta_jsonb?.proxy_status;
       const proxyPath = asset?.meta_jsonb?.proxy_path;
 
@@ -962,7 +1054,7 @@ export function bootstrapStudioApp(): void {
     for (const track of timelineState.tracks) {
       for (const clip of track.clips) {
         if (clip.assetId) {
-          const asset = registeredAssets.find((a) => a.id === clip.assetId);
+          const asset = findRegisteredAsset(clip.assetId);
           if (asset?.duration_ms != null) {
             const assetDurTicks = Math.round((asset.duration_ms / 1000) * timelineState.fps);
             const correctOut = clip.inTick + assetDurTicks;
@@ -1109,6 +1201,41 @@ export function bootstrapStudioApp(): void {
     return `${m}:${String(sec).padStart(2, "0")}`;
   }
 
+  async function refreshProjectAssets(): Promise<void> {
+    if (!activeProjectId) {
+      writeOutput("Create or load a project first.");
+      return;
+    }
+    try {
+      registeredAssets = await listProjectAssets(activeProjectId);
+      renderAssetList();
+      if (registeredAssets.some((a) => a.meta_jsonb?.proxy_status === "pending")) {
+        startProxyPolling();
+      }
+      const failedProxies = registeredAssets.filter((a) => a.meta_jsonb?.proxy_status === "failed");
+      const missingFiles = registeredAssets.filter(
+        (a) => !a.uri || a.uri.startsWith("renderflow://"),
+      );
+      if (failedProxies.length) {
+        writeOutput({
+          action: "proxy_warning",
+          message: "One or more assets have a failed proxy",
+          assetIds: failedProxies.map((a) => a.id),
+        });
+      }
+      if (missingFiles.length) {
+        writeOutput({
+          action: "asset_warning",
+          message: "Some assets have no local file",
+          assetIds: missingFiles.map((a) => a.id),
+        });
+      }
+      writeOutput({ action: "assets_refreshed", count: registeredAssets.length });
+    } catch (e) {
+      writeOutput({ action: "assets_refresh_error", error: String(e) });
+    }
+  }
+
   function renderAssetList() {
     assetList.innerHTML = "";
     if (registeredAssets.length === 0) return;
@@ -1118,7 +1245,12 @@ export function bootstrapStudioApp(): void {
       const li = document.createElement("li");
       li.className = "asset-item";
 
-      const badgeClass = asset.kind === "video" ? "badge-video" : asset.kind === "audio" ? "badge-audio" : "badge-image";
+      const badgeClass =
+        asset.kind === "video" ? "badge-video"
+        : asset.kind === "audio" ? "badge-audio"
+        : asset.kind === "ai_bundle" ? "badge-image"
+        : "badge-image";
+      const sourceLabel = meta.source === "ai" ? '<span class="asset-badge badge-image">AI</span>' : "";
       const resMeta = meta.width && meta.height ? `${meta.width}×${meta.height}` : "";
       const durMeta = asset.duration_ms != null ? fmtDuration(asset.duration_ms) : "";
       const fpsMeta = meta.fps != null ? `${meta.fps.toFixed(2)} fps` : "";
@@ -1128,9 +1260,11 @@ export function bootstrapStudioApp(): void {
 
       li.innerHTML = `
         <button class="asset-remove" title="Remove from project">×</button>
+        <button class="asset-add-timeline" title="Add to timeline at playhead">+ Timeline</button>
         <div class="asset-item-name" title="${asset.uri}">${name}</div>
         <div class="asset-item-meta">
           <span class="asset-badge ${badgeClass}">${asset.kind}</span>
+          ${sourceLabel}
           ${durMeta ? `<span>${durMeta}</span>` : ""}
           ${resMeta ? `<span>${resMeta}</span>` : ""}
           ${fpsMeta ? `<span>${fpsMeta}</span>` : ""}
@@ -1145,68 +1279,44 @@ export function bootstrapStudioApp(): void {
       });
 
 
-      li.addEventListener("click", async () => {
+      const place = () => void placeAssetAtPlayhead(asset);
 
-        if (!activeProjectId || !activeSequenceId) {
-          writeOutput("Create or load a project first (New Project), then place clips.");
-          return;
-        }
-
-        let track =
-          timelineState.tracks.find((t) => t.id === timelineUiState.activeTrackId) ??
-          timelineState.tracks[0];
-        if (asset.kind === "audio") {
-          track = timelineState.tracks.find((t) => t.kind === "Audio") ?? track;
-        } else {
-          track = timelineState.tracks.find((t) => t.kind === "Video") ?? track;
-        }
-        if (!track) {
-          writeOutput("No timeline track available. Create a project first.");
-          return;
-        }
-
-        const clipDurationTicks = asset.duration_ms != null
-          ? Math.round((asset.duration_ms / 1000) * timelineState.fps)
-          : 160;
-        const inTick = Math.max(0, timelineState.playheadTick);
-        const outTick = inTick + clipDurationTicks;
-        const nextClip: Clip = {
-          id: nextClipId++,
-          label: name,
-          inTick,
-          outTick,
-          color: asset.kind === "audio" ? "var(--clip-gold)" : "var(--clip-blue)",
-          assetId: asset.id,
-        };
-        try {
-          await persistClipToOrchestrator(track, nextClip);
-        } catch (e) {
-          writeOutput({ action: "insert_clip_error", assetId: asset.id, error: String(e) });
-          return;
-        }
-
-        if (outTick > timelineState.durationTicks) {
-          timelineState.durationTicks = outTick + timelineState.fps * 2;
-          slider.max = String(timelineState.durationTicks);
-        }
-        track.clips.push(nextClip);
-        track.clips.sort((a, b) => a.inTick - b.inTick);
-        timelineUiState.selectedClipId = nextClip.id;
-        timelineUiState.activeTrackId = track.id;
-        setPlayhead(inTick, { immediateNative: true });
-        commitHistory("insert_clip_from_asset");
-        writeOutput({
-          action: "insert_clip_from_asset",
-          assetId: asset.id,
-          clipId: nextClip.id,
-          serverClipId: nextClip.serverId,
-          in_tick: inTick,
-          out_tick: outTick,
-        });
+      li.querySelector(".asset-add-timeline")!.addEventListener("click", (e) => {
+        e.stopPropagation();
+        place();
       });
+      li.addEventListener("click", () => place());
 
       assetList.appendChild(li);
     }
+  }
+
+  function startRenderPolling(jobId: string) {
+    if (renderPollTimer) window.clearInterval(renderPollTimer);
+    renderPollTimer = window.setInterval(async () => {
+      try {
+        const job = await getRenderJob(jobId);
+        writeOutput({ action: "export_progress", ...job });
+        if (job.status === "completed" && job.output_uri) {
+          window.clearInterval(renderPollTimer);
+          renderPollTimer = undefined;
+          const streamUrl = getStreamUrl(job.output_uri);
+          writeOutput({
+            action: "export_complete",
+            output_path: job.output_uri,
+            stream_url: streamUrl,
+            hint: "Output is playable via stream_url or open output_path in Finder",
+          });
+          fetchFrameForPlayhead(true);
+        } else if (job.status === "failed") {
+          window.clearInterval(renderPollTimer);
+          renderPollTimer = undefined;
+          writeOutput({ action: "export_failed", error: job.error ?? "render failed" });
+        }
+      } catch (e) {
+        writeOutput({ action: "export_poll_error", error: String(e) });
+      }
+    }, 2000);
   }
 
   function startProxyPolling() {
@@ -1225,8 +1335,13 @@ export function bootstrapStudioApp(): void {
           if (fresh.meta_jsonb?.proxy_status !== "pending") {
             const idx = registeredAssets.findIndex((a) => a.id === asset.id);
             if (idx >= 0) { registeredAssets[idx] = fresh; changed = true; }
+            if (fresh.meta_jsonb?.proxy_status === "failed") {
+              writeOutput({ action: "proxy_error", assetId: asset.id, message: "Proxy transcode failed" });
+            }
           }
-        } catch { /* ignore */ }
+        } catch (e) {
+          writeOutput({ action: "proxy_poll_error", assetId: asset.id, error: String(e) });
+        }
       }
       if (changed) {
         renderAssetList();
@@ -1246,7 +1361,13 @@ export function bootstrapStudioApp(): void {
       const asset = await importMedia(activeProjectId, filePath);
       registeredAssets.push(asset);
       renderAssetList();
-      writeOutput({ action: "import_asset", id: asset.id, kind: asset.kind, duration_ms: asset.duration_ms, meta: asset.meta_jsonb });
+      writeOutput({ action: "import_asset", 
+        id: asset.id,
+        kind: asset.kind,
+        duration_ms: asset.duration_ms,
+        meta: asset.meta_jsonb,
+        hint: "Asset added to bin — click it or press + Timeline to place at playhead",
+      });
       if (asset.meta_jsonb?.proxy_status === "pending") startProxyPolling();
     } catch (e) {
       writeOutput({ action: "import_error", error: String(e) });
@@ -1342,9 +1463,7 @@ export function bootstrapStudioApp(): void {
     if (button) button.textContent = "Pause";
 
     const clip = getTopVideoActiveClip() ?? activePreviewClip;
-    const asset = clip?.assetId
-      ? registeredAssets.find((a) => a.id === clip.assetId)
-      : undefined;
+    const asset = findRegisteredAsset(clip?.assetId);
     const proxyPath = asset?.meta_jsonb?.proxy_path;
     const proxyReady = asset?.meta_jsonb?.proxy_status === "ready" && !!proxyPath;
 
@@ -1426,9 +1545,14 @@ export function bootstrapStudioApp(): void {
       writeOutput("Enter an AI prompt first.");
       return;
     }
+    if (!activeProjectId) {
+      writeOutput("Click New Project first.");
+      return;
+    }
     try {
-      const result = await submitAiJob(prompt);
+      const result = await submitAiJob(activeProjectId, prompt);
       lastJobId = result.job_id;
+      document.querySelector<HTMLButtonElement>("#btn-accept-job")!.disabled = true;
       writeOutput({ submitted: result, hint: "Use Refresh Job to poll status." });
     } catch (e) {
       writeOutput(e);
@@ -1443,8 +1567,51 @@ export function bootstrapStudioApp(): void {
     try {
       const result = await getAiJob(lastJobId);
       writeOutput(result);
+      const acceptBtn = document.querySelector<HTMLButtonElement>("#btn-accept-job")!;
+      const canAccept = result.status === "review" && Boolean(result.metadata?.output_path);
+      acceptBtn.disabled = !canAccept;
+      if (result.status === "review" && !result.metadata?.output_path) {
+        writeOutput({
+          action: "artifact_warning",
+          message: result.metadata?.artifact_error ?? "AI artifact not ready — cannot accept yet",
+        });
+      }
     } catch (e) {
       writeOutput(e);
+    }
+  });
+
+  document.querySelector("#btn-accept-job")!.addEventListener("click", async () => {
+    if (!lastJobId) {
+      writeOutput("Submit and refresh a job first.");
+      return;
+    }
+    try {
+      const job = await acceptAiJob(lastJobId);
+      await refreshProjectAssets();
+      const assetId = job.metadata?.asset_id;
+      if (!assetId) {
+        writeOutput({ action: "accept_error", message: "No asset_id after accept" });
+        return;
+      }
+      const asset = findRegisteredAsset(String(assetId));
+      if (!asset) {
+        writeOutput({ action: "accept_error", message: "Asset not in bin after refresh", assetId });
+        return;
+      }
+      if (asset.meta_jsonb?.proxy_status === "failed") {
+        writeOutput({ action: "proxy_error", message: "Proxy transcode failed", assetId });
+      } else {
+        writeOutput({ 
+          action: "accept_ok", 
+          assetId, 
+          proxy_status: asset.meta_jsonb?.proxy_status,
+          hint: "Asset added to bin — click it or press + Timeline to place at playhead",
+        });
+      }
+      document.querySelector<HTMLButtonElement>("#btn-accept-job")!.disabled = true;
+    } catch (e) {
+      writeOutput({ action: "accept_error", error: String(e) });
     }
   });
 
@@ -1528,6 +1695,34 @@ export function bootstrapStudioApp(): void {
     }
   });
 
+  document.querySelector("#btn-export")!.addEventListener("click", async () => {
+    if (!activeProjectId || !activeSequenceId) {
+      writeOutput("Create or load a project first.");
+      return;
+    }
+    const exportBtn = document.querySelector<HTMLButtonElement>("#btn-export")!;
+    exportBtn.disabled = true;
+    try {
+      for (const track of timelineState.tracks) {
+        if (!track.serverId) {
+          const t = await orchestratorCreateTrack(activeSequenceId, track.kind.toLowerCase(), track.lane_index, track.name);
+          track.serverId = t.id;
+        }
+        for (const clip of track.clips) {
+          await persistClipToOrchestrator(track, clip);
+        }
+      }
+      const job = await submitRenderJob(activeProjectId, activeSequenceId, "h264_1080p");
+      lastRenderJobId = job.id;
+      writeOutput({ action: "export_submitted", job });
+      startRenderPolling(job.id);
+    } catch (e) {
+      writeOutput({ action: "export_error", error: String(e) });
+    } finally {
+      exportBtn.disabled = false;
+    }
+  });
+
   document.querySelector("#btn-load-project")!.addEventListener("click", async () => {
     try {
       const result = await orchestratorListProjects();
@@ -1579,11 +1774,7 @@ export function bootstrapStudioApp(): void {
 
       const projectNameInput = document.querySelector<HTMLInputElement>("#project-name");
       if (projectNameInput) projectNameInput.value = project.name;
-      try {
-        registeredAssets = await listProjectAssets(project.id);
-        renderAssetList();
-        if (registeredAssets.some((a) => a.meta_jsonb?.proxy_status === "pending")) startProxyPolling();
-      } catch { /* orchestrator may not have assets yet */ }
+      await refreshProjectAssets();
       renderTimeline();
       writeOutput({ action: "load_project", projectId: project.id, tracks: tracks.length, clips: clips.length, assets: registeredAssets.length });
       resolveActiveAtPlayhead()

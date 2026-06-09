@@ -49,11 +49,16 @@ export interface AIJob {
   project_id: string;
   mode: string;
   prompt: string;
-  status: "queued" | "processing" | "completed" | "failed";
-  result_asset_id?: string;
-  error_message?: string;
+  status: string;
+  stages: string[];
+  metadata: {
+    asset_id?: string;
+    output_path?: string;
+    artifact_error?: string;
+    [key: string]: unknown;
+  };
   created_at: string;
-  completed_at?: string;
+  updated_at: string;
 }
 
 export interface RenderJob {
@@ -61,9 +66,10 @@ export interface RenderJob {
   project_id: string;
   sequence_id?: string;
   preset: string;
-  status: "pending" | "rendering" | "completed" | "failed";
+  status: "queued" | "rendering" | "completed" | "failed";
   progress: number;
   output_uri?: string;
+  error?: string;
 }
 
 export interface Asset {
@@ -81,6 +87,8 @@ export interface Asset {
     codec?: string;
     proxy_status?: "pending" | "ready" | "failed" | "unavailable";
     proxy_path?: string | null;
+    source?: string;
+    job_id?: string;
     size_bytes?: number;
     audio_codec?: string;
     sample_rate?: number;
@@ -126,18 +134,50 @@ export function timelineResolveActive(payload: unknown): Promise<unknown> {
   return invoke("timeline_resolve_active", { payload });
 }
 
-export async function submitAiJob(prompt: string, mode = "scene-generation"): Promise<{ job_id: string; status: string }> {
+export async function submitAiJob(
+  projectId: string,
+  prompt: string,
+  mode = "scene-generation",
+): Promise<{ job_id: string; status: string }> {
   const res = await fetch(`${BASE}/v1/jobs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ project_id: "renderflow-local-project", mode, prompt, metadata: {} }),
+    body: JSON.stringify({ project_id: projectId, mode, prompt, metadata: {} }),
   });
+  if (!res.ok) throw new Error(await res.text());
   const v = await res.json();
   return { job_id: v.id, status: v.status };
 }
 
 export async function getAiJob(jobId: string): Promise<AIJob> {
   const res = await fetch(`${BASE}/v1/jobs/${jobId}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function acceptAiJob(jobId: string): Promise<AIJob> {
+  const res = await fetch(`${BASE}/v1/jobs/${jobId}/accept`, { method: "POST" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function submitRenderJob(
+  projectId: string,
+  sequenceId: string,
+  preset = "h264_1080p",
+): Promise<RenderJob> {
+  const res = await fetch(`${BASE}/v1/projects/${projectId}/render-jobs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sequence_id: sequenceId, preset }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getRenderJob(jobId: string): Promise<RenderJob> {
+  const res = await fetch(`${BASE}/v1/render-jobs/${jobId}`);
+  if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
@@ -253,6 +293,7 @@ export async function importMedia(projectId: string, filePath: string): Promise<
 
 export async function listProjectAssets(projectId: string): Promise<Asset[]> {
   const res = await fetch(`${BASE}/v1/projects/${projectId}/assets`);
+  if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 

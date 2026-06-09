@@ -213,7 +213,14 @@ def list_render_jobs(project_id: UUID) -> list[dict[str, Any]]:
     return memory_store.render_job_list(project_id)
 
 
+def update_render_job(job_id: UUID, **kwargs: object) -> dict[str, Any] | None:
+    return memory_store.render_job_update(job_id, **kwargs)
+
+
 def submit_render_job(project_id: UUID, sequence_id: UUID | None, preset: str) -> dict[str, Any]:
     row = memory_store.render_job_create(project_id, sequence_id, preset)
     db_repos.insert_render_job(row)
+    from app.render_worker import enqueue_render_job
+
+    enqueue_render_job(str(row["id"]))
     return row
