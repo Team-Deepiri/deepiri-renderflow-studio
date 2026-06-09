@@ -3,12 +3,16 @@
 Native animation and post-production studio for video editing, compositing, motion graphics, and 3D workflows.
 <img width="1853" height="911" alt="image" src="https://github.com/user-attachments/assets/08834bcb-3afa-42cf-b051-cc7a93e53c4e" />
 
+---
+
 ## Principles
 
 - Native-first desktop architecture (`Tauri` + Rust/C++ core).
 - Vulkan-first rendering pipeline.
 - Optional AI copilot with full manual/no-AI parity.
 - Reuse Deepiri packages as **path/Poetry dependencies** where they exist (e.g. `deepiri-gpu-utils`); keep small Renderflow-only helpers as first-party crates under `packages/`.
+
+---
 
 ## Monorepo Layout
 
@@ -22,6 +26,8 @@ Native animation and post-production studio for video editing, compositing, moti
 - `infra/postgres/migrations`: SQL schema.
 - `lib/renderflow_queue`: in-repo Redis AI job queue (shared orchestrator + workers).
 - `vendor/deepiri`: optional legacy snippets only; GPU + queue live in real packages above.
+
+---
 
 ## Getting Started (bootstrap)
 
@@ -44,11 +50,21 @@ Layout: clone **`deepiri-gpu-utils`** next to **`deepiri-renderflow-studio`** (s
 9. Model worker CLI: `python3 services/model-workers/app/worker.py` — Redis consumer: `cd services/model-workers && poetry install && poetry run python -m app.redis_worker`
 10. Full stack Docker: run `docker compose` from `infra/docker` (orchestrator build context is the **parent** of this repo so `deepiri-gpu-utils` is included): `docker compose -f infra/docker/docker-compose.yml build orchestrator && docker compose -f infra/docker/docker-compose.yml up -d`
 
+---
+
 ### Desktop → orchestrator
 
 Set `RENDERFLOW_ORCHESTRATOR_URL` (default `http://127.0.0.1:8080`). Tauri commands: `orchestrator_health`, `submit_ai_job`, `get_ai_job`.
+
+---
 
 ## Dependencies
 
 - **Orchestrator:** `services/orchestrator/pyproject.toml` — `deepiri-gpu-utils` (Git) + `deepiri-renderflow-worker-queue` (`lib/renderflow_queue`); install with Poetry.
 - Optional snippets under `vendor/deepiri/*` should include provenance headers if kept.
+
+---
+
+## License
+
+See [LICENSE.md](LICENSE.md)
