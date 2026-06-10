@@ -99,6 +99,12 @@ def list_tracks(sequence_id: UUID) -> list[dict[str, Any]]:
     return db_repos.list_tracks(sequence_id)
 
 
+def delete_track(track_id: UUID) -> bool:
+    found = memory_store.track_delete(track_id)
+    db_repos.delete_track(track_id)
+    return found
+
+
 def create_clip(
     track_id: UUID,
     asset_id: UUID,
