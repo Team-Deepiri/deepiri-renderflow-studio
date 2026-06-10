@@ -230,6 +230,18 @@ def insert_track(row: dict[str, Any]) -> None:
         logger.warning("insert_track: %s", e)
 
 
+def delete_track(track_id: UUID) -> None:
+    if not db.pool_ready():
+        return
+    try:
+        with db.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("delete from tracks where id = %s::uuid", (str(track_id),))
+            conn.commit()
+    except Exception as e:
+        logger.warning("delete_track: %s", e)
+
+
 def list_tracks(sequence_id: UUID) -> list[dict[str, Any]]:
     if not db.pool_ready():
         return []

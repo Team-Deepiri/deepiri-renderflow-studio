@@ -6,6 +6,7 @@ import {
   orchestratorCreateSequence,
   orchestratorListSequences,
   orchestratorCreateTrack,
+  orchestratorDeleteTrack,
   orchestratorListTracks,
   orchestratorCreateClip,
   orchestratorListClips,
@@ -1428,7 +1429,7 @@ export function bootstrapStudioApp(): void {
     });
   }
 
-  function deleteTrack(trackId: number) {
+  async function deleteTrack(trackId: number) {
     const idx = timelineState.tracks.findIndex((t) => t.id === trackId);
     if (idx < 0) return;
     const track = timelineState.tracks[idx];
@@ -1436,6 +1437,15 @@ export function bootstrapStudioApp(): void {
     if (track.clips.length > 0) {
       const confirmed = window.confirm(`Delete "${track.name}"? This will also remove ${track.clips.length} clip(s).`);
       if (!confirmed) return;
+    }
+
+    if (activeSequenceId && track.serverId) {
+      try {
+        await orchestratorDeleteTrack(activeSequenceId, track.serverId);
+      } catch (e) {
+        writeOutput({ action: "delete_track_error", error: String(e) });
+        return;
+      }
     }
 
     commitHistory("delete_track");
