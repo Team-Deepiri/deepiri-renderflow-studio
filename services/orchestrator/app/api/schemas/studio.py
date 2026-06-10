@@ -24,6 +24,7 @@ class AiJobOut(BaseModel):
     status: str
     stages: list[str]
     metadata: dict[str, Any]
+    result_asset_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -37,6 +38,7 @@ class AiJobOut(BaseModel):
             status=r.status.value,
             stages=list(r.stages),
             metadata=dict(r.metadata),
+            result_asset_id=r.metadata.get("asset_id"),
             created_at=r.created_at,
             updated_at=r.updated_at,
         )
