@@ -75,7 +75,8 @@ def test_trim_uses_correct_ss_and_t(tmp_path):
         src_in_tick=48,
     )
 
-    with patch("subprocess.run", side_effect=_ok_run) as mock_run:
+    with patch("subprocess.run", side_effect=_ok_run) as mock_run, \
+         patch("shutil.which", return_value="/usr/bin/ffmpeg"):
         render_sequence([clip], fps=FPS, output_path=str(tmp_path / "out.mp4"))
 
     trim_cmd = None
@@ -100,7 +101,8 @@ def test_gap_between_clips_generates_black_segment(tmp_path):
     clip1 = RenderClip(source_path=str(src), in_tick=0,  out_tick=24)
     clip2 = RenderClip(source_path=str(src), in_tick=48, out_tick=72)  # 1s gap
 
-    with patch("subprocess.run", side_effect=_ok_run) as mock_run:
+    with patch("subprocess.run", side_effect=_ok_run) as mock_run, \
+         patch("shutil.which", return_value="/usr/bin/ffmpeg"):
         render_sequence([clip1, clip2], fps=FPS, output_path=str(tmp_path / "out.mp4"))
 
     black_calls = [
@@ -118,7 +120,8 @@ def test_no_gap_does_not_generate_black_segment(tmp_path):
     clip1 = RenderClip(source_path=str(src), in_tick=0,  out_tick=24)
     clip2 = RenderClip(source_path=str(src), in_tick=24, out_tick=48)
 
-    with patch("subprocess.run", side_effect=_ok_run) as mock_run:
+    with patch("subprocess.run", side_effect=_ok_run) as mock_run, \
+         patch("shutil.which", return_value="/usr/bin/ffmpeg"):
         render_sequence([clip1, clip2], fps=FPS, output_path=str(tmp_path / "out.mp4"))
 
     black_calls = [
@@ -133,7 +136,8 @@ def test_ffmpeg_failure_propagates_error(tmp_path):
     src.write_bytes(b"fake")
     clip = RenderClip(source_path=str(src), in_tick=0, out_tick=24)
 
-    with patch("subprocess.run") as mock_run:
+    with patch("subprocess.run") as mock_run, \
+         patch("shutil.which", return_value="/usr/bin/ffmpeg"):
         mock_run.return_value = MagicMock(returncode=1, stderr="codec not found")
         result = render_sequence([clip], fps=FPS, output_path=str(tmp_path / "out.mp4"))
 

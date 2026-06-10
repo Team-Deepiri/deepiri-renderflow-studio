@@ -159,6 +159,7 @@ export function bootstrapStudioApp(): void {
               <button class="btn icon" id="btn-play" type="button">Play</button>
               <button class="btn icon" id="btn-forward" type="button">+1f</button>
               <span class="timecode" id="timecode">00:00:12:00</span>
+              <span class="elapsed" id="elapsed">0:00.0</span>
             </div>
           </div>
           <div id="preview" class="preview">
@@ -356,10 +357,40 @@ export function bootstrapStudioApp(): void {
   }
   .track-name {
     border-right: 1px solid #1f2736;
-    padding: 10px 8px;
+    padding: 8px 8px;
     font-size: 12px;
     color: var(--text-dim);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
   }
+  .track-name-label { font-size: 12px; color: var(--text-dim); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .track-time-indicator { font-size: 9px; color: #6fa3ff; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .timeline-ruler {
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    height: 22px;
+    border-bottom: 1px solid #2a3140;
+    background: #0a0e18;
+  }
+  .timeline-ruler-label {
+    border-right: 1px solid #1f2736;
+    font-size: 9px;
+    color: #4a5568;
+    display: flex;
+    align-items: center;
+    padding: 0 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+  }
+  .timeline-ruler-track { position: relative; overflow: hidden; }
+  .ruler-tick { position: absolute; top: 0; width: 1px; background: #2a3140; }
+  .ruler-tick.major { height: 100%; background: #3a4a68; }
+  .ruler-tick.minor { height: 45%; top: 55%; }
+  .ruler-label { position: absolute; bottom: 3px; font-size: 9px; color: #4a5a78; transform: translateX(-50%); white-space: nowrap; pointer-events: none; }
+  .ruler-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--danger); opacity: 0.8; pointer-events: none; }
+  .elapsed { font-size: 11px; color: #18b487; font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }
   .track-lane { position: relative; }
   .marker {
     position: absolute;
@@ -551,6 +582,7 @@ export function bootstrapStudioApp(): void {
   .badge-video { background: rgba(46, 120, 255, 0.25); color: #6fa3ff; }
   .badge-audio { background: rgba(203, 147, 66, 0.25); color: #e5b86a; }
   .badge-image { background: rgba(24, 180, 135, 0.25); color: #4addb5; }
+  .badge-ai { background: rgba(138, 84, 245, 0.25); color: #b68fff; }
   .proxy-pending { color: #a8b2c7; }
   .proxy-ready { color: #4addb5; }
   .proxy-failed { color: var(--danger); }
@@ -577,6 +609,10 @@ export function bootstrapStudioApp(): void {
   let aiVisible = true;
   let playing = false;
   let playTimer: number | undefined;
+  let elapsedStartTime: number | undefined;
+  let elapsedTimer: number | undefined;
+  let elapsedAccumulatedMs = 0;
+  let proxyTimeUpdateHandler: (() => void) | undefined;
   let activePreviewClip: Clip | null = null;
   let frameDebounceTimer: number | undefined;
   let previewRequestSerial = 0;
@@ -704,9 +740,22 @@ export function bootstrapStudioApp(): void {
   function clearPlayTimer() {
     if (playTimer) window.clearInterval(playTimer);
     playTimer = undefined;
+    if (elapsedTimer) {
+      window.clearInterval(elapsedTimer);
+      if (elapsedStartTime !== undefined) elapsedAccumulatedMs += performance.now() - elapsedStartTime;
+    }
+    elapsedTimer = undefined;
+    elapsedStartTime = undefined;
     playing = false;
     const vid = document.querySelector<HTMLVideoElement>("#preview-video");
-    if (vid) { vid.pause(); vid.style.display = "none"; }
+    if (vid) {
+      if (proxyTimeUpdateHandler) {
+        vid.removeEventListener("timeupdate", proxyTimeUpdateHandler);
+        proxyTimeUpdateHandler = undefined;
+      }
+      vid.pause();
+      vid.style.display = "none";
+    }
     const button = document.querySelector<HTMLButtonElement>("#btn-play");
     if (button) button.textContent = "Play";
     // Re-fetch a still frame for where the user stopped
@@ -812,6 +861,7 @@ export function bootstrapStudioApp(): void {
       const timeSec = Math.max(0, (tick - foundClip.inTick) / timelineState.fps);
       try {
         const b64 = await fetchFrame(proxyPath, timeSec);
+        if (playing) return; // playback started while frame was fetching — don't clobber video
         document.querySelector<HTMLVideoElement>("#preview-video")!.style.display = "none";
         document.querySelector<HTMLDivElement>("#preview-empty")!.style.display = "none";
         const previewFrame = document.querySelector<HTMLImageElement>("#preview-frame")!;
@@ -848,6 +898,54 @@ export function bootstrapStudioApp(): void {
     const duration = timelineState.durationTicks;
     const scaledDuration = duration * timelineUiState.zoom;
     timelineGrid.innerHTML = "";
+
+    // ── Time ruler ───────────────────────────────────────────────────────────
+    const ruler = document.createElement("div");
+    ruler.className = "timeline-ruler";
+    const rulerLabel = document.createElement("div");
+    rulerLabel.className = "timeline-ruler-label";
+    rulerLabel.textContent = "TC";
+    const rulerTrack = document.createElement("div");
+    rulerTrack.className = "timeline-ruler-track";
+
+    const totalSecs = duration / timelineState.fps;
+    const targetTicks = 12;
+    const rawInterval = totalSecs / targetTicks;
+    const intervals = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
+    const majorInterval = intervals.find((i) => i >= rawInterval) ?? 300;
+    const minorInterval = majorInterval / 2;
+
+    const formatRulerLabel = (secs: number) => {
+      const m = Math.floor(secs / 60);
+      const s = Math.floor(secs % 60);
+      return m > 0 ? `${m}:${s.toString().padStart(2, "0")}` : `${s}s`;
+    };
+
+    for (let t = 0; t <= totalSecs + minorInterval; t += minorInterval) {
+      const isMajor = Math.abs(t % majorInterval) < 0.001 || Math.abs((t % majorInterval) - majorInterval) < 0.001;
+      const pct = ((t * timelineState.fps) / duration) * 100;
+      if (pct > 100.5) break;
+      const tick = document.createElement("div");
+      tick.className = `ruler-tick ${isMajor ? "major" : "minor"}`;
+      tick.style.left = `${pct}%`;
+      rulerTrack.appendChild(tick);
+      if (isMajor && t > 0) {
+        const lbl = document.createElement("span");
+        lbl.className = "ruler-label";
+        lbl.style.left = `${pct}%`;
+        lbl.textContent = formatRulerLabel(t);
+        rulerTrack.appendChild(lbl);
+      }
+    }
+
+    const rulerPlayhead = document.createElement("div");
+    rulerPlayhead.className = "ruler-playhead";
+    rulerPlayhead.style.left = `${((timelineState.playheadTick) / duration) * 100}%`;
+    rulerTrack.appendChild(rulerPlayhead);
+    ruler.append(rulerLabel, rulerTrack);
+    timelineGrid.appendChild(ruler);
+    // ─────────────────────────────────────────────────────────────────────────
+
     for (const track of timelineState.tracks) {
       const row = document.createElement("div");
       row.className = "track-row";
@@ -855,11 +953,29 @@ export function bootstrapStudioApp(): void {
 
       const name = document.createElement("div");
       name.className = "track-name";
-      name.textContent = `${track.name} (${track.kind})`;
-      name.addEventListener("click", () => {
+
+      const nameLabel = document.createElement("span");
+      nameLabel.className = "track-name-label";
+      nameLabel.textContent = `${track.name} (${track.kind})`;
+      nameLabel.addEventListener("click", () => {
         timelineUiState.activeTrackId = track.id;
         renderTimeline();
       });
+      name.appendChild(nameLabel);
+
+      {
+        const clipAtHead = track.clips.find(
+          (c) => timelineState.playheadTick >= c.inTick && timelineState.playheadTick < c.outTick
+        );
+        if (clipAtHead) {
+          const posInClip = (timelineState.playheadTick - clipAtHead.inTick) / timelineState.fps;
+          const clipDur = (clipAtHead.outTick - clipAtHead.inTick) / timelineState.fps;
+          const timeIndicator = document.createElement("span");
+          timeIndicator.className = "track-time-indicator";
+          timeIndicator.textContent = `${posInClip.toFixed(1)}s / ${clipDur.toFixed(1)}s`;
+          name.appendChild(timeIndicator);
+        }
+      }
 
       const lane = document.createElement("div");
       lane.className = "track-lane";
@@ -988,14 +1104,16 @@ export function bootstrapStudioApp(): void {
       const durMeta = asset.duration_ms != null ? fmtDuration(asset.duration_ms) : "";
       const fpsMeta = meta.fps != null ? `${meta.fps.toFixed(2)} fps` : "";
       const proxyStatus = meta.proxy_status ?? "unavailable";
-      const proxyLabel = proxyStatus === "pending" ? "⏳ proxy" : proxyStatus === "ready" ? "✓ proxy" : proxyStatus === "failed" ? "✗ proxy" : "";
-      const proxyClass = proxyStatus === "ready" ? "proxy-ready" : proxyStatus === "failed" ? "proxy-failed" : "proxy-pending";
+      const proxyLabel = proxyStatus === "pending" ? "⏳ proxy" : proxyStatus === "ready" ? "✓ proxy" : proxyStatus === "failed" ? "✗ proxy" : proxyStatus === "unavailable" && meta.ai_generated ? "✗ proxy" : "";
+      const proxyClass = proxyStatus === "ready" ? "proxy-ready" : proxyStatus === "failed" || (proxyStatus === "unavailable" && meta.ai_generated) ? "proxy-failed" : "proxy-pending";
+      const aiBadge = meta.ai_generated ? `<span class="asset-badge badge-ai">AI</span>` : "";
 
       li.innerHTML = `
         <button class="asset-remove" title="Remove from project">×</button>
         <div class="asset-item-name" title="${asset.uri}">${name}</div>
         <div class="asset-item-meta">
           <span class="asset-badge ${badgeClass}">${asset.kind}</span>
+          ${aiBadge}
           ${durMeta ? `<span>${durMeta}</span>` : ""}
           ${resMeta ? `<span>${resMeta}</span>` : ""}
           ${fpsMeta ? `<span>${fpsMeta}</span>` : ""}
@@ -1150,8 +1268,8 @@ export function bootstrapStudioApp(): void {
   function startIntervalShuttle(multiplier: number) {
     playTimer = window.setInterval(() => {
       const next = timelineState.playheadTick + multiplier;
-      if (next > timelineState.durationTicks) { setPlayhead(0); return; }
-      if (next < 0) { setPlayhead(timelineState.durationTicks); return; }
+      if (next > timelineState.durationTicks) { elapsedAccumulatedMs = 0; setPlayhead(0); return; }
+      if (next < 0) { elapsedAccumulatedMs = 0; setPlayhead(timelineState.durationTicks); return; }
       setPlayhead(next);
     }, Math.max(15, Math.round(1000 / timelineState.fps)));
   }
@@ -1162,6 +1280,15 @@ export function bootstrapStudioApp(): void {
     playing = true;
     const button = document.querySelector<HTMLButtonElement>("#btn-play");
     if (button) button.textContent = "Pause";
+
+    elapsedStartTime = performance.now();
+    elapsedTimer = window.setInterval(() => {
+      const secs = (elapsedAccumulatedMs + performance.now() - (elapsedStartTime ?? performance.now())) / 1000;
+      const m = Math.floor(secs / 60);
+      const s = (secs % 60).toFixed(1).padStart(4, "0");
+      const elapsedEl = document.querySelector<HTMLSpanElement>("#elapsed");
+      if (elapsedEl) elapsedEl.textContent = `${m}:${s}`;
+    }, 100);
 
     const clip = activePreviewClip;
     const asset = clip ? registeredAssets.find((a) => a.id === clip.assetId) : null;
@@ -1185,6 +1312,23 @@ export function bootstrapStudioApp(): void {
     document.querySelector<HTMLImageElement>("#preview-frame")!.style.display = "none";
     previewVideo.style.display = "";
     document.querySelector<HTMLDivElement>("#preview-empty")!.style.display = "none";
+
+    // Sync playhead tick + time indicator while video plays natively.
+    // currentTime is position within the proxy file; clip.inTick is where it sits on the timeline.
+    const clipStartTick = clip.inTick;
+    if (proxyTimeUpdateHandler) previewVideo.removeEventListener("timeupdate", proxyTimeUpdateHandler);
+    proxyTimeUpdateHandler = () => {
+      if (!playing) return;
+      const newTick = clipStartTick + Math.round(previewVideo.currentTime * timelineState.fps);
+      timelineState.playheadTick = Math.max(0, Math.min(timelineState.durationTicks, newTick));
+      timelineUiState.activeClipIds = timelineState.tracks
+        .flatMap((t) => t.clips)
+        .filter((c) => timelineState.playheadTick >= c.inTick && timelineState.playheadTick < c.outTick)
+        .map((c) => c.id);
+      slider.value = String(timelineState.playheadTick);
+      renderTimeline();
+    };
+    previewVideo.addEventListener("timeupdate", proxyTimeUpdateHandler);
 
     const seekAndPlay = () => {
       previewVideo.play().catch((err) => {
@@ -1288,6 +1432,51 @@ export function bootstrapStudioApp(): void {
       writeOutput(result);
       updateJobButtons(result.status);
       stopJobEvents();
+
+      if (result.result_asset_id) {
+        try {
+          const asset = await getAsset(result.result_asset_id);
+          if (!registeredAssets.find((a) => a.id === asset.id)) {
+            registeredAssets.push(asset);
+            renderAssetList();
+          }
+          if (asset.meta_jsonb?.proxy_status === "pending") startProxyPolling();
+
+          const track = timelineState.tracks.find((t) => t.id === timelineUiState.activeTrackId) ?? timelineState.tracks[0];
+          if (track) {
+            const clipDurationTicks = asset.duration_ms != null
+              ? Math.round((asset.duration_ms / 1000) * timelineState.fps)
+              : 240;
+            const inTick = Math.max(0, timelineState.playheadTick);
+            const outTick = inTick + clipDurationTicks;
+            const meta = asset.meta_jsonb ?? {};
+            const label = (meta.name ?? `AI · ${result.prompt}`).slice(0, 40);
+            const nextClip: Clip = {
+              id: nextClipId++,
+              label,
+              inTick,
+              outTick,
+              color: "var(--clip-purple)",
+              assetId: asset.id,
+            };
+            try { await persistClipToOrchestrator(track, nextClip); } catch { /* no active sequence — local only */ }
+            commitHistory("accept_ai_asset");
+            if (outTick > timelineState.durationTicks) {
+              timelineState.durationTicks = outTick + timelineState.fps * 2;
+              slider.max = String(timelineState.durationTicks);
+            }
+            track.clips.push(nextClip);
+            track.clips.sort((a, b) => a.inTick - b.inTick);
+            timelineUiState.selectedClipId = nextClip.id;
+            timelineUiState.activeTrackId = track.id;
+            renderTimeline();
+            fetchFrameForPlayhead(true);
+            writeOutput({ action: "accept_ai_asset", assetId: asset.id, clipId: nextClip.id, inTick, outTick });
+          }
+        } catch (e) {
+          writeOutput({ accept_asset_error: String(e) });
+        }
+      }
     } catch (e) {
       writeOutput({ accept_error: String(e) });
     }

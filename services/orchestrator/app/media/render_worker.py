@@ -36,16 +36,16 @@ def render_sequence(
     src_in_tick defines the offset into the source file (head trim / slip).
     Gaps between clips are filled with black+silent padding.
     """
-    exe = shutil.which("ffmpeg")
-    if not exe:
-        return {"ok": False, "error": "ffmpeg not found"}
-
     if not clips:
         return {"ok": False, "error": "no clips to render"}
 
     for clip in clips:
         if not Path(clip.source_path).exists():
             return {"ok": False, "error": f"source not found: {clip.source_path}"}
+
+    exe = shutil.which("ffmpeg")
+    if not exe:
+        return {"ok": False, "error": "ffmpeg not found"}
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 

@@ -85,6 +85,7 @@ export interface Asset {
     audio_codec?: string;
     sample_rate?: number;
     channels?: number;
+    ai_generated?: boolean;
   };
   created_at: string;
 }
