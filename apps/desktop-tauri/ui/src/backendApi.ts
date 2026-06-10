@@ -234,6 +234,12 @@ export async function orchestratorListTracks(sequenceId: string): Promise<Track[
   return res.json();
 }
 
+export async function orchestratorDeleteTrack(sequenceId: string, trackId: string): Promise<{ status: string }> {
+  const res = await fetch(`${BASE}/v1/sequences/${sequenceId}/tracks/${trackId}`, { method: "DELETE" });
+  if (!res.ok && res.status !== 404) throw new Error(await res.text());
+  return { status: res.status === 404 ? "already_deleted" : "deleted" };
+}
+
 export async function orchestratorCreateClip(
   sequenceId: string,
   trackId: string,

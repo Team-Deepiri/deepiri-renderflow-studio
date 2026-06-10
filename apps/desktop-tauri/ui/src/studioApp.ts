@@ -6,6 +6,7 @@ import {
   orchestratorCreateSequence,
   orchestratorListSequences,
   orchestratorCreateTrack,
+  orchestratorDeleteTrack,
   orchestratorListTracks,
   orchestratorCreateClip,
   orchestratorListClips,
@@ -177,6 +178,8 @@ export function bootstrapStudioApp(): void {
             <h3>Timeline</h3>
             <div class="timeline-controls">
               <input id="playhead-slider" type="range" min="0" max="2400" value="288" />
+              <button class="btn subtle" id="btn-add-video-track" type="button">+ Video Track</button>
+              <button class="btn subtle" id="btn-add-audio-track" type="button">+ Audio Track</button>
               <button class="btn subtle" id="btn-split-clip" type="button">Split</button>
               <button class="btn subtle" id="btn-delete-clip" type="button">Delete</button>
             </div>
@@ -365,8 +368,23 @@ export function bootstrapStudioApp(): void {
     justify-content: center;
     gap: 2px;
   }
-  .track-name-label { font-size: 12px; color: var(--text-dim); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .track-name-row { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+  .track-name-label { flex: 1; font-size: 12px; color: var(--text-dim); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .track-time-indicator { font-size: 9px; color: #6fa3ff; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .track-delete {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 15px;
+    cursor: pointer;
+    padding: 0 2px;
+    line-height: 1;
+    opacity: 0;
+    transition: opacity 0.1s, color 0.1s;
+    flex-shrink: 0;
+  }
+  .track-row:hover .track-delete { opacity: 1; }
+  .track-delete:hover { color: var(--danger); }
   .timeline-ruler {
     display: grid;
     grid-template-columns: 110px 1fr;
@@ -589,6 +607,75 @@ export function bootstrapStudioApp(): void {
   .btn-accept { background: #18b487; flex: 1; }
   .btn-reject { background: #ff4e75; flex: 1; }
   .btn-accept:disabled, .btn-reject:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  /* New project modal */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+  .modal {
+    background: #181c24;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px;
+    width: 580px;
+    max-width: 92vw;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+  }
+  .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+  }
+  .modal-header h2 { margin: 0; font-size: 16px; font-weight: 600; }
+  .modal-close {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+  }
+  .modal-close:hover { color: var(--text); }
+  .modal-sub { color: var(--text-dim); font-size: 12px; margin: 0 0 16px; }
+  .template-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+  .template-card {
+    background: #0f131b;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .template-card:hover {
+    border-color: var(--accent);
+    background: rgba(77, 125, 255, 0.07);
+  }
+  .template-name { font-size: 13px; font-weight: 600; margin-bottom: 5px; }
+  .template-desc { font-size: 11px; color: var(--text-dim); margin-bottom: 10px; line-height: 1.45; }
+  .template-tracks { display: flex; gap: 4px; flex-wrap: wrap; }
+  .track-badge {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+  }
+  .track-badge.video { background: rgba(46, 120, 255, 0.22); color: #6fa3ff; }
+  .track-badge.audio { background: rgba(203, 147, 66, 0.22); color: #e5b86a; }
 `;
   document.head.appendChild(style);
 
@@ -954,6 +1041,9 @@ export function bootstrapStudioApp(): void {
       const name = document.createElement("div");
       name.className = "track-name";
 
+      const nameRow = document.createElement("div");
+      nameRow.className = "track-name-row";
+
       const nameLabel = document.createElement("span");
       nameLabel.className = "track-name-label";
       nameLabel.textContent = `${track.name} (${track.kind})`;
@@ -961,20 +1051,29 @@ export function bootstrapStudioApp(): void {
         timelineUiState.activeTrackId = track.id;
         renderTimeline();
       });
-      name.appendChild(nameLabel);
 
-      {
-        const clipAtHead = track.clips.find(
-          (c) => timelineState.playheadTick >= c.inTick && timelineState.playheadTick < c.outTick
-        );
-        if (clipAtHead) {
-          const posInClip = (timelineState.playheadTick - clipAtHead.inTick) / timelineState.fps;
-          const clipDur = (clipAtHead.outTick - clipAtHead.inTick) / timelineState.fps;
-          const timeIndicator = document.createElement("span");
-          timeIndicator.className = "track-time-indicator";
-          timeIndicator.textContent = `${posInClip.toFixed(1)}s / ${clipDur.toFixed(1)}s`;
-          name.appendChild(timeIndicator);
-        }
+      const deleteBtn = document.createElement("button");
+      deleteBtn.className = "track-delete";
+      deleteBtn.textContent = "×";
+      deleteBtn.title = "Delete track";
+      deleteBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        deleteTrack(track.id);
+      });
+
+      nameRow.append(nameLabel, deleteBtn);
+      name.appendChild(nameRow);
+
+      const clipAtHead = track.clips.find(
+        (c) => timelineState.playheadTick >= c.inTick && timelineState.playheadTick < c.outTick
+      );
+      if (clipAtHead) {
+        const posInClip = (timelineState.playheadTick - clipAtHead.inTick) / timelineState.fps;
+        const clipDur = (clipAtHead.outTick - clipAtHead.inTick) / timelineState.fps;
+        const timeIndicator = document.createElement("span");
+        timeIndicator.className = "track-time-indicator";
+        timeIndicator.textContent = `${posInClip.toFixed(1)}s / ${clipDur.toFixed(1)}s`;
+        name.appendChild(timeIndicator);
       }
 
       const lane = document.createElement("div");
@@ -1351,6 +1450,184 @@ export function bootstrapStudioApp(): void {
     }
   }
 
+  const PROJECT_TEMPLATES = [
+    {
+      id: "blank",
+      name: "Blank",
+      description: "Clean slate. One video track and one audio track — add what you need.",
+      tracks: [
+        { name: "V1", kind: "Video" as const, lane_index: 0 },
+        { name: "A1", kind: "Audio" as const, lane_index: 0 },
+      ],
+    },
+    {
+      id: "social-clip",
+      name: "Social Clip",
+      description: "Lean setup for short-form content (TikTok, Reels, Shorts). One video with music and SFX tracks.",
+      tracks: [
+        { name: "V1 Main", kind: "Video" as const, lane_index: 0 },
+        { name: "A1 Music", kind: "Audio" as const, lane_index: 0 },
+        { name: "A2 SFX", kind: "Audio" as const, lane_index: 1 },
+      ],
+    },
+    {
+      id: "documentary",
+      name: "Documentary",
+      description: "Full long-form setup: A-roll, B-roll, titles, dialog, narration, music, and ambience.",
+      tracks: [
+        { name: "V1 A-Roll", kind: "Video" as const, lane_index: 2 },
+        { name: "V2 B-Roll", kind: "Video" as const, lane_index: 1 },
+        { name: "V3 Titles", kind: "Video" as const, lane_index: 0 },
+        { name: "A1 Dialog", kind: "Audio" as const, lane_index: 0 },
+        { name: "A2 Narration", kind: "Audio" as const, lane_index: 1 },
+        { name: "A3 Music", kind: "Audio" as const, lane_index: 2 },
+        { name: "A4 Ambience", kind: "Audio" as const, lane_index: 3 },
+      ],
+    },
+    {
+      id: "multi-cam",
+      name: "Multi-Cam",
+      description: "Three camera angles (main, wide, close-up) with live audio and music. Great for events and concerts.",
+      tracks: [
+        { name: "V1 Cam 1 Main", kind: "Video" as const, lane_index: 2 },
+        { name: "V2 Cam 2 Wide", kind: "Video" as const, lane_index: 1 },
+        { name: "V3 Cam 3 Close", kind: "Video" as const, lane_index: 0 },
+        { name: "A1 Live Audio", kind: "Audio" as const, lane_index: 0 },
+        { name: "A2 Music", kind: "Audio" as const, lane_index: 1 },
+      ],
+    },
+    {
+      id: "tutorial",
+      name: "Tutorial / Screencast",
+      description: "For software demos, courses, and YouTube tutorials. Screen recording as main with a webcam picture-in-picture overlay.",
+      tracks: [
+        { name: "V1 Screen Recording", kind: "Video" as const, lane_index: 1 },
+        { name: "V2 Webcam (PiP)", kind: "Video" as const, lane_index: 0 },
+        { name: "A1 Voiceover", kind: "Audio" as const, lane_index: 0 },
+        { name: "A2 Notification SFX", kind: "Audio" as const, lane_index: 1 },
+      ],
+    },
+    {
+      id: "music-video",
+      name: "Music Video",
+      description: "Performance editing with a dedicated VFX layer. Includes a song master track and stems for fine mixing.",
+      tracks: [
+        { name: "V1 Performance", kind: "Video" as const, lane_index: 2 },
+        { name: "V2 B-Roll / Cutaways", kind: "Video" as const, lane_index: 1 },
+        { name: "V3 VFX / Effects", kind: "Video" as const, lane_index: 0 },
+        { name: "A1 Song Master", kind: "Audio" as const, lane_index: 0 },
+        { name: "A2 Stems", kind: "Audio" as const, lane_index: 1 },
+      ],
+    },
+  ];
+
+  function showNewProjectModal(): Promise<typeof PROJECT_TEMPLATES[number] | null> {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "modal-overlay";
+
+      const cards = PROJECT_TEMPLATES.map((t) => {
+        const badges = t.tracks
+          .map((tr) => `<span class="track-badge ${tr.kind.toLowerCase()}">${tr.name}</span>`)
+          .join("");
+        return `
+          <div class="template-card" data-id="${t.id}">
+            <div class="template-name">${t.name}</div>
+            <div class="template-desc">${t.description}</div>
+            <div class="template-tracks">${badges}</div>
+          </div>`;
+      }).join("");
+
+      overlay.innerHTML = `
+        <div class="modal">
+          <div class="modal-header">
+            <h2>New Project</h2>
+            <button class="modal-close" type="button">×</button>
+          </div>
+          <p class="modal-sub">Choose a starting template</p>
+          <div class="template-grid">${cards}</div>
+        </div>`;
+
+      const cleanup = (result: typeof PROJECT_TEMPLATES[number] | null) => {
+        overlay.remove();
+        resolve(result);
+      };
+
+      overlay.querySelector(".modal-close")!.addEventListener("click", () => cleanup(null));
+      overlay.addEventListener("click", (e) => { if (e.target === overlay) cleanup(null); });
+
+      overlay.querySelectorAll<HTMLDivElement>(".template-card").forEach((card) => {
+        card.addEventListener("click", () => {
+          const template = PROJECT_TEMPLATES.find((t) => t.id === card.dataset.id)!;
+          cleanup(template);
+        });
+      });
+
+      document.body.appendChild(overlay);
+    });
+  }
+
+  async function deleteTrack(trackId: number) {
+    const idx = timelineState.tracks.findIndex((t) => t.id === trackId);
+    if (idx < 0) return;
+    const track = timelineState.tracks[idx];
+
+    if (track.clips.length > 0) {
+      const confirmed = window.confirm(`Delete "${track.name}"? This will also remove ${track.clips.length} clip(s).`);
+      if (!confirmed) return;
+    }
+
+    if (activeSequenceId && track.serverId) {
+      try {
+        await orchestratorDeleteTrack(activeSequenceId, track.serverId);
+      } catch (e) {
+        writeOutput({ action: "delete_track_error", error: String(e) });
+        return;
+      }
+    }
+
+    commitHistory("delete_track");
+    timelineState.tracks.splice(idx, 1);
+
+    if (timelineUiState.activeTrackId === trackId) {
+      timelineUiState.activeTrackId = timelineState.tracks[0]?.id ?? null;
+    }
+
+    if (timelineUiState.selectedClipId != null) {
+      const stillExists = timelineState.tracks.some((t) => t.clips.some((c) => c.id === timelineUiState.selectedClipId));
+      if (!stillExists) timelineUiState.selectedClipId = null;
+    }
+
+    renderTimeline();
+    writeOutput({ action: "delete_track", name: track.name, kind: track.kind });
+  }
+
+  async function addTrack(kind: "Video" | "Audio") {
+    const count = timelineState.tracks.filter((t) => t.kind === kind).length;
+    const prefix = kind === "Video" ? "V" : "A";
+    const name = `${prefix}${count + 1}`;
+    const lane_index = count;
+
+    const newTrackId = nextClipId++;
+    const newTrack: Track = { id: newTrackId, name, kind, lane_index, clips: [] };
+
+    if (activeSequenceId) {
+      try {
+        const serverTrack = await orchestratorCreateTrack(activeSequenceId, kind.toLowerCase(), lane_index, name);
+        newTrack.serverId = serverTrack.id;
+      } catch (e) {
+        writeOutput({ action: "add_track_error", error: String(e) });
+        return;
+      }
+    }
+
+    commitHistory("add_track");
+    timelineState.tracks.push(newTrack);
+    timelineUiState.activeTrackId = newTrackId;
+    renderTimeline();
+    writeOutput({ action: "add_track", name, kind });
+  }
+
   document.querySelector("#btn-health")!.addEventListener("click", async () => {
     try {
       const r = await orchestratorHealth();
@@ -1557,30 +1834,33 @@ export function bootstrapStudioApp(): void {
   });
 
   document.querySelector("#btn-new-project")!.addEventListener("click", async () => {
+    const template = await showNewProjectModal();
+    if (!template) return;
+
     commitHistory("new_project");
-    const projectNameInput = document.querySelector<HTMLInputElement>("#project-name");
     const projectName = `Untitled ${new Date().toLocaleTimeString()}`;
+    const projectNameInput = document.querySelector<HTMLInputElement>("#project-name");
     if (projectNameInput) projectNameInput.value = projectName;
     try {
       const project = await orchestratorCreateProject(projectName);
       activeProjectId = project.id;
       const seq = await orchestratorCreateSequence(project.id, "Main Sequence");
       activeSequenceId = seq.id;
-      const v1Server = await orchestratorCreateTrack(seq.id, "video", 0, "V1");
-      const a1Server = await orchestratorCreateTrack(seq.id, "audio", 0, "A1");
-      const v1Id = nextClipId++;
-      const a1Id = nextClipId++;
-      timelineState.tracks = [
-        { id: v1Id, serverId: v1Server.id, name: "V1", kind: "Video", lane_index: 0, clips: [] },
-        { id: a1Id, serverId: a1Server.id, name: "A1", kind: "Audio", lane_index: 0, clips: [] },
-      ];
+
+      const newTracks: Track[] = [];
+      for (const tDef of template.tracks) {
+        const serverTrack = await orchestratorCreateTrack(seq.id, tDef.kind.toLowerCase(), tDef.lane_index, tDef.name);
+        newTracks.push({ id: nextClipId++, serverId: serverTrack.id, name: tDef.name, kind: tDef.kind, lane_index: tDef.lane_index, clips: [] });
+      }
+
+      timelineState.tracks = newTracks;
       timelineState.playheadTick = 0;
       timelineUiState.selectedClipId = null;
-      timelineUiState.activeTrackId = v1Id;
+      timelineUiState.activeTrackId = newTracks[0]?.id ?? null;
       timelineUiState.markers = [];
       registeredAssets = [];
       renderAssetList();
-      writeOutput({ action: "new_project", projectId: project.id, sequenceId: seq.id });
+      writeOutput({ action: "new_project", template: template.id, projectId: project.id, sequenceId: seq.id });
     } catch (e) {
       writeOutput({ action: "new_project_error", error: String(e) });
     }
@@ -1727,6 +2007,14 @@ export function bootstrapStudioApp(): void {
     commitHistory("zoom_change");
     timelineUiState.zoom = Number(zoomInput.value);
     renderTimeline();
+  });
+
+  document.querySelector("#btn-add-video-track")!.addEventListener("click", () => {
+    addTrack("Video");
+  });
+
+  document.querySelector("#btn-add-audio-track")!.addEventListener("click", () => {
+    addTrack("Audio");
   });
 
   document.querySelector("#btn-split-clip")!.addEventListener("click", () => {
