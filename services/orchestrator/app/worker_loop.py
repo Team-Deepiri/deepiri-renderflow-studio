@@ -106,8 +106,22 @@ def _process_job(job_id: str, settings: Settings) -> None:
     try:
         from app import db_repos, memory_store
 
-        uri = f"renderflow://jobs/{job_id}/bundle.json"
-        arow = memory_store.asset_create(rec.project_id, "ai_bundle", uri, sha256="pending")
+        label = rec.prompt[:60] if rec.prompt else "AI Generated"
+        arow = memory_store.asset_create(
+            rec.project_id,
+            "video",
+            f"renderflow://jobs/{job_id}/output.mp4",
+            sha256="pending",
+            duration_ms=10_000,
+            meta={
+                "name": f"AI · {label}",
+                "ai_generated": True,
+                "proxy_status": "unavailable",
+                "proxy_path": None,
+                "width": 1920,
+                "height": 1080,
+            },
+        )
         db_repos.insert_asset(arow)
         aid = str(arow["id"])
         store.merge_meta(uid, "asset_id", aid)
