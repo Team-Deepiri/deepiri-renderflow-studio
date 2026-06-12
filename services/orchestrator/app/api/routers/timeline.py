@@ -48,6 +48,14 @@ def list_tracks(sequence_id: UUID) -> list[dict[str, Any]]:
     return studio.list_tracks(sequence_id)
 
 
+@router.delete("/v1/sequences/{sequence_id}/tracks/{track_id}", tags=["timeline"])
+def delete_track(sequence_id: UUID, track_id: UUID) -> dict[str, str]:
+    found = studio.delete_track(track_id)
+    if not found:
+        raise HTTPException(404, "track not found")
+    return {"status": "deleted", "track_id": str(track_id)}
+
+
 @router.post("/v1/sequences/{sequence_id}/clips", tags=["timeline"])
 def create_clip(sequence_id: UUID, body: ClipCreate) -> dict[str, Any]:
     return studio.create_clip(

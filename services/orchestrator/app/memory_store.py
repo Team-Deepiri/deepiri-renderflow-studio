@@ -254,6 +254,14 @@ def track_list(sequence_id: UUID) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda t: (t["lane_index"], t["name"]))
 
 
+def track_delete(track_id: UUID) -> bool:
+    with _lock:
+        existed = _tracks.pop(track_id, None)
+    if existed:
+        _save()
+    return existed is not None
+
+
 def clip_create(
     track_id: UUID,
     asset_id: UUID,

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-const BASE = "http://127.0.0.1:8080";
+export const BASE = "http://127.0.0.1:8080";
 
 export interface Project {
   id: string;
@@ -93,6 +93,7 @@ export interface Asset {
     audio_codec?: string;
     sample_rate?: number;
     channels?: number;
+    ai_generated?: boolean;
   };
   created_at: string;
 }
@@ -134,11 +135,7 @@ export function timelineResolveActive(payload: unknown): Promise<unknown> {
   return invoke("timeline_resolve_active", { payload });
 }
 
-export async function submitAiJob(
-  projectId: string,
-  prompt: string,
-  mode = "scene-generation",
-): Promise<{ job_id: string; status: string }> {
+export async function submitAiJob(projectId: string, prompt: string, mode = "scene-generation"): Promise<{ job_id: string; status: string }> {
   const res = await fetch(`${BASE}/v1/jobs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -177,6 +174,18 @@ export async function submitRenderJob(
 
 export async function getRenderJob(jobId: string): Promise<RenderJob> {
   const res = await fetch(`${BASE}/v1/render-jobs/${jobId}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function acceptAIJob(jobId: string): Promise<AIJob> {
+  const res = await fetch(`${BASE}/v1/jobs/${jobId}/accept`, { method: "POST" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function rejectAIJob(jobId: string): Promise<AIJob> {
+  const res = await fetch(`${BASE}/v1/jobs/${jobId}/reject`, { method: "POST" });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -259,6 +268,12 @@ export async function orchestratorCreateTrack(
 export async function orchestratorListTracks(sequenceId: string): Promise<Track[]> {
   const res = await fetch(`${BASE}/v1/sequences/${sequenceId}/tracks`);
   return res.json();
+}
+
+export async function orchestratorDeleteTrack(sequenceId: string, trackId: string): Promise<{ status: string }> {
+  const res = await fetch(`${BASE}/v1/sequences/${sequenceId}/tracks/${trackId}`, { method: "DELETE" });
+  if (!res.ok && res.status !== 404) throw new Error(await res.text());
+  return { status: res.status === 404 ? "already_deleted" : "deleted" };
 }
 
 export async function orchestratorCreateClip(

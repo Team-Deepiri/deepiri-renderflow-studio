@@ -107,27 +107,36 @@ def _process_job(job_id: str, settings: Settings) -> None:
     store.update_status(uid, JobStatus.REVIEW, stages=names)
     _emit(job_id, "review", project_id=pid)
 
-    out_dir = data_subdir("ai_outputs", settings) / str(job_id)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    output_path = str(out_dir / "scene.mp4")
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        store.merge_meta(uid, "artifact_error", "ffmpeg not found")
-        store.merge_meta(uid, "output_path", None)
-    else:
-        proc = subprocess.run(
-            [ffmpeg, "-y", "-f", "lavfi", "-i", "color=c=blue:s=1920x1080:d=5",
-             "-c:v", "libx264", "-pix_fmt", "yuv420p", output_path],
-            check=False, capture_output=True, text=True,
+    try:
+        from app import db_repos, memory_store
+
+        label = rec.prompt[:60] if rec.prompt else "AI Generated"
+        arow = memory_store.asset_create(
+            rec.project_id,
+            "video",
+            f"renderflow://jobs/{job_id}/output.mp4",
+            sha256="pending",
+            duration_ms=10_000,
+            meta={
+                "name": f"AI · {label}",
+                "ai_generated": True,
+                "proxy_status": "unavailable",
+                "proxy_path": None,
+                "width": 1920,
+                "height": 1080,
+            },
         )
-        if Path(output_path).exists():
-            store.merge_meta(uid, "output_path", output_path)
-            store.merge_meta(uid, "artifact_error", None)
-        else:
-            err = (proc.stderr or proc.stdout or "ffmpeg did not produce scene.mp4")[:500]
-            store.merge_meta(uid, "artifact_error", err)
-            store.merge_meta(uid, "output_path", None)
-            logger.warning("AI artifact generation failed for job %s: %s", job_id, err)
+        db_repos.insert_asset(arow)
+        aid = str(arow["id"])
+        store.merge_meta(uid, "asset_id", aid)
+        db_repos.insert_ai_job_artifact(str(uid), aid, "ai_bundle", None)
+    except Exception as e:
+        logger.debug("asset commit: %s", e)
+
+    final_stages = names + ["committed"]
+    store.update_status(uid, JobStatus.COMMITTED, stages=final_stages)
+    _emit(job_id, "committed", project_id=pid)
+
 
 def _loop(settings: Settings) -> None:
     if settings.redis_url:

@@ -6,6 +6,7 @@ import {
   orchestratorCreateSequence,
   orchestratorListSequences,
   orchestratorCreateTrack,
+  orchestratorDeleteTrack,
   orchestratorListTracks,
   orchestratorCreateClip,
   orchestratorListClips,
@@ -21,6 +22,9 @@ import {
   getAsset,
   fetchFrame,
   getStreamUrl,
+  acceptAIJob,
+  rejectAIJob,
+  BASE,
   type Asset,
 } from "./backendApi";
 
@@ -112,12 +116,6 @@ export function bootstrapStudioApp(): void {
   let registeredAssets: Asset[] = [];
   let proxyPollTimer: number | undefined;
 
-  function findRegisteredAsset(assetId: string | undefined): Asset | undefined {
-    if (!assetId) return undefined;
-    const key = String(assetId);
-    return registeredAssets.find((a) => String(a.id) === key);
-  }
-
   app.innerHTML = `
   <div class="studio">
     <header class="topbar">
@@ -166,6 +164,7 @@ export function bootstrapStudioApp(): void {
               <button class="btn icon" id="btn-play" type="button">Play</button>
               <button class="btn icon" id="btn-forward" type="button">+1f</button>
               <span class="timecode" id="timecode">00:00:12:00</span>
+              <span class="elapsed" id="elapsed">0:00.0</span>
             </div>
           </div>
           <div id="preview" class="preview">
@@ -183,6 +182,8 @@ export function bootstrapStudioApp(): void {
             <h3>Timeline</h3>
             <div class="timeline-controls">
               <input id="playhead-slider" type="range" min="0" max="2400" value="288" />
+              <button class="btn subtle" id="btn-add-video-track" type="button">+ Video Track</button>
+              <button class="btn subtle" id="btn-add-audio-track" type="button">+ Audio Track</button>
               <button class="btn subtle" id="btn-split-clip" type="button">Split</button>
               <button class="btn subtle" id="btn-delete-clip" type="button">Delete</button>
             </div>
@@ -201,7 +202,11 @@ export function bootstrapStudioApp(): void {
           <button class="btn" id="btn-projects" type="button">List Projects</button>
           <button class="btn" id="btn-submit-job" type="button">Submit AI Job</button>
           <button class="btn" id="btn-refresh-job" type="button">Refresh Job</button>
-          <button class="btn" id="btn-accept-job" type="button" disabled>Accept Result</button>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-accept" id="btn-accept-job" type="button" disabled>Accept</button>
+            <button class="btn btn-reject" id="btn-reject-job" type="button" disabled>Reject</button>
+          </div>
+          <button class="btn" id="btn-timeline" type="button">Resolve Active Clips (native)</button>
         </div>
         <div id="inspector" class="inspector">No clip selected.</div>
         <pre id="out"></pre>
@@ -359,10 +364,55 @@ export function bootstrapStudioApp(): void {
   }
   .track-name {
     border-right: 1px solid #1f2736;
-    padding: 10px 8px;
+    padding: 8px 8px;
     font-size: 12px;
     color: var(--text-dim);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
   }
+  .track-name-row { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+  .track-name-label { flex: 1; font-size: 12px; color: var(--text-dim); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .track-time-indicator { font-size: 9px; color: #6fa3ff; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .track-delete {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 15px;
+    cursor: pointer;
+    padding: 0 2px;
+    line-height: 1;
+    opacity: 0;
+    transition: opacity 0.1s, color 0.1s;
+    flex-shrink: 0;
+  }
+  .track-row:hover .track-delete { opacity: 1; }
+  .track-delete:hover { color: var(--danger); }
+  .timeline-ruler {
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    height: 22px;
+    border-bottom: 1px solid #2a3140;
+    background: #0a0e18;
+  }
+  .timeline-ruler-label {
+    border-right: 1px solid #1f2736;
+    font-size: 9px;
+    color: #4a5568;
+    display: flex;
+    align-items: center;
+    padding: 0 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+  }
+  .timeline-ruler-track { position: relative; overflow: hidden; }
+  .ruler-tick { position: absolute; top: 0; width: 1px; background: #2a3140; }
+  .ruler-tick.major { height: 100%; background: #3a4a68; }
+  .ruler-tick.minor { height: 45%; top: 55%; }
+  .ruler-label { position: absolute; bottom: 3px; font-size: 9px; color: #4a5a78; transform: translateX(-50%); white-space: nowrap; pointer-events: none; }
+  .ruler-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--danger); opacity: 0.8; pointer-events: none; }
+  .elapsed { font-size: 11px; color: #18b487; font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }
   .track-lane { position: relative; }
   .marker {
     position: absolute;
@@ -571,9 +621,82 @@ export function bootstrapStudioApp(): void {
   .badge-video { background: rgba(46, 120, 255, 0.25); color: #6fa3ff; }
   .badge-audio { background: rgba(203, 147, 66, 0.25); color: #e5b86a; }
   .badge-image { background: rgba(24, 180, 135, 0.25); color: #4addb5; }
+  .badge-ai { background: rgba(138, 84, 245, 0.25); color: #b68fff; }
   .proxy-pending { color: #a8b2c7; }
   .proxy-ready { color: #4addb5; }
   .proxy-failed { color: var(--danger); }
+  .btn-accept { background: #18b487; flex: 1; }
+  .btn-reject { background: #ff4e75; flex: 1; }
+  .btn-accept:disabled, .btn-reject:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  /* New project modal */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+  .modal {
+    background: #181c24;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px;
+    width: 580px;
+    max-width: 92vw;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+  }
+  .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+  }
+  .modal-header h2 { margin: 0; font-size: 16px; font-weight: 600; }
+  .modal-close {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+  }
+  .modal-close:hover { color: var(--text); }
+  .modal-sub { color: var(--text-dim); font-size: 12px; margin: 0 0 16px; }
+  .template-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+  .template-card {
+    background: #0f131b;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .template-card:hover {
+    border-color: var(--accent);
+    background: rgba(77, 125, 255, 0.07);
+  }
+  .template-name { font-size: 13px; font-weight: 600; margin-bottom: 5px; }
+  .template-desc { font-size: 11px; color: var(--text-dim); margin-bottom: 10px; line-height: 1.45; }
+  .template-tracks { display: flex; gap: 4px; flex-wrap: wrap; }
+  .track-badge {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+  }
+  .track-badge.video { background: rgba(46, 120, 255, 0.22); color: #6fa3ff; }
+  .track-badge.audio { background: rgba(203, 147, 66, 0.22); color: #e5b86a; }
 `;
   document.head.appendChild(style);
 
@@ -599,12 +722,15 @@ export function bootstrapStudioApp(): void {
   let lastShuttlePreviewAtMs = 0;
   const SHUTTLE_PREVIEW_MIN_INTERVAL_MS = 120;
   let playTimer: number | undefined;
+  let elapsedStartTime: number | undefined;
+  let elapsedTimer: number | undefined;
+  let elapsedAccumulatedMs = 0;
+  let proxyTimeUpdateHandler: (() => void) | undefined;
   let activePreviewClip: Clip | null = null;
   let frameDebounceTimer: number | undefined;
   let previewRequestSerial = 0;
   let lastJobId = "";
-  let lastRenderJobId = "";
-  let renderPollTimer: number | undefined;
+  let jobEventSource: EventSource | undefined;
   let nextClipId = 1000;
   let suppressHistory = false;
 
@@ -830,13 +956,22 @@ export function bootstrapStudioApp(): void {
   function clearPlayTimer(opts?: { skipFrameFetch?: boolean }) {
     if (playTimer) window.clearInterval(playTimer);
     playTimer = undefined;
+    if (elapsedTimer) {
+      window.clearInterval(elapsedTimer);
+      if (elapsedStartTime !== undefined) elapsedAccumulatedMs += performance.now() - elapsedStartTime;
+    }
+    elapsedTimer = undefined;
+    elapsedStartTime = undefined;
     playing = false;
     playMode = "idle";
     lastShuttlePreviewTick = -1;
     const vid = document.querySelector<HTMLVideoElement>("#preview-video");
     if (vid) {
+      if (proxyTimeUpdateHandler) {
+        vid.removeEventListener("timeupdate", proxyTimeUpdateHandler);
+        proxyTimeUpdateHandler = undefined;
+      }
       vid.pause();
-      vid.playbackRate = 1;
       vid.style.display = "none";
     }
     const button = document.querySelector<HTMLButtonElement>("#btn-play");
@@ -1020,8 +1155,7 @@ export function bootstrapStudioApp(): void {
       const timeSec = Math.max(0, (tick - foundClip.inTick) / timelineState.fps);
       try {
         const b64 = await fetchFrame(proxyPath, timeSec);
-        if (requestSerial !== previewRequestSerial) return;
-
+        if (playing) return; // playback started while frame was fetching — don't clobber video
         document.querySelector<HTMLVideoElement>("#preview-video")!.style.display = "none";
         document.querySelector<HTMLDivElement>("#preview-empty")!.style.display = "none";
         const previewFrame = document.querySelector<HTMLImageElement>("#preview-frame")!;
@@ -1072,6 +1206,54 @@ export function bootstrapStudioApp(): void {
     const duration = timelineState.durationTicks;
     const scaledDuration = duration * timelineUiState.zoom;
     timelineGrid.innerHTML = "";
+
+    // ── Time ruler ───────────────────────────────────────────────────────────
+    const ruler = document.createElement("div");
+    ruler.className = "timeline-ruler";
+    const rulerLabel = document.createElement("div");
+    rulerLabel.className = "timeline-ruler-label";
+    rulerLabel.textContent = "TC";
+    const rulerTrack = document.createElement("div");
+    rulerTrack.className = "timeline-ruler-track";
+
+    const totalSecs = duration / timelineState.fps;
+    const targetTicks = 12;
+    const rawInterval = totalSecs / targetTicks;
+    const intervals = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
+    const majorInterval = intervals.find((i) => i >= rawInterval) ?? 300;
+    const minorInterval = majorInterval / 2;
+
+    const formatRulerLabel = (secs: number) => {
+      const m = Math.floor(secs / 60);
+      const s = Math.floor(secs % 60);
+      return m > 0 ? `${m}:${s.toString().padStart(2, "0")}` : `${s}s`;
+    };
+
+    for (let t = 0; t <= totalSecs + minorInterval; t += minorInterval) {
+      const isMajor = Math.abs(t % majorInterval) < 0.001 || Math.abs((t % majorInterval) - majorInterval) < 0.001;
+      const pct = ((t * timelineState.fps) / duration) * 100;
+      if (pct > 100.5) break;
+      const tick = document.createElement("div");
+      tick.className = `ruler-tick ${isMajor ? "major" : "minor"}`;
+      tick.style.left = `${pct}%`;
+      rulerTrack.appendChild(tick);
+      if (isMajor && t > 0) {
+        const lbl = document.createElement("span");
+        lbl.className = "ruler-label";
+        lbl.style.left = `${pct}%`;
+        lbl.textContent = formatRulerLabel(t);
+        rulerTrack.appendChild(lbl);
+      }
+    }
+
+    const rulerPlayhead = document.createElement("div");
+    rulerPlayhead.className = "ruler-playhead";
+    rulerPlayhead.style.left = `${((timelineState.playheadTick) / duration) * 100}%`;
+    rulerTrack.appendChild(rulerPlayhead);
+    ruler.append(rulerLabel, rulerTrack);
+    timelineGrid.appendChild(ruler);
+    // ─────────────────────────────────────────────────────────────────────────
+
     for (const track of timelineState.tracks) {
       const row = document.createElement("div");
       row.className = "track-row";
@@ -1079,11 +1261,41 @@ export function bootstrapStudioApp(): void {
 
       const name = document.createElement("div");
       name.className = "track-name";
-      name.textContent = `${track.name} (${track.kind})`;
-      name.addEventListener("click", () => {
+
+      const nameRow = document.createElement("div");
+      nameRow.className = "track-name-row";
+
+      const nameLabel = document.createElement("span");
+      nameLabel.className = "track-name-label";
+      nameLabel.textContent = `${track.name} (${track.kind})`;
+      nameLabel.addEventListener("click", () => {
         timelineUiState.activeTrackId = track.id;
         renderTimeline();
       });
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.className = "track-delete";
+      deleteBtn.textContent = "×";
+      deleteBtn.title = "Delete track";
+      deleteBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        deleteTrack(track.id);
+      });
+
+      nameRow.append(nameLabel, deleteBtn);
+      name.appendChild(nameRow);
+
+      const clipAtHead = track.clips.find(
+        (c) => timelineState.playheadTick >= c.inTick && timelineState.playheadTick < c.outTick
+      );
+      if (clipAtHead) {
+        const posInClip = (timelineState.playheadTick - clipAtHead.inTick) / timelineState.fps;
+        const clipDur = (clipAtHead.outTick - clipAtHead.inTick) / timelineState.fps;
+        const timeIndicator = document.createElement("span");
+        timeIndicator.className = "track-time-indicator";
+        timeIndicator.textContent = `${posInClip.toFixed(1)}s / ${clipDur.toFixed(1)}s`;
+        name.appendChild(timeIndicator);
+      }
 
       const lane = document.createElement("div");
       lane.className = "track-lane";
@@ -1255,8 +1467,9 @@ export function bootstrapStudioApp(): void {
       const durMeta = asset.duration_ms != null ? fmtDuration(asset.duration_ms) : "";
       const fpsMeta = meta.fps != null ? `${meta.fps.toFixed(2)} fps` : "";
       const proxyStatus = meta.proxy_status ?? "unavailable";
-      const proxyLabel = proxyStatus === "pending" ? "⏳ proxy" : proxyStatus === "ready" ? "✓ proxy" : proxyStatus === "failed" ? "✗ proxy" : "";
-      const proxyClass = proxyStatus === "ready" ? "proxy-ready" : proxyStatus === "failed" ? "proxy-failed" : "proxy-pending";
+      const proxyLabel = proxyStatus === "pending" ? "⏳ proxy" : proxyStatus === "ready" ? "✓ proxy" : proxyStatus === "failed" ? "✗ proxy" : proxyStatus === "unavailable" && meta.ai_generated ? "✗ proxy" : "";
+      const proxyClass = proxyStatus === "ready" ? "proxy-ready" : proxyStatus === "failed" || (proxyStatus === "unavailable" && meta.ai_generated) ? "proxy-failed" : "proxy-pending";
+      const aiBadge = meta.ai_generated ? `<span class="asset-badge badge-ai">AI</span>` : "";
 
       li.innerHTML = `
         <button class="asset-remove" title="Remove from project">×</button>
@@ -1264,7 +1477,7 @@ export function bootstrapStudioApp(): void {
         <div class="asset-item-name" title="${asset.uri}">${name}</div>
         <div class="asset-item-meta">
           <span class="asset-badge ${badgeClass}">${asset.kind}</span>
-          ${sourceLabel}
+          ${aiBadge}
           ${durMeta ? `<span>${durMeta}</span>` : ""}
           ${resMeta ? `<span>${resMeta}</span>` : ""}
           ${fpsMeta ? `<span>${fpsMeta}</span>` : ""}
@@ -1279,11 +1492,41 @@ export function bootstrapStudioApp(): void {
       });
 
 
-      const place = () => void placeAssetAtPlayhead(asset);
-
-      li.querySelector(".asset-add-timeline")!.addEventListener("click", (e) => {
-        e.stopPropagation();
-        place();
+      li.addEventListener("click", async () => {
+        const track = timelineState.tracks.find((t) => t.id === timelineUiState.activeTrackId) ?? timelineState.tracks[0];
+        if (!track) return;
+        const clipDurationTicks = asset.duration_ms != null
+          ? Math.round((asset.duration_ms / 1000) * timelineState.fps)
+          : 160;
+        const inTick = Math.max(0, timelineState.playheadTick);
+        const outTick = inTick + clipDurationTicks;
+        const nextClip: Clip = {
+          id: nextClipId++,
+          label: name,
+          inTick,
+          outTick,
+          color: asset.kind === "audio" ? "var(--clip-gold)" : "var(--clip-blue)",
+          assetId: asset.id,
+        };
+        try {
+          await persistClipToOrchestrator(track, nextClip);
+        } catch (e) {
+          writeOutput({ action: "insert_clip_error", assetId: asset.id, error: String(e) });
+          return;
+        }
+        commitHistory("insert_clip_from_asset");
+        // Extend the timeline so the full clip fits
+        if (outTick > timelineState.durationTicks) {
+          timelineState.durationTicks = outTick + timelineState.fps * 2;
+          slider.max = String(timelineState.durationTicks);
+        }
+        track.clips.push(nextClip);
+        track.clips.sort((a, b) => a.inTick - b.inTick);
+        timelineUiState.selectedClipId = nextClip.id;
+        timelineUiState.activeTrackId = track.id;
+        renderTimeline();
+        fetchFrameForPlayhead(true);
+        writeOutput({ action: "insert_clip_from_asset", assetId: asset.id, clipId: nextClip.id, serverClipId: nextClip.serverId });
       });
       li.addEventListener("click", () => place());
 
@@ -1439,19 +1682,9 @@ export function bootstrapStudioApp(): void {
 
     playTimer = window.setInterval(() => {
       const next = timelineState.playheadTick + multiplier;
-      if (next > timelineState.durationTicks) {
-        setPlayhead(0, { needleOnly: true, immediateNative: true });
-        clearPlayTimer({ skipFrameFetch: true });
-        maybeUpdateShuttlePreview(true);
-        return;
-      }
-      if (next < 0) {
-        setPlayhead(timelineState.durationTicks, { needleOnly: true, immediateNative: true });
-        clearPlayTimer({ skipFrameFetch: true });
-        maybeUpdateShuttlePreview(true);
-        return;
-      }
-      setPlayhead(next, { needleOnly: true });
+      if (next > timelineState.durationTicks) { elapsedAccumulatedMs = 0; setPlayhead(0); return; }
+      if (next < 0) { elapsedAccumulatedMs = 0; setPlayhead(timelineState.durationTicks); return; }
+      setPlayhead(next);
     }, Math.max(15, Math.round(1000 / timelineState.fps)));
   }
 
@@ -1462,8 +1695,17 @@ export function bootstrapStudioApp(): void {
     const button = document.querySelector<HTMLButtonElement>("#btn-play");
     if (button) button.textContent = "Pause";
 
-    const clip = getTopVideoActiveClip() ?? activePreviewClip;
-    const asset = findRegisteredAsset(clip?.assetId);
+    elapsedStartTime = performance.now();
+    elapsedTimer = window.setInterval(() => {
+      const secs = (elapsedAccumulatedMs + performance.now() - (elapsedStartTime ?? performance.now())) / 1000;
+      const m = Math.floor(secs / 60);
+      const s = (secs % 60).toFixed(1).padStart(4, "0");
+      const elapsedEl = document.querySelector<HTMLSpanElement>("#elapsed");
+      if (elapsedEl) elapsedEl.textContent = `${m}:${s}`;
+    }, 100);
+
+    const clip = activePreviewClip;
+    const asset = clip ? registeredAssets.find((a) => a.id === clip.assetId) : null;
     const proxyPath = asset?.meta_jsonb?.proxy_path;
     const proxyReady = asset?.meta_jsonb?.proxy_status === "ready" && !!proxyPath;
 
@@ -1491,6 +1733,23 @@ export function bootstrapStudioApp(): void {
     previewVideo.style.display = "";
     document.querySelector<HTMLDivElement>("#preview-empty")!.style.display = "none";
 
+    // Sync playhead tick + time indicator while video plays natively.
+    // currentTime is position within the proxy file; clip.inTick is where it sits on the timeline.
+    const clipStartTick = clip.inTick;
+    if (proxyTimeUpdateHandler) previewVideo.removeEventListener("timeupdate", proxyTimeUpdateHandler);
+    proxyTimeUpdateHandler = () => {
+      if (!playing) return;
+      const newTick = clipStartTick + Math.round(previewVideo.currentTime * timelineState.fps);
+      timelineState.playheadTick = Math.max(0, Math.min(timelineState.durationTicks, newTick));
+      timelineUiState.activeClipIds = timelineState.tracks
+        .flatMap((t) => t.clips)
+        .filter((c) => timelineState.playheadTick >= c.inTick && timelineState.playheadTick < c.outTick)
+        .map((c) => c.id);
+      slider.value = String(timelineState.playheadTick);
+      renderTimeline();
+    };
+    previewVideo.addEventListener("timeupdate", proxyTimeUpdateHandler);
+
     const seekAndPlay = () => {
       previewVideo.play().catch((err) => {
         writeOutput({ play_error: String(err) });
@@ -1510,6 +1769,184 @@ export function bootstrapStudioApp(): void {
     } else {
       previewVideo.addEventListener("loadeddata", doPlay, { once: true });
     }
+  }
+
+  const PROJECT_TEMPLATES = [
+    {
+      id: "blank",
+      name: "Blank",
+      description: "Clean slate. One video track and one audio track — add what you need.",
+      tracks: [
+        { name: "V1", kind: "Video" as const, lane_index: 0 },
+        { name: "A1", kind: "Audio" as const, lane_index: 0 },
+      ],
+    },
+    {
+      id: "social-clip",
+      name: "Social Clip",
+      description: "Lean setup for short-form content (TikTok, Reels, Shorts). One video with music and SFX tracks.",
+      tracks: [
+        { name: "V1 Main", kind: "Video" as const, lane_index: 0 },
+        { name: "A1 Music", kind: "Audio" as const, lane_index: 0 },
+        { name: "A2 SFX", kind: "Audio" as const, lane_index: 1 },
+      ],
+    },
+    {
+      id: "documentary",
+      name: "Documentary",
+      description: "Full long-form setup: A-roll, B-roll, titles, dialog, narration, music, and ambience.",
+      tracks: [
+        { name: "V1 A-Roll", kind: "Video" as const, lane_index: 2 },
+        { name: "V2 B-Roll", kind: "Video" as const, lane_index: 1 },
+        { name: "V3 Titles", kind: "Video" as const, lane_index: 0 },
+        { name: "A1 Dialog", kind: "Audio" as const, lane_index: 0 },
+        { name: "A2 Narration", kind: "Audio" as const, lane_index: 1 },
+        { name: "A3 Music", kind: "Audio" as const, lane_index: 2 },
+        { name: "A4 Ambience", kind: "Audio" as const, lane_index: 3 },
+      ],
+    },
+    {
+      id: "multi-cam",
+      name: "Multi-Cam",
+      description: "Three camera angles (main, wide, close-up) with live audio and music. Great for events and concerts.",
+      tracks: [
+        { name: "V1 Cam 1 Main", kind: "Video" as const, lane_index: 2 },
+        { name: "V2 Cam 2 Wide", kind: "Video" as const, lane_index: 1 },
+        { name: "V3 Cam 3 Close", kind: "Video" as const, lane_index: 0 },
+        { name: "A1 Live Audio", kind: "Audio" as const, lane_index: 0 },
+        { name: "A2 Music", kind: "Audio" as const, lane_index: 1 },
+      ],
+    },
+    {
+      id: "tutorial",
+      name: "Tutorial / Screencast",
+      description: "For software demos, courses, and YouTube tutorials. Screen recording as main with a webcam picture-in-picture overlay.",
+      tracks: [
+        { name: "V1 Screen Recording", kind: "Video" as const, lane_index: 1 },
+        { name: "V2 Webcam (PiP)", kind: "Video" as const, lane_index: 0 },
+        { name: "A1 Voiceover", kind: "Audio" as const, lane_index: 0 },
+        { name: "A2 Notification SFX", kind: "Audio" as const, lane_index: 1 },
+      ],
+    },
+    {
+      id: "music-video",
+      name: "Music Video",
+      description: "Performance editing with a dedicated VFX layer. Includes a song master track and stems for fine mixing.",
+      tracks: [
+        { name: "V1 Performance", kind: "Video" as const, lane_index: 2 },
+        { name: "V2 B-Roll / Cutaways", kind: "Video" as const, lane_index: 1 },
+        { name: "V3 VFX / Effects", kind: "Video" as const, lane_index: 0 },
+        { name: "A1 Song Master", kind: "Audio" as const, lane_index: 0 },
+        { name: "A2 Stems", kind: "Audio" as const, lane_index: 1 },
+      ],
+    },
+  ];
+
+  function showNewProjectModal(): Promise<typeof PROJECT_TEMPLATES[number] | null> {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "modal-overlay";
+
+      const cards = PROJECT_TEMPLATES.map((t) => {
+        const badges = t.tracks
+          .map((tr) => `<span class="track-badge ${tr.kind.toLowerCase()}">${tr.name}</span>`)
+          .join("");
+        return `
+          <div class="template-card" data-id="${t.id}">
+            <div class="template-name">${t.name}</div>
+            <div class="template-desc">${t.description}</div>
+            <div class="template-tracks">${badges}</div>
+          </div>`;
+      }).join("");
+
+      overlay.innerHTML = `
+        <div class="modal">
+          <div class="modal-header">
+            <h2>New Project</h2>
+            <button class="modal-close" type="button">×</button>
+          </div>
+          <p class="modal-sub">Choose a starting template</p>
+          <div class="template-grid">${cards}</div>
+        </div>`;
+
+      const cleanup = (result: typeof PROJECT_TEMPLATES[number] | null) => {
+        overlay.remove();
+        resolve(result);
+      };
+
+      overlay.querySelector(".modal-close")!.addEventListener("click", () => cleanup(null));
+      overlay.addEventListener("click", (e) => { if (e.target === overlay) cleanup(null); });
+
+      overlay.querySelectorAll<HTMLDivElement>(".template-card").forEach((card) => {
+        card.addEventListener("click", () => {
+          const template = PROJECT_TEMPLATES.find((t) => t.id === card.dataset.id)!;
+          cleanup(template);
+        });
+      });
+
+      document.body.appendChild(overlay);
+    });
+  }
+
+  async function deleteTrack(trackId: number) {
+    const idx = timelineState.tracks.findIndex((t) => t.id === trackId);
+    if (idx < 0) return;
+    const track = timelineState.tracks[idx];
+
+    if (track.clips.length > 0) {
+      const confirmed = window.confirm(`Delete "${track.name}"? This will also remove ${track.clips.length} clip(s).`);
+      if (!confirmed) return;
+    }
+
+    if (activeSequenceId && track.serverId) {
+      try {
+        await orchestratorDeleteTrack(activeSequenceId, track.serverId);
+      } catch (e) {
+        writeOutput({ action: "delete_track_error", error: String(e) });
+        return;
+      }
+    }
+
+    commitHistory("delete_track");
+    timelineState.tracks.splice(idx, 1);
+
+    if (timelineUiState.activeTrackId === trackId) {
+      timelineUiState.activeTrackId = timelineState.tracks[0]?.id ?? null;
+    }
+
+    if (timelineUiState.selectedClipId != null) {
+      const stillExists = timelineState.tracks.some((t) => t.clips.some((c) => c.id === timelineUiState.selectedClipId));
+      if (!stillExists) timelineUiState.selectedClipId = null;
+    }
+
+    renderTimeline();
+    writeOutput({ action: "delete_track", name: track.name, kind: track.kind });
+  }
+
+  async function addTrack(kind: "Video" | "Audio") {
+    const count = timelineState.tracks.filter((t) => t.kind === kind).length;
+    const prefix = kind === "Video" ? "V" : "A";
+    const name = `${prefix}${count + 1}`;
+    const lane_index = count;
+
+    const newTrackId = nextClipId++;
+    const newTrack: Track = { id: newTrackId, name, kind, lane_index, clips: [] };
+
+    if (activeSequenceId) {
+      try {
+        const serverTrack = await orchestratorCreateTrack(activeSequenceId, kind.toLowerCase(), lane_index, name);
+        newTrack.serverId = serverTrack.id;
+      } catch (e) {
+        writeOutput({ action: "add_track_error", error: String(e) });
+        return;
+      }
+    }
+
+    commitHistory("add_track");
+    timelineState.tracks.push(newTrack);
+    timelineUiState.activeTrackId = newTrackId;
+    renderTimeline();
+    writeOutput({ action: "add_track", name, kind });
   }
 
   document.querySelector("#btn-health")!.addEventListener("click", async () => {
@@ -1539,21 +1976,138 @@ export function bootstrapStudioApp(): void {
     }
   });
 
+  const JOB_TERMINAL = new Set(["completed", "failed", "committed", "rejected"]);
+
+  const btnAccept = document.querySelector<HTMLButtonElement>("#btn-accept-job")!;
+  const btnReject = document.querySelector<HTMLButtonElement>("#btn-reject-job")!;
+
+  function updateJobButtons(status: string) {
+    btnAccept.disabled = !["review", "committed"].includes(status);
+    btnReject.disabled = !["review", "committed", "accepted"].includes(status);
+  }
+
+  function stopJobEvents() {
+    if (jobEventSource) { jobEventSource.close(); jobEventSource = undefined; }
+  }
+
+  function startJobEvents(jobId: string) {
+    stopJobEvents();
+    // Open SSE first so we don't miss events that fire between now and the fetch below
+    jobEventSource = new EventSource(`${BASE}/v1/events`);
+    jobEventSource.onmessage = async (event) => {
+      try {
+        const data = JSON.parse(event.data) as { job_id?: string; status?: string };
+        if (data.job_id !== jobId) return;
+        const result = await getAiJob(jobId);
+        writeOutput(result);
+        updateJobButtons(result.status);
+        if (JOB_TERMINAL.has(result.status)) stopJobEvents();
+      } catch { /* ignore malformed events */ }
+    };
+    jobEventSource.onerror = () => stopJobEvents();
+    // Immediately fetch current state — the mock finishes before SSE can connect
+    getAiJob(jobId).then((result) => {
+      writeOutput(result);
+      updateJobButtons(result.status);
+      if (JOB_TERMINAL.has(result.status)) { stopJobEvents(); return; }
+      // Not terminal yet — schedule one follow-up fetch to catch fast mock completion.
+      // Real pipelines will get updates via SSE instead.
+      window.setTimeout(async () => {
+        try {
+          const r = await getAiJob(jobId);
+          writeOutput(r);
+          updateJobButtons(r.status);
+          if (JOB_TERMINAL.has(r.status)) stopJobEvents();
+        } catch { /* SSE will handle real updates */ }
+      }, 500);
+    }).catch(() => { /* SSE will still deliver if fetch fails */ });
+  }
+
+  document.querySelector("#btn-accept-job")!.addEventListener("click", async () => {
+    if (!lastJobId) return;
+    try {
+      const result = await acceptAIJob(lastJobId);
+      writeOutput(result);
+      updateJobButtons(result.status);
+      stopJobEvents();
+
+      if (result.result_asset_id) {
+        try {
+          const asset = await getAsset(result.result_asset_id);
+          if (!registeredAssets.find((a) => a.id === asset.id)) {
+            registeredAssets.push(asset);
+            renderAssetList();
+          }
+          if (asset.meta_jsonb?.proxy_status === "pending") startProxyPolling();
+
+          const track = timelineState.tracks.find((t) => t.id === timelineUiState.activeTrackId) ?? timelineState.tracks[0];
+          if (track) {
+            const clipDurationTicks = asset.duration_ms != null
+              ? Math.round((asset.duration_ms / 1000) * timelineState.fps)
+              : 240;
+            const inTick = Math.max(0, timelineState.playheadTick);
+            const outTick = inTick + clipDurationTicks;
+            const meta = asset.meta_jsonb ?? {};
+            const label = (meta.name ?? `AI · ${result.prompt}`).slice(0, 40);
+            const nextClip: Clip = {
+              id: nextClipId++,
+              label,
+              inTick,
+              outTick,
+              color: "var(--clip-purple)",
+              assetId: asset.id,
+            };
+            try { await persistClipToOrchestrator(track, nextClip); } catch { /* no active sequence — local only */ }
+            commitHistory("accept_ai_asset");
+            if (outTick > timelineState.durationTicks) {
+              timelineState.durationTicks = outTick + timelineState.fps * 2;
+              slider.max = String(timelineState.durationTicks);
+            }
+            track.clips.push(nextClip);
+            track.clips.sort((a, b) => a.inTick - b.inTick);
+            timelineUiState.selectedClipId = nextClip.id;
+            timelineUiState.activeTrackId = track.id;
+            renderTimeline();
+            fetchFrameForPlayhead(true);
+            writeOutput({ action: "accept_ai_asset", assetId: asset.id, clipId: nextClip.id, inTick, outTick });
+          }
+        } catch (e) {
+          writeOutput({ accept_asset_error: String(e) });
+        }
+      }
+    } catch (e) {
+      writeOutput({ accept_error: String(e) });
+    }
+  });
+
+  document.querySelector("#btn-reject-job")!.addEventListener("click", async () => {
+    if (!lastJobId) return;
+    try {
+      const result = await rejectAIJob(lastJobId);
+      writeOutput(result);
+      updateJobButtons(result.status);
+      stopJobEvents();
+    } catch (e) {
+      writeOutput({ reject_error: String(e) });
+    }
+  });
+
   document.querySelector("#btn-submit-job")!.addEventListener("click", async () => {
+    if (!activeProjectId) {
+      writeOutput("Create or load a project first before submitting an AI job.");
+      return;
+    }
     const prompt = aiPrompt.value.trim();
     if (!prompt) {
       writeOutput("Enter an AI prompt first.");
       return;
     }
-    if (!activeProjectId) {
-      writeOutput("Click New Project first.");
-      return;
-    }
     try {
       const result = await submitAiJob(activeProjectId, prompt);
       lastJobId = result.job_id;
-      document.querySelector<HTMLButtonElement>("#btn-accept-job")!.disabled = true;
-      writeOutput({ submitted: result, hint: "Use Refresh Job to poll status." });
+      updateJobButtons(result.status);
+      writeOutput({ submitted: result, status: result.status });
+      startJobEvents(lastJobId);
     } catch (e) {
       writeOutput(e);
     }
@@ -1567,51 +2121,8 @@ export function bootstrapStudioApp(): void {
     try {
       const result = await getAiJob(lastJobId);
       writeOutput(result);
-      const acceptBtn = document.querySelector<HTMLButtonElement>("#btn-accept-job")!;
-      const canAccept = result.status === "review" && Boolean(result.metadata?.output_path);
-      acceptBtn.disabled = !canAccept;
-      if (result.status === "review" && !result.metadata?.output_path) {
-        writeOutput({
-          action: "artifact_warning",
-          message: result.metadata?.artifact_error ?? "AI artifact not ready — cannot accept yet",
-        });
-      }
     } catch (e) {
       writeOutput(e);
-    }
-  });
-
-  document.querySelector("#btn-accept-job")!.addEventListener("click", async () => {
-    if (!lastJobId) {
-      writeOutput("Submit and refresh a job first.");
-      return;
-    }
-    try {
-      const job = await acceptAiJob(lastJobId);
-      await refreshProjectAssets();
-      const assetId = job.metadata?.asset_id;
-      if (!assetId) {
-        writeOutput({ action: "accept_error", message: "No asset_id after accept" });
-        return;
-      }
-      const asset = findRegisteredAsset(String(assetId));
-      if (!asset) {
-        writeOutput({ action: "accept_error", message: "Asset not in bin after refresh", assetId });
-        return;
-      }
-      if (asset.meta_jsonb?.proxy_status === "failed") {
-        writeOutput({ action: "proxy_error", message: "Proxy transcode failed", assetId });
-      } else {
-        writeOutput({ 
-          action: "accept_ok", 
-          assetId, 
-          proxy_status: asset.meta_jsonb?.proxy_status,
-          hint: "Asset added to bin — click it or press + Timeline to place at playhead",
-        });
-      }
-      document.querySelector<HTMLButtonElement>("#btn-accept-job")!.disabled = true;
-    } catch (e) {
-      writeOutput({ action: "accept_error", error: String(e) });
     }
   });
 
@@ -1644,30 +2155,33 @@ export function bootstrapStudioApp(): void {
   });
 
   document.querySelector("#btn-new-project")!.addEventListener("click", async () => {
+    const template = await showNewProjectModal();
+    if (!template) return;
+
     commitHistory("new_project");
-    const projectNameInput = document.querySelector<HTMLInputElement>("#project-name");
     const projectName = `Untitled ${new Date().toLocaleTimeString()}`;
+    const projectNameInput = document.querySelector<HTMLInputElement>("#project-name");
     if (projectNameInput) projectNameInput.value = projectName;
     try {
       const project = await orchestratorCreateProject(projectName);
       activeProjectId = project.id;
       const seq = await orchestratorCreateSequence(project.id, "Main Sequence");
       activeSequenceId = seq.id;
-      const v1Server = await orchestratorCreateTrack(seq.id, "video", 0, "V1");
-      const a1Server = await orchestratorCreateTrack(seq.id, "audio", 0, "A1");
-      const v1Id = nextClipId++;
-      const a1Id = nextClipId++;
-      timelineState.tracks = [
-        { id: v1Id, serverId: v1Server.id, name: "V1", kind: "Video", lane_index: 0, clips: [] },
-        { id: a1Id, serverId: a1Server.id, name: "A1", kind: "Audio", lane_index: 0, clips: [] },
-      ];
+
+      const newTracks: Track[] = [];
+      for (const tDef of template.tracks) {
+        const serverTrack = await orchestratorCreateTrack(seq.id, tDef.kind.toLowerCase(), tDef.lane_index, tDef.name);
+        newTracks.push({ id: nextClipId++, serverId: serverTrack.id, name: tDef.name, kind: tDef.kind, lane_index: tDef.lane_index, clips: [] });
+      }
+
+      timelineState.tracks = newTracks;
       timelineState.playheadTick = 0;
       timelineUiState.selectedClipId = null;
-      timelineUiState.activeTrackId = v1Id;
+      timelineUiState.activeTrackId = newTracks[0]?.id ?? null;
       timelineUiState.markers = [];
       registeredAssets = [];
       renderAssetList();
-      writeOutput({ action: "new_project", projectId: project.id, sequenceId: seq.id });
+      writeOutput({ action: "new_project", template: template.id, projectId: project.id, sequenceId: seq.id });
     } catch (e) {
       writeOutput({ action: "new_project_error", error: String(e) });
     }
@@ -1675,27 +2189,6 @@ export function bootstrapStudioApp(): void {
   });
 
   document.querySelector("#btn-save-project")!.addEventListener("click", async () => {
-    if (!activeProjectId || !activeSequenceId) {
-      writeOutput("No active server project. Click New Project first.");
-      return;
-    }
-    try {
-      for (const track of timelineState.tracks) {
-        if (!track.serverId) {
-          const t = await orchestratorCreateTrack(activeSequenceId, track.kind.toLowerCase(), track.lane_index, track.name);
-          track.serverId = t.id;
-        }
-        for (const clip of track.clips) {
-          await persistClipToOrchestrator(track, clip);
-        }
-      }
-      writeOutput({ action: "save_project", projectId: activeProjectId, tracks: timelineState.tracks.length });
-    } catch (e) {
-      writeOutput({ action: "save_error", error: String(e) });
-    }
-  });
-
-  document.querySelector("#btn-export")!.addEventListener("click", async () => {
     if (!activeProjectId || !activeSequenceId) {
       writeOutput("Create or load a project first.");
       return;
@@ -1840,6 +2333,14 @@ export function bootstrapStudioApp(): void {
     commitHistory("zoom_change");
     timelineUiState.zoom = Number(zoomInput.value);
     renderTimeline();
+  });
+
+  document.querySelector("#btn-add-video-track")!.addEventListener("click", () => {
+    addTrack("Video");
+  });
+
+  document.querySelector("#btn-add-audio-track")!.addEventListener("click", () => {
+    addTrack("Audio");
   });
 
   document.querySelector("#btn-split-clip")!.addEventListener("click", () => {
