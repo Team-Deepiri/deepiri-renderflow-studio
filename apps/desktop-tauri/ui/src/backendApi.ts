@@ -51,6 +51,7 @@ export interface AIJob {
   prompt: string;
   status: string;
   stages: string[];
+  result_asset_id?: string;
   metadata: {
     asset_id?: string;
     output_path?: string;
