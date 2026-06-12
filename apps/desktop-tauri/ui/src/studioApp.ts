@@ -731,6 +731,8 @@ export function bootstrapStudioApp(): void {
   let previewRequestSerial = 0;
   let lastJobId = "";
   let jobEventSource: EventSource | undefined;
+  let renderPollTimer: number | undefined;
+  let lastRenderJobId = "";
   let nextClipId = 1000;
   let suppressHistory = false;
 
@@ -772,6 +774,11 @@ export function bootstrapStudioApp(): void {
     return out;
   }
   
+  function findRegisteredAsset(assetId: string | undefined): Asset | undefined {
+    if (!assetId) return undefined;
+    return registeredAssets.find((a) => a.id === assetId);
+  }
+
   // Helper to intentionally pick the top video layer when clips overlap
   function getTopVideoActiveClip(): Clip | undefined {
     const refs = getActiveClipRefsOrdered();
@@ -1528,7 +1535,7 @@ export function bootstrapStudioApp(): void {
         fetchFrameForPlayhead(true);
         writeOutput({ action: "insert_clip_from_asset", assetId: asset.id, clipId: nextClip.id, serverClipId: nextClip.serverId });
       });
-      li.addEventListener("click", () => place());
+      li.addEventListener("click", () => placeAssetAtPlayhead(asset));
 
       assetList.appendChild(li);
     }
