@@ -22,6 +22,7 @@ import {
   fetchFrame,
   getStreamUrl,
   type Asset,
+  type Project,
 } from "./backendApi";
 
 export function bootstrapStudioApp(): void {
@@ -428,6 +429,9 @@ export function bootstrapStudioApp(): void {
   .btn.subtle { background: #212b3f; border-color: #34405a; }
   .btn.narrow { padding: 7px 10px; }
   .btn.icon { min-width: 56px; }
+  /* Vertical list of project buttons rendered by "List Projects". */
+  .project-list { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
+  .project-list .btn { text-align: left; }
   #playhead-slider { width: 56%; }
   .timecode {
     min-width: 110px;
@@ -1378,6 +1382,65 @@ export function bootstrapStudioApp(): void {
     out.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
   }
 
+  async function openProject(project: Project): Promise<void> {
+    try {
+      activeProjectId = project.id;
+      const sequences = (await orchestratorListSequences(project.id)) as any[];
+      if (!sequences.length) {
+        writeOutput("Project has no sequences."); return; }
+      const seq = sequences[0];
+      activeSequenceId = seq.id;
+
+      const tracks = await orchestratorListTracks(seq.id);
+      const clips = await orchestratorListClips(seq.id);
+
+      let nextId = Date.now();
+      timelineState.tracks = tracks.map((t) => ({
+        id: nextId++,                 
+        serverId: t.id,               
+        name: t.name,
+        kind: (t.track_type === "audio" ? "Audio" : "Video") as "Video" | "Audio",
+        lane_index: t.lane_index,
+        clips: clips
+          .filter((c: any) => c.track_id === t.id)
+          .map((c: any) => ({
+            id: nextId++,             
+            serverId: c.id,           
+            assetId: c.asset_id,      
+            label: c.name || "Clip",
+            inTick: c.in_tick,        
+            outTick: c.out_tick,      
+            color: t.track_type === "audio" ? "var(--clip-gold)" : "var(--clip-blue)",
+          })),
+      }));
+
+      timelineUiState.activeTrackId = timelineState.tracks[0]?.id ?? null;
+
+      // Grow the timeline to fit all loaded clips
+      const maxOutTick = timelineState.tracks
+        .flatMap((t) => t.clips)
+        .reduce((m, c) => Math.max(m, c.outTick), 0);
+      if (maxOutTick > timelineState.durationTicks) {
+        timelineState.durationTicks = maxOutTick + timelineState.fps * 2;
+      }
+
+      const projectNameInput = document.querySelector<HTMLInputElement>("#project-name");
+      if (projectNameInput) projectNameInput.value = project.name;
+      await refreshProjectAssets();
+      renderTimeline();
+      writeOutput({
+        action: "load_project",
+        projectId: project.id,
+        tracks: tracks.length,
+        clips: clips.length,
+        assets: registeredAssets.length,
+      });
+      resolveActiveAtPlayhead();
+    } catch (e) {
+      writeOutput({ action: "load_error", error: String(e) });
+    }
+  }
+
   function splitSelectedClip() {
     if (timelineUiState.selectedClipId == null) return;
     const ref = getClipById(timelineUiState.selectedClipId);
@@ -1523,10 +1586,24 @@ export function bootstrapStudioApp(): void {
 
   document.querySelector("#btn-projects")!.addEventListener("click", async () => {
     try {
-      const r = await orchestratorListProjects();
-      writeOutput(r);
+      const projList = await orchestratorListProjects();
+      if (!projList.items.length) {
+        writeOutput("No projects on orchestrator.");
+        return;
+      }
+      out.textContent = "";
+      const list = document.createElement("div");
+      list.className = "project-list";
+      for (const p of projList.items) {
+        const btn = document.createElement("button");
+        btn.className = "btn";
+        btn.textContent = p.name;
+        btn.addEventListener("click", () => openProject(p));
+        list.appendChild(btn);
+      }
+      out.appendChild(list);
     } catch (e) {
-      writeOutput(e);
+      writeOutput(String(e));
     }
   });
 
@@ -1730,54 +1807,7 @@ export function bootstrapStudioApp(): void {
         writeOutput("No projects found on orchestrator.");
         return;
       }
-      writeOutput({ available_projects: result.items.map((p, i) => `${i + 1}. ${p.name} (${p.id})`) });
-      const project = result.items[0];
-
-      activeProjectId = project.id;
-      const sequences = await orchestratorListSequences(project.id) as any[];
-      if (!sequences.length) { writeOutput("Project has no sequences."); return; }
-      const seq = sequences[0];
-      activeSequenceId = seq.id;
-
-      const tracks = await orchestratorListTracks(seq.id);
-      const clips = await orchestratorListClips(seq.id);
-
-      let nextId = Date.now();
-      timelineState.tracks = tracks.map((t) => ({
-        id: nextId++,
-        serverId: t.id,
-        name: t.name,
-        kind: (t.track_type === "audio" ? "Audio" : "Video") as "Video" | "Audio",
-        lane_index: t.lane_index,
-        clips: clips
-          .filter((c: any) => c.track_id === t.id)
-          .map((c: any) => ({
-            id: nextId++,
-            serverId: c.id,
-            assetId: c.asset_id,
-            label: c.name || "Clip",
-            inTick: c.in_tick,
-            outTick: c.out_tick,
-            color: t.track_type === "audio" ? "var(--clip-gold)" : "var(--clip-blue)",
-          })),
-      }));
-
-      timelineUiState.activeTrackId = timelineState.tracks[0]?.id ?? null;
-
-      // Grow the timeline to fit all loaded clips
-      const maxOutTick = timelineState.tracks
-        .flatMap((t) => t.clips)
-        .reduce((m, c) => Math.max(m, c.outTick), 0);
-      if (maxOutTick > timelineState.durationTicks) {
-        timelineState.durationTicks = maxOutTick + timelineState.fps * 2;
-      }
-
-      const projectNameInput = document.querySelector<HTMLInputElement>("#project-name");
-      if (projectNameInput) projectNameInput.value = project.name;
-      await refreshProjectAssets();
-      renderTimeline();
-      writeOutput({ action: "load_project", projectId: project.id, tracks: tracks.length, clips: clips.length, assets: registeredAssets.length });
-      resolveActiveAtPlayhead()
+      await openProject(result.items[0]);
     } catch (e) {
       writeOutput({ action: "load_error", error: String(e) });
     }
