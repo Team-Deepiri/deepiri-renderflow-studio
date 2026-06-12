@@ -4,10 +4,17 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
 
+from app import db_repos
 from app.api.schemas.studio import AiJobCreate, AiJobOut
 from app.job_store import JobStatus, store
 from app.runtime_state import get_settings
 from app.worker_loop import cancel_job, enqueue_job, worker_stats
+from app.media import ffmpeg as ffmpeg_util
+from app.paths import data_subdir
+from app.services import studio
+
+from pathlib import Path
+import threading
 
 router = APIRouter()
 

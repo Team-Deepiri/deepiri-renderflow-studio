@@ -117,6 +117,9 @@ jobs:
         run: poetry install --no-interaction --no-ansi
         working-directory: services/orchestrator
 
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Run orchestrator tests
         run: poetry run pytest
         working-directory: services/orchestrator

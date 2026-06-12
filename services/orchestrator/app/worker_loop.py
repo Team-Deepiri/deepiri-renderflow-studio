@@ -12,6 +12,10 @@ from app.job_store import JobStatus, store
 from renderflow_queue import REDIS_KEY_JOBS, RedisJobQueue
 from app.stage_runner import run_audio_stages, run_scene_stages
 from app.api.utils import get_event_emitter
+from app.paths import data_subdir
+
+from pathlib import Path
+import subprocess, shutil
 
 logger = logging.getLogger(__name__)
 

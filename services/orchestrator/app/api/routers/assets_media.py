@@ -12,9 +12,11 @@ from app.api.schemas.studio import AssetCreate, AssetImportBody, FrameBody, Prob
 from app.media import ffmpeg as ffmpeg_util
 from app.services import studio
 
+from app.paths import data_subdir
+
 router = APIRouter()
 
-_PROXY_DIR = Path(__file__).parent.parent.parent.parent / "data" / "proxies"
+_PROXY_DIR = data_subdir("proxies")
 
 
 @router.post("/v1/projects/{project_id}/assets", tags=["assets"])
@@ -40,7 +42,7 @@ def import_asset(project_id: UUID, body: AssetImportBody) -> dict[str, Any]:
     else:
         kind = "image"
 
-    duration_ms: int | None = None
+    duration_ms: int | None = 5000
     if fmt.get("ok") and fmt.get("duration_seconds"):
         duration_ms = int(float(fmt["duration_seconds"]) * 1000)
 
