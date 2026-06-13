@@ -107,36 +107,6 @@ def _process_job(job_id: str, settings: Settings) -> None:
     store.update_status(uid, JobStatus.REVIEW, stages=names)
     _emit(job_id, "review", project_id=pid)
 
-    try:
-        from app import db_repos, memory_store
-
-        label = rec.prompt[:60] if rec.prompt else "AI Generated"
-        arow = memory_store.asset_create(
-            rec.project_id,
-            "video",
-            f"renderflow://jobs/{job_id}/output.mp4",
-            sha256="pending",
-            duration_ms=10_000,
-            meta={
-                "name": f"AI · {label}",
-                "ai_generated": True,
-                "proxy_status": "unavailable",
-                "proxy_path": None,
-                "width": 1920,
-                "height": 1080,
-            },
-        )
-        db_repos.insert_asset(arow)
-        aid = str(arow["id"])
-        store.merge_meta(uid, "asset_id", aid)
-        db_repos.insert_ai_job_artifact(str(uid), aid, "ai_bundle", None)
-    except Exception as e:
-        logger.debug("asset commit: %s", e)
-
-    final_stages = names + ["committed"]
-    store.update_status(uid, JobStatus.COMMITTED, stages=final_stages)
-    _emit(job_id, "committed", project_id=pid)
-
 
 def _loop(settings: Settings) -> None:
     if settings.redis_url:
