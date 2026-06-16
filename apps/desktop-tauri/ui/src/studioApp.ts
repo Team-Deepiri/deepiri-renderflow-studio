@@ -141,7 +141,29 @@ export function bootstrapStudioApp(): void {
     </header>
 
     <div class="workspace" id="workspace">
-      <aside class="panel left">
+      <nav class="activity-bar" id="activity-bar">
+        <button class="activity-btn active" id="act-explorer" title="Project Explorer" type="button">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <rect x="3" y="3" width="6" height="14" rx="1.5" fill="currentColor" opacity=".5"/>
+            <rect x="11" y="3" width="6" height="6" rx="1.5" fill="currentColor"/>
+            <rect x="11" y="11" width="6" height="6" rx="1.5" fill="currentColor" opacity=".7"/>
+          </svg>
+        </button>
+        <button class="activity-btn" id="act-ai" title="AI Copilot" type="button">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M7 10h6M10 7v6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <div class="activity-spacer"></div>
+        <button class="activity-btn" id="act-devtools" title="Developer Tools (Ctrl+Shift+D)" type="button">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <path d="M6 7l-3 3 3 3M14 7l3 3-3 3M11 5l-2 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </nav>
+
+      <aside class="panel left" id="panel-explorer">
         <div class="panel-title">Project Explorer</div>
         <div class="project-meta">
           <label>Name <input id="project-name" value="Brand Film v01" /></label>
@@ -161,6 +183,25 @@ export function bootstrapStudioApp(): void {
             <button class="btn narrow subtle" id="btn-probe" type="button">Probe</button>
           </div>
         </div>
+      </aside>
+
+      <aside class="panel left ai-hidden" id="ai-panel">
+        <div class="panel-title">AI Copilot</div>
+        <div class="ai-mode">Manual path parity: every action has a no-AI equivalent.</div>
+        <textarea id="ai-prompt" rows="4" placeholder="Describe a scene, shot list, or generation request..."></textarea>
+        <div class="stack">
+          <button class="btn" id="btn-health" type="button">Orchestrator Health</button>
+          <button class="btn" id="btn-projects" type="button">List Projects</button>
+          <button class="btn" id="btn-submit-job" type="button">Submit AI Job</button>
+          <button class="btn" id="btn-refresh-job" type="button">Refresh Job</button>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-accept" id="btn-accept-job" type="button" disabled>Accept</button>
+            <button class="btn btn-reject" id="btn-reject-job" type="button" disabled>Reject</button>
+          </div>
+          <button class="btn" id="btn-timeline" type="button">Resolve Active Clips (native)</button>
+        </div>
+        <div id="inspector" class="inspector">No clip selected.</div>
+        <pre id="out"></pre>
       </aside>
 
       <main class="center">
@@ -200,25 +241,6 @@ export function bootstrapStudioApp(): void {
           <div id="timeline-grid" class="timeline-grid"></div>
         </section>
       </main>
-
-      <aside class="panel right" id="ai-panel">
-        <div class="panel-title">AI Copilot</div>
-        <div class="ai-mode">Manual path parity: every action has a no-AI equivalent.</div>
-        <textarea id="ai-prompt" rows="4" placeholder="Describe a scene, shot list, or generation request..."></textarea>
-        <div class="stack">
-          <button class="btn" id="btn-health" type="button">Orchestrator Health</button>
-          <button class="btn" id="btn-projects" type="button">List Projects</button>
-          <button class="btn" id="btn-submit-job" type="button">Submit AI Job</button>
-          <button class="btn" id="btn-refresh-job" type="button">Refresh Job</button>
-          <div style="display:flex;gap:6px">
-            <button class="btn btn-accept" id="btn-accept-job" type="button" disabled>Accept</button>
-            <button class="btn btn-reject" id="btn-reject-job" type="button" disabled>Reject</button>
-          </div>
-          <button class="btn" id="btn-timeline" type="button">Resolve Active Clips (native)</button>
-        </div>
-        <div id="inspector" class="inspector">No clip selected.</div>
-        <pre id="out"></pre>
-      </aside>
     </div>
   </div>
 `;
@@ -275,10 +297,38 @@ export function bootstrapStudioApp(): void {
   .toolbar { display: flex; gap: 8px; }
   .workspace {
     display: grid;
-    grid-template-columns: 280px 1fr 320px;
+    grid-template-columns: var(--activity-bar-width) var(--sidebar-width) 1fr;
+    grid-template-rows: 1fr auto;
     min-height: calc(100vh - 57px);
   }
-  .workspace.ai-hidden { grid-template-columns: 280px 1fr; }
+  .workspace.panel-hidden { grid-template-columns: var(--activity-bar-width) 0 1fr; }
+  .activity-bar {
+    grid-row: 1 / 3;
+    background: var(--bg);
+    border-right: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 8px 0;
+    gap: 4px;
+    z-index: 10;
+  }
+  .activity-btn {
+    width: 36px;
+    height: 36px;
+    border: none;
+    border-radius: 8px;
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    transition: background 0.15s, color 0.15s;
+  }
+  .activity-btn:hover { background: var(--bg-raised); color: var(--text-dim); }
+  .activity-btn.active { background: var(--accent-glow); color: var(--accent); }
+  .activity-spacer { flex: 1; }
+  .panel.ai-hidden { display: none; }
   .panel, .center {
     border-right: 1px solid var(--border-subtle);
     background: var(--bg-soft);
@@ -754,7 +804,6 @@ export function bootstrapStudioApp(): void {
   const previewEmpty = document.querySelector<HTMLDivElement>("#preview-empty")!;
   const previewStage = document.querySelector<HTMLDivElement>("#preview-stage")!;
 
-  let aiVisible = true;
   let playing = false;
   type PlayMode = "idle" | "stream" | "interval";
   let playMode: PlayMode = "idle";
@@ -2246,13 +2295,26 @@ export function bootstrapStudioApp(): void {
     }
   });
 
-  document.querySelector("#btn-toggle-ai")!.addEventListener("click", () => {
-    aiVisible = !aiVisible;
-    aiPanel.style.display = aiVisible ? "block" : "none";
-    workspace.classList.toggle("ai-hidden", !aiVisible);
-    const button = document.querySelector<HTMLButtonElement>("#btn-toggle-ai")!;
-    button.textContent = aiVisible ? "Hide AI Panel" : "Show AI Panel";
-  });
+  let activePanelId: "explorer" | "ai" | null = "explorer";
+  const panelExplorer = document.querySelector<HTMLElement>("#panel-explorer")!;
+  const actExplorer = document.querySelector<HTMLButtonElement>("#act-explorer")!;
+  const actAi = document.querySelector<HTMLButtonElement>("#act-ai")!;
+
+  function setActivePanel(id: "explorer" | "ai" | null) {
+    activePanelId = id;
+    panelExplorer.classList.toggle("ai-hidden", id !== "explorer");
+    aiPanel.classList.toggle("ai-hidden", id !== "ai");
+    actExplorer.classList.toggle("active", id === "explorer");
+    actAi.classList.toggle("active", id === "ai");
+    workspace.classList.toggle("panel-hidden", id === null);
+  }
+
+  actExplorer.addEventListener("click", () =>
+    setActivePanel(activePanelId === "explorer" ? null : "explorer")
+  );
+  actAi.addEventListener("click", () =>
+    setActivePanel(activePanelId === "ai" ? null : "ai")
+  );
 
   document.querySelector("#btn-toggle-theme")!.addEventListener("click", () => {
     const current = document.body.style.filter;
