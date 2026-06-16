@@ -129,7 +129,6 @@ export function bootstrapStudioApp(): void {
           <span class="brand-text">Deepiri <span class="brand-sub">Renderflow</span></span>
         </div>
       <div class="toolbar">
-        <button class="btn subtle" id="btn-toggle-ai" type="button">Hide AI Panel</button>
         <button class="btn subtle" id="btn-toggle-theme" type="button">Theme</button>
         <button class="btn subtle" id="btn-undo" type="button">Undo</button>
         <button class="btn subtle" id="btn-redo" type="button">Redo</button>
@@ -370,14 +369,22 @@ export function bootstrapStudioApp(): void {
     align-items: center;
     gap: 10px;
   }
-  .monitor-head h3, .timeline-head h3 { margin: 0; font-size: 14px; }
+  .monitor-head h3, .timeline-head h3 {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
   .preview {
     margin-top: 10px;
-    border: 1px dashed #536180;
+    border: 1px solid var(--border);
     border-radius: 10px;
     position: relative;
     overflow: hidden;
-    background: #0d1119;
+    background: #080a10;
+    box-shadow: inset 0 0 30px rgba(0,0,0,0.4);
   }
   .preview-stage {
     position: absolute;
@@ -437,7 +444,14 @@ export function bootstrapStudioApp(): void {
     background: #0d1119;
     user-select: none;
   }
-  .hint { font-size: 11px; color: var(--text-dim); margin-top: 6px; }
+  .hint {
+    font-size: 10px;
+    color: var(--text-muted);
+    padding: 4px 12px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border-subtle);
+    letter-spacing: 0.3px;
+  }
   .track-row {
     display: grid;
     grid-template-columns: 110px 1fr;
@@ -2359,9 +2373,6 @@ export function bootstrapStudioApp(): void {
     setActivePanel(activePanelId === "ai" ? null : "ai")
   );
 
-  document.querySelector<HTMLButtonElement>("#btn-toggle-ai")!.addEventListener("click", () => {
-    setActivePanel(activePanelId === "ai" ? "explorer" : "ai");
-  });
 
   const devtoolsDrawer = document.querySelector<HTMLDivElement>("#devtools-drawer")!;
   const actDevtools = document.querySelector<HTMLButtonElement>("#act-devtools")!;
