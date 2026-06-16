@@ -155,12 +155,6 @@ export function bootstrapStudioApp(): void {
             <path d="M7 10h6M10 7v6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
           </svg>
         </button>
-        <div class="activity-spacer"></div>
-        <button class="activity-btn" id="act-devtools" title="Developer Tools (Ctrl+Shift+D)" type="button">
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-            <path d="M6 7l-3 3 3 3M14 7l3 3-3 3M11 5l-2 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </button>
       </nav>
 
       <aside class="panel left" id="panel-explorer">
@@ -333,7 +327,7 @@ export function bootstrapStudioApp(): void {
     border-right: 1px solid var(--border-subtle);
     background: var(--bg-soft);
   }
-  .panel { padding: 14px 12px; overflow-y: auto; }
+  .panel { padding: 14px 12px; overflow-y: auto; overflow-x: hidden; }
   .panel-title {
     font-size: 10px;
     font-weight: 700;
@@ -2315,6 +2309,10 @@ export function bootstrapStudioApp(): void {
   actAi.addEventListener("click", () =>
     setActivePanel(activePanelId === "ai" ? null : "ai")
   );
+
+  document.querySelector<HTMLButtonElement>("#btn-toggle-ai")!.addEventListener("click", () => {
+    setActivePanel(activePanelId === "ai" ? "explorer" : "ai");
+  });
 
   document.querySelector("#btn-toggle-theme")!.addEventListener("click", () => {
     const current = document.body.style.filter;
