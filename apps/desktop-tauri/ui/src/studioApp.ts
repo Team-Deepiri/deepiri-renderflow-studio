@@ -155,6 +155,12 @@ export function bootstrapStudioApp(): void {
             <path d="M7 10h6M10 7v6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
           </svg>
         </button>
+        <div class="activity-spacer"></div>
+        <button class="activity-btn" id="act-devtools" title="Developer Tools (Ctrl+Shift+D)" type="button">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <path d="M6 7l-3 3 3 3M14 7l3 3-3 3M11 5l-2 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
       </nav>
 
       <aside class="panel left" id="panel-explorer">
@@ -195,7 +201,6 @@ export function bootstrapStudioApp(): void {
           <button class="btn" id="btn-timeline" type="button">Resolve Active Clips (native)</button>
         </div>
         <div id="inspector" class="inspector">No clip selected.</div>
-        <pre id="out"></pre>
       </aside>
 
       <main class="center">
@@ -235,6 +240,13 @@ export function bootstrapStudioApp(): void {
           <div id="timeline-grid" class="timeline-grid"></div>
         </section>
       </main>
+      <div class="devtools-drawer" id="devtools-drawer" style="display:none">
+        <div class="devtools-header">
+          <span>Developer Tools — Endpoint Log</span>
+          <button class="btn subtle" id="btn-close-devtools" type="button">✕ Close</button>
+        </div>
+        <pre id="out" class="devtools-out"></pre>
+      </div>
     </div>
   </div>
 `;
@@ -781,6 +793,43 @@ export function bootstrapStudioApp(): void {
   }
   .track-badge.video { background: rgba(46, 120, 255, 0.22); color: #6fa3ff; }
   .track-badge.audio { background: rgba(203, 147, 66, 0.22); color: #e5b86a; }
+  .devtools-drawer {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+    height: 260px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    z-index: 50;
+  }
+  .devtools-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 14px;
+    background: var(--bg-soft);
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-dim);
+    letter-spacing: 0.5px;
+    flex-shrink: 0;
+  }
+  .devtools-out {
+    flex: 1;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    background: var(--bg);
+    overflow: auto;
+    padding: 10px 14px;
+    font-size: 11px;
+    color: #7adf9f;
+    white-space: pre-wrap;
+    max-height: none;
+  }
 `;
   document.head.appendChild(style);
 
@@ -2312,6 +2361,25 @@ export function bootstrapStudioApp(): void {
 
   document.querySelector<HTMLButtonElement>("#btn-toggle-ai")!.addEventListener("click", () => {
     setActivePanel(activePanelId === "ai" ? "explorer" : "ai");
+  });
+
+  const devtoolsDrawer = document.querySelector<HTMLDivElement>("#devtools-drawer")!;
+  const actDevtools = document.querySelector<HTMLButtonElement>("#act-devtools")!;
+
+  function toggleDevTools() {
+    const isOpen = devtoolsDrawer.style.display !== "none";
+    devtoolsDrawer.style.display = isOpen ? "none" : "flex";
+    actDevtools.classList.toggle("active", !isOpen);
+  }
+
+  document.querySelector("#btn-close-devtools")!.addEventListener("click", toggleDevTools);
+  actDevtools.addEventListener("click", toggleDevTools);
+
+  document.addEventListener("keydown", (e) => {
+    if (e.ctrlKey && e.shiftKey && e.key === "D") {
+      e.preventDefault();
+      toggleDevTools();
+    }
   });
 
   document.querySelector("#btn-toggle-theme")!.addEventListener("click", () => {
