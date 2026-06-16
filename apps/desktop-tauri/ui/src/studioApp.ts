@@ -120,7 +120,14 @@ export function bootstrapStudioApp(): void {
   app.innerHTML = `
   <div class="studio">
     <header class="topbar">
-      <div class="brand">Deepiri Renderflow Studio</div>
+      <div class="brand">
+          <svg class="brand-logo" width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect width="28" height="28" rx="7" fill="#4d7dff"/>
+            <path d="M8 8h6c4.418 0 8 3.134 8 7s-3.582 7-8 7H8V8z" fill="white"/>
+            <path d="M12 12h2c2.209 0 4 1.567 4 3.5S16.209 19 14 19h-2v-7z" fill="#4d7dff"/>
+          </svg>
+          <span class="brand-text">Deepiri <span class="brand-sub">Renderflow</span></span>
+        </div>
       <div class="toolbar">
         <button class="btn subtle" id="btn-toggle-ai" type="button">Hide AI Panel</button>
         <button class="btn subtle" id="btn-toggle-theme" type="button">Theme</button>
@@ -249,7 +256,10 @@ export function bootstrapStudioApp(): void {
     background: rgba(17, 19, 25, 0.85);
     backdrop-filter: blur(6px);
   }
-  .brand { font-size: 15px; font-weight: 600; letter-spacing: 0.2px; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand-logo { flex-shrink: 0; }
+  .brand-text { font-size: 15px; font-weight: 700; letter-spacing: -0.2px; }
+  .brand-sub { font-weight: 400; color: var(--text-dim); }
   .toolbar { display: flex; gap: 8px; }
   .workspace {
     display: grid;
