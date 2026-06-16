@@ -226,35 +226,47 @@ export function bootstrapStudioApp(): void {
   const style = document.createElement("style");
   style.textContent = `
   :root {
-    --bg: #111319;
-    --bg-soft: #181c24;
-    --border: #2a3140;
-    --text: #f3f6ff;
-    --text-dim: #a8b2c7;
+    --bg: #0d0f16;
+    --bg-soft: #141720;
+    --bg-raised: #1a1e2a;
+    --border: #252c3d;
+    --border-subtle: #1e2436;
+    --text: #eef1f9;
+    --text-dim: #8a95b0;
+    --text-muted: #4f5a74;
     --accent: #4d7dff;
-    --danger: #ff4e75;
+    --accent-glow: rgba(77, 125, 255, 0.15);
+    --accent-hover: #6390ff;
+    --danger: #f04d6e;
+    --success: #1ec97a;
     --clip-blue: #2e78ff;
-    --clip-purple: #8a54f5;
+    --clip-purple: #7c50ee;
     --clip-green: #18b487;
-    --clip-gold: #cb9342;
+    --clip-gold: #d4963f;
+    --sidebar-width: 280px;
+    --activity-bar-width: 48px;
   }
 
   body {
     margin: 0;
-    font-family: "Segoe UI", "Inter", system-ui, sans-serif;
-    background: radial-gradient(circle at 10% 10%, #202a43 0%, #111319 45%);
+    font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
     color: var(--text);
+    -webkit-font-smoothing: antialiased;
   }
 
   .studio { min-height: 100vh; }
   .topbar {
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--border-subtle);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 10px 14px;
-    background: rgba(17, 19, 25, 0.85);
-    backdrop-filter: blur(6px);
+    padding: 10px 16px;
+    background: rgba(13, 15, 22, 0.95);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    z-index: 100;
+    position: relative;
   }
   .brand { display: flex; align-items: center; gap: 10px; }
   .brand-logo { flex-shrink: 0; }
@@ -268,16 +280,19 @@ export function bootstrapStudioApp(): void {
   }
   .workspace.ai-hidden { grid-template-columns: 280px 1fr; }
   .panel, .center {
-    border-right: 1px solid var(--border);
-    background: rgba(20, 24, 33, 0.93);
+    border-right: 1px solid var(--border-subtle);
+    background: var(--bg-soft);
   }
-  .panel { padding: 12px; }
+  .panel { padding: 14px 12px; overflow-y: auto; }
   .panel-title {
-    font-size: 13px;
+    font-size: 10px;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.8px;
-    color: var(--text-dim);
-    margin-bottom: 10px;
+    letter-spacing: 1.2px;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-subtle);
   }
   .project-meta { display: grid; gap: 8px; margin-bottom: 12px; }
   .project-meta label { font-size: 12px; color: var(--text-dim); display: grid; gap: 4px; }
@@ -478,15 +493,26 @@ export function bootstrapStudioApp(): void {
   .ai-mode { color: var(--text-dim); font-size: 12px; margin-bottom: 8px; }
   .stack { display: grid; gap: 6px; margin: 8px 0; }
   .btn {
-    border: 1px solid transparent;
-    border-radius: 6px;
-    padding: 7px 11px;
     background: var(--accent);
-    color: #f7faff;
-    cursor: pointer;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 7px 14px;
     font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, box-shadow 0.15s, opacity 0.15s;
+    white-space: nowrap;
+    letter-spacing: 0.1px;
   }
-  .btn.subtle { background: #212b3f; border-color: #34405a; }
+  .btn:hover { background: var(--accent-hover); box-shadow: 0 0 0 3px var(--accent-glow); }
+  .btn:active { opacity: 0.8; }
+  .btn.subtle {
+    background: rgba(255,255,255,0.05);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+  }
+  .btn.subtle:hover { background: rgba(255,255,255,0.09); color: var(--text); border-color: var(--border); }
   .btn.narrow { padding: 7px 10px; }
   .btn.icon { min-width: 56px; }
   /* Vertical list of project buttons rendered by "List Projects". */
