@@ -12,7 +12,6 @@ import {
   orchestratorListClips,
   probeMedia,
   submitAiJob,
-  acceptAiJob,
   submitRenderJob,
   getRenderJob,
   timelineResolveActive,
@@ -265,7 +264,6 @@ export function bootstrapStudioApp(): void {
     --accent-glow: rgba(77, 125, 255, 0.15);
     --accent-hover: #6390ff;
     --danger: #f04d6e;
-    --success: #1ec97a;
     --clip-blue: #2e78ff;
     --clip-purple: #7c50ee;
     --clip-green: #18b487;
@@ -307,6 +305,7 @@ export function bootstrapStudioApp(): void {
     min-height: calc(100vh - 57px);
   }
   .workspace.panel-hidden { grid-template-columns: var(--activity-bar-width) 0 1fr; }
+  .workspace.panel-hidden .panel { overflow: hidden; }
   .activity-bar {
     grid-row: 1 / 3;
     background: var(--bg);
@@ -2387,7 +2386,7 @@ export function bootstrapStudioApp(): void {
   actDevtools.addEventListener("click", toggleDevTools);
 
   document.addEventListener("keydown", (e) => {
-    if (e.ctrlKey && e.shiftKey && e.key === "D") {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "D") {
       e.preventDefault();
       toggleDevTools();
     }
