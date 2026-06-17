@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
+from app.guardrails import check_prompt
 from app.media import (
     caption_service,
     music_service,
@@ -24,6 +25,7 @@ def generate_video(
     duration_secs: float = 5.0,
     style: str = "cinematic",
 ) -> dict:
+    check_prompt(prompt)
     result = text_video_pipeline.generate_video_from_text(
         prompt, output_path, duration_secs, style
     )
@@ -34,6 +36,7 @@ def generate_video(
 
 @router.post("/video/storyboard", tags=["video"])
 def generate_storyboard(prompt: str, num_scenes: int = 4) -> dict:
+    check_prompt(prompt)
     return text_video_pipeline.generate_storyboard(prompt, num_scenes)
 
 
@@ -89,6 +92,7 @@ def generate_music(
     duration_secs: float = 30.0,
     style: str = "cinematic",
 ) -> dict:
+    check_prompt(prompt)
     result = music_service.generate_music(prompt, output_path, duration_secs, style)
     if not result.get("ok"):
         raise HTTPException(500, result.get("error", "Music generation failed"))

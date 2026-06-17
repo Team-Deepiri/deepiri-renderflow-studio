@@ -24,6 +24,8 @@ grpcio-tools = ">=1.60.0"
 deepiri-gpu-utils = { git = "https://github.com/Team-Deepiri/deepiri-gpu-utils.git", branch = "main" }
 # In-repo library under deepiri-renderflow-studio/lib/renderflow_queue (not a separate Git project).
 deepiri-renderflow-worker-queue = { path = "../../lib/renderflow_queue", develop = true }
+# Guardrails library — input/output safety checks for AI prompts.
+diri-agent-guardrails = { path = "../../../diri-agent-guardrails", develop = true }
 
 [tool.poetry.group.dev.dependencies]
 ruff = "^0.8.0"

@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 
 from app import db_repos
 from app.api.schemas.studio import AiJobCreate, AiJobOut
+from app.guardrails import check_prompt
 from app.job_store import JobStatus, store
 from app.runtime_state import get_settings
 from app.worker_loop import cancel_job, enqueue_job, worker_stats
@@ -21,6 +22,7 @@ router = APIRouter()
 
 @router.post("/v1/jobs", response_model=AiJobOut, tags=["ai"])
 def create_ai_job(payload: AiJobCreate) -> AiJobOut:
+    check_prompt(payload.prompt)
     job = store.create(
         payload.project_id,
         payload.mode,
