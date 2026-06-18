@@ -1,4 +1,7 @@
-"""Build a RenderFlowPolicy from project DB settings + env vars."""
+"""Build a RenderFlowPolicy from project DB settings + env vars.
+
+Spec reference: guardrails-implementation.md §17 (Configuration)
+"""
 from __future__ import annotations
 
 import logging
@@ -19,7 +22,7 @@ def policy_for_project(
 ) -> RenderFlowPolicy:
     """Build a RenderFlowPolicy by merging env defaults -> preset -> project DB settings."""
     preset = _env_preset()
-    enabled = os.environ.get("RENDERFLOW_GUARDRAILS_ENABLED", "true").lower() == "true"
+    enabled = _check_enabled()
 
     project = db_repos.fetch_project(project_id)
     overrides: dict[str, Any] = {
@@ -37,6 +40,21 @@ def policy_for_project(
     _merge_env_overrides(overrides)
 
     return build_policy(preset, **overrides)
+
+
+def _check_enabled() -> bool:
+    """Enforce production safety rule: guardrails can only be disabled in dev mode."""
+    enabled = os.environ.get("RENDERFLOW_GUARDRAILS_ENABLED", "true").lower() == "true"
+    if not enabled:
+        mode = os.environ.get("READINESS_MODE", "dev").strip().lower()
+        if mode != "dev":
+            logger.critical(
+                "RENDERFLOW_GUARDRAILS_ENABLED=false is not allowed in READINESS_MODE=%s; forcing enabled",
+                mode,
+            )
+            return True
+        logger.warning("Guardrails disabled (READINESS_MODE=dev)")
+    return enabled
 
 
 def _env_preset() -> str:
@@ -59,6 +77,7 @@ def _merge_ai_settings(ai: dict, out: dict) -> None:
         "likeness_mode": "likeness_mode",
         "copyright_mode": "copyright_mode",
         "region_policy": "region_policy",
+        "csam_hash_check": "csam_hash_check",
     }
     for src_key, dst_key in field_map.items():
         if src_key in ai:
@@ -70,11 +89,14 @@ def _merge_env_overrides(out: dict) -> None:
         "RENDERFLOW_GUARDRAIL_NSFW_MODE": "nsfw_mode",
         "RENDERFLOW_GUARDRAIL_RATE_LIMIT": "rate_limit_per_hour",
         "RENDERFLOW_GUARDRAIL_PROVENANCE": "provenance_mode",
+        "RENDERFLOW_GUARDRAIL_CSAM_HASH": "csam_hash_check",
     }
     for env_key, field in env_map.items():
         val = os.environ.get(env_key)
         if val is not None:
             if field == "rate_limit_per_hour":
                 out[field] = int(val.split("/")[0])
+            elif field == "csam_hash_check":
+                out[field] = val.lower() == "true"
             else:
                 out[field] = val

@@ -1,7 +1,9 @@
 """Layer 1 — Input / prompt guard.
 
-Composes diri-agent-guardrails checkers (injection, content, PII) with
-RenderFlow-specific zero-tolerance patterns and org blocklist.
+Composes classifier, PII, and blocklist modules with
+RenderFlow-specific zero-tolerance patterns.
+
+Spec reference: guardrails-implementation.md §5
 """
 from __future__ import annotations
 
@@ -11,11 +13,10 @@ from uuid import UUID
 
 from fastapi import HTTPException
 
-from diri_agent_guardrails.checkers.content import ContentSafetyChecker
-from diri_agent_guardrails.checkers.injection import InjectionChecker
-from diri_agent_guardrails.checkers.pii import PIIChecker
-
+from app.guardrails.blocklist import check_blocklist
+from app.guardrails.classifier import get_classifier
 from app.guardrails.config import policy_for_project
+from app.guardrails.pii import check_pii
 from app.guardrails.presets import RenderFlowPolicy, build_policy
 from app.guardrails.types import GuardrailDecision, RFReasonCode
 
@@ -28,19 +29,6 @@ _ZERO_TOLERANCE = re.compile(
     r"|(?:how\s+to\s+)?(?:make|build|create)\s+(?:a\s+)?(?:dirty\s+bomb|bioweapon|biological\s+weapon)",
     re.IGNORECASE,
 )
-
-# RenderFlow-specific content patterns on top of library defaults
-_rf_content = ContentSafetyChecker(patterns=[
-    r"\b(?:naked|nude|nudity|porn|pornographic|xxx)\b",
-    r"\b(?:sexual|erotic)\s+(?:content|image|video|picture|scene)\b",
-    r"\b(?:undress|strip|genitals?|breasts?)\b",
-    r"\b(?:how\s+to|ways?\s+to|steps?\s+to)\s+(?:die|kill\s+(?:my|your)?self|commit\s+suicide|self[- ]harm|end\s+(?:my|your)\s+life)\b",
-    r"\b(?:how\s+to\s+)?(?:murder|stab|shoot|torture)\s+(?:a\s+)?(?:person|people|someone|human)\b",
-])
-
-_injection = InjectionChecker()
-_content = ContentSafetyChecker()
-_pii = PIIChecker()
 
 _REASON_MESSAGES: dict[str, str] = {
     "SAFETY_BLOCK": "This prompt was flagged for safety reasons.",
@@ -57,7 +45,7 @@ def run_prompt_gate(
     user_id: str | None = None,
     user_role: str = "editor",
 ) -> GuardrailDecision:
-    """Run Layer 1 prompt checks using diri-agent-guardrails checkers."""
+    """Run Layer 1 prompt checks."""
     policy = policy_for_project(project_id, user_id=user_id, user_role=user_role)
     return _check(prompt, policy)
 
@@ -80,7 +68,7 @@ def check_prompt(prompt: str) -> None:
 
 def _check(prompt: str, policy: RenderFlowPolicy) -> GuardrailDecision:
     """Core check logic shared by both entry points."""
-    # 1. Zero-tolerance — always block (S4/S9)
+    # 1. Zero-tolerance — always block (S4/S9), no admin override
     if _ZERO_TOLERANCE.search(prompt):
         return GuardrailDecision(
             gate=GATE, verdict="block", reason_code=RFReasonCode.SAFETY_BLOCK,
@@ -94,29 +82,26 @@ def _check(prompt: str, policy: RenderFlowPolicy) -> GuardrailDecision:
             details={"length": len(prompt), "limit": policy.max_prompt_length},
         )
 
-    # 3. Injection check (from package)
-    inj_result = _injection.check(prompt)
-    if inj_result.blocked:
-        return GuardrailDecision(
-            gate=GATE, verdict="block", reason_code=RFReasonCode.INJECTION_DETECTED,
-            score=inj_result.score, details=inj_result.details,
-        )
+    # 3. Blocklist (org keywords + RenderFlow defaults)
+    bl_decision = check_blocklist(prompt)
+    if bl_decision.blocked:
+        return bl_decision
 
-    # 4. Content safety — library defaults + RenderFlow-specific patterns
-    for checker in (_content, _rf_content):
-        content_result = checker.check(prompt)
-        if content_result.blocked:
-            return GuardrailDecision(
-                gate=GATE, verdict="block", reason_code=RFReasonCode.SAFETY_BLOCK,
-                score=content_result.score, details=content_result.details,
-            )
+    # 4. Safety classifier (injection + content)
+    classifier = get_classifier()
+    result = classifier.classify(prompt)
+    if not result.safe:
+        is_injection = "S_INJECTION" in result.categories
+        return GuardrailDecision(
+            gate=GATE, verdict="block",
+            reason_code=RFReasonCode.INJECTION_DETECTED if is_injection else RFReasonCode.SAFETY_BLOCK,
+            score=result.score,
+            details={**result.details, "categories": result.categories},
+        )
 
     # 5. PII detection → REDACT (not block)
-    pii_result = _pii.check(prompt)
-    if not pii_result.passed:
-        return GuardrailDecision(
-            gate=GATE, verdict="redact", reason_code=RFReasonCode.PII_REDACTED,
-            score=pii_result.score, details=pii_result.details,
-        )
+    pii_decision = check_pii(prompt)
+    if pii_decision.verdict == "redact":
+        return pii_decision
 
     return GuardrailDecision(gate=GATE, verdict="allow")

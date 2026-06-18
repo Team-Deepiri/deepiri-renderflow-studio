@@ -1,13 +1,15 @@
 """Layer 4 — Output guard.
 
 Runs after all generation stages complete, before JobStatus -> REVIEW.
+
+Spec reference: guardrails-implementation.md §8
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from uuid import UUID
 
 from app.guardrails.config import policy_for_project
+from app.guardrails.provenance import build_provenance_sidecar
 from app.guardrails.types import GuardrailDecision, RFReasonCode
 
 GATE = "output"
@@ -43,24 +45,11 @@ def run_output_gate(
         ), {}
 
     if copyright_similarity_score > 0.6 and policy.copyright_mode == "warn":
-        provenance = _build_provenance(job_id, model_ids or [], policy)
+        provenance = build_provenance_sidecar(job_id, model_ids or [], policy.provenance_mode)
         return GuardrailDecision(
             gate=GATE, verdict="escalate", reason_code=RFReasonCode.COPYRIGHT_WARN,
             score=copyright_similarity_score,
         ), provenance
 
-    provenance = _build_provenance(job_id, model_ids or [], policy)
+    provenance = build_provenance_sidecar(job_id, model_ids or [], policy.provenance_mode)
     return GuardrailDecision(gate=GATE, verdict="allow"), provenance
-
-
-def _build_provenance(job_id: str, model_ids: list, policy) -> dict:
-    if policy.provenance_mode == "off":
-        return {}
-    return {
-        "schema": "c2pa-lite-v1" if policy.provenance_mode == "c2pa" else "renderflow-sidecar-v1",
-        "generator": "Deepiri RenderFlow RFIR",
-        "job_id": job_id,
-        "model_ids": model_ids,
-        "ai_generated": True,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
