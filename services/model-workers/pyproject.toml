@@ -13,3 +13,10 @@ package-mode = false
 python = "^3.11"
 redis = ">=5.0.0"
 deepiri-renderflow-worker-queue = { path = "../../lib/renderflow_queue", develop = true }
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
