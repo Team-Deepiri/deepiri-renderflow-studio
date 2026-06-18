@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from app.guardrails import check_prompt
+from app.guardrails.prompt_guard import check_prompt
 from app.media import (
     caption_service,
     music_service,

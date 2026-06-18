@@ -24,8 +24,9 @@ grpcio-tools = ">=1.60.0"
 deepiri-gpu-utils = { git = "https://github.com/Team-Deepiri/deepiri-gpu-utils.git", branch = "main" }
 # In-repo library under deepiri-renderflow-studio/lib/renderflow_queue (not a separate Git project).
 deepiri-renderflow-worker-queue = { path = "../../lib/renderflow_queue", develop = true }
-# `diri-agent-guardrails`: track `dev`; `poetry lock` pins the commit. Bump with `poetry update diri-agent-guardrails`.
-diri-agent-guardrails = { git = "https://github.com/Team-Deepiri/diri-agent-guardrails.git", branch = "dev" }
+# `diri-agent-guardrails`: track `main`; `poetry lock` pins the commit. Bump with `poetry update diri-agent-guardrails`.
+diri-agent-guardrails = { git = "https://github.com/Team-Deepiri/diri-agent-guardrails.git", branch = "main" }
+
 
 [tool.poetry.group.dev.dependencies]
 ruff = "^0.8.0"

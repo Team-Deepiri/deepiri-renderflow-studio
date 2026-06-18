@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 
 from app import db_repos
 from app.api.schemas.studio import AiJobCreate, AiJobOut
-from app.guardrails import check_prompt
+from app.guardrails import run_policy_gate, run_prompt_gate
 from app.job_store import JobStatus, store
 from app.runtime_state import get_settings
 from app.worker_loop import cancel_job, enqueue_job, worker_stats
@@ -20,15 +20,88 @@ import threading
 router = APIRouter()
 
 
+_REASON_MESSAGES: dict[str, str] = {
+    "AI_DISABLED": "AI is turned off for this project.",
+    "RATE_LIMIT": "Too many AI requests; try again later.",
+    "POLICY_BLOCK": "This request isn't allowed under your organization's rules.",
+    "SAFETY_BLOCK": "This prompt was flagged for safety reasons.",
+    "INJECTION_DETECTED": "This prompt contains disallowed instructions.",
+    "PROMPT_TOO_LONG": "Prompt exceeds the maximum allowed length.",
+    "LIKENESS_BLOCK": "Real-person likeness restrictions apply.",
+    "CONSENT_REQUIRED": "Link a consent record for this subject.",
+    "OUTPUT_BLOCK": "Generated output didn't pass safety checks.",
+    "QUOTA_EXCEEDED": "GPU time quota used for this period.",
+    "VIEWER_ROLE": "Viewers cannot submit AI generation jobs.",
+    "DISALLOWED_MODE": "This AI mode is not enabled for your project.",
+    "CLOUD_BLOCKED": "Cloud inference is not allowed for this project.",
+}
+
+
+def _log_decision(job_id: str | None, decision) -> None:
+    """Persist a GuardrailDecision to the database + audit trail."""
+    db_repos.insert_guardrail_decision(
+        job_id=job_id,
+        gate=decision.gate,
+        verdict=decision.verdict,
+        reason_code=decision.reason_code.value if decision.reason_code else None,
+        score=decision.score,
+        details=decision.details,
+    )
+    if decision.blocked:
+        db_repos.audit_log(
+            project_id=None,
+            actor_id=None,
+            event_type=f"ai.guardrail.{decision.gate}.blocked",
+            payload=decision.to_dict(),
+        )
+
+
 @router.post("/v1/jobs", response_model=AiJobOut, tags=["ai"])
 def create_ai_job(payload: AiJobCreate) -> AiJobOut:
-    check_prompt(payload.prompt)
+    user_id = payload.metadata.get("user_id")
+    user_role = payload.metadata.get("user_role", "editor")
+
+    # Layer 0 — policy gate
+    policy_decision = run_policy_gate(
+        payload.project_id, payload.mode,
+        user_id=user_id, user_role=user_role,
+    )
+    if policy_decision.blocked:
+        _log_decision(None, policy_decision)
+        reason = policy_decision.reason_code.value if policy_decision.reason_code else "POLICY_BLOCK"
+        raise HTTPException(403, detail=_REASON_MESSAGES.get(reason, reason))
+
+    # Layer 1 — prompt guard
+    prompt_decision = run_prompt_gate(
+        payload.prompt, payload.project_id,
+        user_id=user_id, user_role=user_role,
+    )
+    if prompt_decision.blocked:
+        _log_decision(None, prompt_decision)
+        reason = prompt_decision.reason_code.value if prompt_decision.reason_code else "SAFETY_BLOCK"
+        raise HTTPException(403, detail=_REASON_MESSAGES.get(reason, reason))
+
+    # Passed gates — create and enqueue
+    guardrail_flags = []
+    if prompt_decision.verdict == "redact":
+        guardrail_flags.append("PII_REDACTED")
+    if prompt_decision.verdict == "escalate":
+        guardrail_flags.append("ESCALATED")
+
     job = store.create(
         payload.project_id,
         payload.mode,
         payload.prompt,
-        metadata=payload.metadata,
+        metadata={
+            **payload.metadata,
+            "guardrail_verdict": "allow",
+            "guardrail_flags": guardrail_flags,
+        },
     )
+
+    _log_decision(str(job.id), policy_decision)
+    _log_decision(str(job.id), prompt_decision)
+
     enqueue_job(str(job.id), get_settings())
     return AiJobOut.from_record(job)
 
