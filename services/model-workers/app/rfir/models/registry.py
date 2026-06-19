@@ -1,0 +1,66 @@
+"""Model registry — manifest of available RFIR models.
+
+Each entry declares: id, role, HuggingFace repo, quantization options,
+VRAM requirements, and license. Models are verified by SHA256 on load.
+
+Spec reference: rfir-inference-engine-implementation.md §1.1
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True)
+class ModelManifest:
+    id: str
+    role: str
+    repo: str
+    quantization: str = "fp16"
+    vram_mb: int = 0
+    license: str = "unknown"
+    sha256: str | None = None
+    extras: dict = field(default_factory=dict)
+
+
+REGISTRY: dict[str, ModelManifest] = {
+    "flux-schnell-fp16": ModelManifest(
+        id="flux-schnell-fp16",
+        role="t2i_keyframe",
+        repo="black-forest-labs/FLUX.1-schnell",
+        quantization="fp16",
+        vram_mb=12288,
+        license="apache-2.0",
+    ),
+    "depth-anything-v2-small": ModelManifest(
+        id="depth-anything-v2-small",
+        role="depth_estimate",
+        repo="depth-anything/Depth-Anything-V2-Small-hf",
+        quantization="fp16",
+        vram_mb=1024,
+        license="apache-2.0",
+    ),
+    "sdxl-turbo-fp16": ModelManifest(
+        id="sdxl-turbo-fp16",
+        role="t2i_keyframe",
+        repo="stabilityai/sdxl-turbo",
+        quantization="fp16",
+        vram_mb=6144,
+        license="openrail++",
+        extras={"fallback_for": "flux-schnell-fp16"},
+    ),
+}
+
+
+def get_manifest(model_id: str) -> ModelManifest | None:
+    return REGISTRY.get(model_id)
+
+
+def list_models(role: str | None = None) -> list[ModelManifest]:
+    if role:
+        return [m for m in REGISTRY.values() if m.role == role]
+    return list(REGISTRY.values())
+
+
+def default_model_for_role(role: str) -> ModelManifest | None:
+    models = list_models(role)
+    return models[0] if models else None

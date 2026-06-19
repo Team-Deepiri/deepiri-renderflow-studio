@@ -10,9 +10,15 @@ authors = ["Deepiri"]
 package-mode = false
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = ">=3.11,<3.15"
 redis = ">=5.0.0"
 deepiri-renderflow-worker-queue = { path = "../../lib/renderflow_queue", develop = true }
+torch = "^2.12.1"
+diffusers = "^0.38.0"
+transformers = "^5.12.1"
+accelerate = "^1.14.0"
+pillow = "^12.2.0"
+torchvision = {version = "^0.27.1", python = ">=3.11,<3.14.1 || >3.14.1,<3.15"}
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
