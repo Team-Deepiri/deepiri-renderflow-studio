@@ -429,6 +429,38 @@ def insert_ai_job_artifact(job_id: str, asset_id: str | None, artifact_type: str
         logger.warning("insert_ai_job_artifact: %s", e)
 
 
+def insert_guardrail_decision(
+    job_id: str | None,
+    gate: str,
+    verdict: str,
+    reason_code: str | None = None,
+    score: float | None = None,
+    details: dict[str, Any] | None = None,
+) -> None:
+    if not db.pool_ready():
+        return
+    try:
+        with db.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    insert into guardrail_decisions (job_id, gate, verdict, reason_code, score, details_jsonb)
+                    values (%s, %s, %s, %s, %s, %s::jsonb)
+                    """,
+                    (
+                        job_id,
+                        gate,
+                        verdict,
+                        reason_code,
+                        score,
+                        __import__("json").dumps(details or {}),
+                    ),
+                )
+            conn.commit()
+    except Exception as e:
+        logger.warning("insert_guardrail_decision: %s", e)
+
+
 def audit_log(project_id: UUID | None, actor_id: UUID | None, event_type: str, payload: dict[str, Any]) -> None:
     if not db.pool_ready():
         return
