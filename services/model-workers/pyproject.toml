@@ -10,6 +10,15 @@ authors = ["Deepiri"]
 package-mode = false
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = ">=3.11,<3.15"
 redis = ">=5.0.0"
 deepiri-renderflow-worker-queue = { path = "../../lib/renderflow_queue", develop = true }
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+# `diri-agent-guardrails`: track `main`; `poetry lock` pins the commit. Bump with `poetry update diri-agent-guardrails`.
+diri-agent-guardrails = { git = "https://github.com/Team-Deepiri/diri-agent-guardrails.git", branch = "main" }

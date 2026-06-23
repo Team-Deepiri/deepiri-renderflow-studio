@@ -16,6 +16,12 @@ class AiJobCreate(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class GuardrailSummary(BaseModel):
+    verdict: str = "allow"
+    warnings: list[str] = Field(default_factory=list)
+    blocked_shots: list[int] = Field(default_factory=list)
+
+
 class AiJobOut(BaseModel):
     id: UUID
     project_id: UUID
@@ -25,11 +31,19 @@ class AiJobOut(BaseModel):
     stages: list[str]
     metadata: dict[str, Any]
     result_asset_id: str | None = None
+    guardrail_summary: GuardrailSummary | None = None
     created_at: datetime
     updated_at: datetime
 
     @classmethod
     def from_record(cls, r: AiJobRecord) -> AiJobOut:
+        meta = dict(r.metadata)
+        gs = None
+        if "guardrail_verdict" in meta:
+            gs = GuardrailSummary(
+                verdict=meta.get("guardrail_verdict", "allow"),
+                warnings=meta.get("guardrail_flags", []),
+            )
         return cls(
             id=r.id,
             project_id=r.project_id,
@@ -37,8 +51,9 @@ class AiJobOut(BaseModel):
             prompt=r.prompt,
             status=r.status.value,
             stages=list(r.stages),
-            metadata=dict(r.metadata),
-            result_asset_id=r.metadata.get("asset_id"),
+            metadata=meta,
+            result_asset_id=meta.get("asset_id"),
+            guardrail_summary=gs,
             created_at=r.created_at,
             updated_at=r.updated_at,
         )
