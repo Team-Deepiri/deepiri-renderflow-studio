@@ -19,6 +19,11 @@ class Settings:
     enable_sse: bool = True
     readiness_mode: str = "dev"
     data_dir: str | None = None
+    rfir_enabled: bool = False
+    rfir_max_gpu_sec: int = 120
+    rfir_max_tier: str = "C"
+    rfir_gen_res: str = "512x288"
+    rfir_models_dir: str | None = None
 
 
 def load_settings() -> Settings:
@@ -38,4 +43,9 @@ def load_settings() -> Settings:
         ai_stages_simulate_ms=int(os.environ.get("RENDERFLOW_AI_STAGE_MS", "50")),
         data_dir=os.environ.get("RENDERFLOW_DATA_DIR"),
         readiness_mode=mode,
+        rfir_enabled=os.environ.get("RENDERFLOW_RFIR_ENABLED", "false").lower() == "true",
+        rfir_max_gpu_sec=int(os.environ.get("RENDERFLOW_RFIR_MAX_GPU_SEC", "120")),
+        rfir_max_tier=os.environ.get("RENDERFLOW_RFIR_MAX_TIER", "C"),
+        rfir_gen_res=os.environ.get("RENDERFLOW_RFIR_GEN_RES", "512x288"),
+        rfir_models_dir=os.environ.get("RENDERFLOW_MODELS_DIR"),
     )
