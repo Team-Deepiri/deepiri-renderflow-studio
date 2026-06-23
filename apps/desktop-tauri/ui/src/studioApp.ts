@@ -14,6 +14,7 @@ import {
   redoHistory,
   snapshotState,
 } from "./ops/history";
+import { saveProject } from "./persistence";
 import {
   tickToTimecode,
   seek,
@@ -1012,7 +1013,9 @@ export function bootstrapStudioApp(): void {
   // Save / Export (placeholder)
   $("#btn-save-project").addEventListener("click", () => {
     commitHistory(state, history, "save");
-    devLog("Project state snapshotted.");
+    const projectName = ($("#project-name") as HTMLInputElement).value || "Untitled";
+    saveProject(projectName, snapshotState(state));
+    devLog(`Project "${projectName}" saved.`);
   });
   $("#btn-export").addEventListener("click", () =>
     devLog("Export: not yet wired."),

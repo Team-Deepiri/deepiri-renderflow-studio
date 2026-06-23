@@ -179,12 +179,6 @@ export async function getRenderJob(jobId: string): Promise<RenderJob> {
   return res.json();
 }
 
-export async function acceptAIJob(jobId: string): Promise<AIJob> {
-  const res = await fetch(`${BASE}/v1/jobs/${jobId}/accept`, { method: "POST" });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
 export async function rejectAIJob(jobId: string): Promise<AIJob> {
   const res = await fetch(`${BASE}/v1/jobs/${jobId}/reject`, { method: "POST" });
   if (!res.ok) throw new Error(await res.text());

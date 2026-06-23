@@ -78,7 +78,7 @@ export function createInitialState(): StudioState {
     playTimer: undefined,
     lastJobId: "",
     aiVisible: false,
-    devMode: localStorage.getItem("deepiri_dev_mode") === "true",
+    devMode: typeof localStorage !== "undefined" && localStorage.getItem("deepiri_dev_mode") === "true",
     currentView: "home",
   };
 }
