@@ -41,6 +41,25 @@ type = "directory"
 url = "../../lib/renderflow_queue"
 
 [[package]]
+name = "diri-agent-guardrails"
+version = "0.1.0"
+description = "Reusable input/output sanitization, PII detection, prompt-injection checks, and policy-driven guardrails for AI agents."
+optional = false
+python-versions = "^3.10"
+groups = ["main"]
+files = []
+develop = false
+
+[package.extras]
+opa = ["httpx (>=0.27.0,<0.28.0)"]
+
+[package.source]
+type = "git"
+url = "https://github.com/Team-Deepiri/diri-agent-guardrails.git"
+reference = "main"
+resolved_reference = "00c28bec202d6f6e0ceeb350f5f4f15960047f3d"
+
+[[package]]
 name = "iniconfig"
 version = "2.3.0"
 description = "brain-dead simple config-ini parsing"
@@ -143,4 +162,4 @@ xxhash = ["xxhash (>=3.6.0,<3.7.0)"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.15"
-content-hash = "d21e7d9399e9885c63b7f08e032a478c657d5ff1faba14067d43700698e73824"
+content-hash = "5387f4d536413c1b307badb2e629b602837668a3369f707e94473f9b21db6818"
