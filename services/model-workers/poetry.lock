@@ -41,6 +41,25 @@ type = "directory"
 url = "../../lib/renderflow_queue"
 
 [[package]]
+name = "diri-agent-guardrails"
+version = "0.1.0"
+description = "Reusable input/output sanitization, PII detection, prompt-injection checks, and policy-driven guardrails for AI agents."
+optional = false
+python-versions = "^3.10"
+groups = ["main"]
+files = []
+develop = false
+
+[package.extras]
+opa = ["httpx (>=0.27.0,<0.28.0)"]
+
+[package.source]
+type = "git"
+url = "https://github.com/Team-Deepiri/diri-agent-guardrails.git"
+reference = "main"
+resolved_reference = "00c28bec202d6f6e0ceeb350f5f4f15960047f3d"
+
+[[package]]
 name = "iniconfig"
 version = "2.3.0"
 description = "brain-dead simple config-ini parsing"
@@ -119,14 +138,14 @@ dev = ["argcomplete", "attrs (>=19.2)", "hypothesis (>=3.56)", "mock", "requests
 
 [[package]]
 name = "redis"
-version = "8.0.0"
+version = "8.0.1"
 description = "Python client for Redis database and key-value store"
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "redis-8.0.0-py3-none-any.whl", hash = "sha256:c938c18338585009f0bc310f4c7e4e4b4d37639356c4ac072cedf3af570c8dc7"},
-    {file = "redis-8.0.0.tar.gz", hash = "sha256:a00c5355432051ac14e593b8b197fc76c887ee12d55a0984f69328a1115fdc49"},
+    {file = "redis-8.0.1-py3-none-any.whl", hash = "sha256:47daa35a058c23468d6437f17a8c76882cb316b838ef763036af99b96cedd743"},
+    {file = "redis-8.0.1.tar.gz", hash = "sha256:afc5a7a2f5a084f5b1880dec548dd45be17db7e43c82a30d84f952aefb05cfb0"},
 ]
 
 [package.dependencies]
@@ -135,7 +154,7 @@ async-timeout = {version = ">=4.0.3", markers = "python_full_version < \"3.11.3\
 [package.extras]
 circuit-breaker = ["pybreaker (>=1.4.0)"]
 hiredis = ["hiredis (>=3.2.0)"]
-jwt = ["pyjwt (>=2.12.0)"]
+jwt = ["pyjwt (>=2.13.0)"]
 ocsp = ["cryptography (>=36.0.1)", "pyopenssl (>=20.0.1)", "requests (>=2.31.0)"]
 otel = ["opentelemetry-api (>=1.39.1)", "opentelemetry-exporter-otlp-proto-http (>=1.39.1)", "opentelemetry-sdk (>=1.39.1)"]
 xxhash = ["xxhash (>=3.6.0,<3.7.0)"]
@@ -143,4 +162,4 @@ xxhash = ["xxhash (>=3.6.0,<3.7.0)"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.15"
-content-hash = "d21e7d9399e9885c63b7f08e032a478c657d5ff1faba14067d43700698e73824"
+content-hash = "5387f4d536413c1b307badb2e629b602837668a3369f707e94473f9b21db6818"
