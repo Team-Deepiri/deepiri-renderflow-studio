@@ -98,7 +98,7 @@ body {
   margin:0; font-family:"Inter","Segoe UI",system-ui,sans-serif;
   background:var(--bg); color:var(--text); -webkit-font-smoothing:antialiased;
 }
-.studio{min-height:100vh}
+.studio{min-height:100vh;display:flex;flex-direction:column}
 .topbar{
   border-bottom:1px solid var(--border-subtle); display:flex; align-items:center;
   justify-content:space-between; padding:10px 16px;
@@ -109,14 +109,17 @@ body {
 .brand-text{font-size:15px;font-weight:700;letter-spacing:-0.2px}
 .brand-sub{font-weight:400;color:var(--text-dim)}
 .toolbar{display:flex;gap:8px}
+.studio-body{flex:1;display:flex;flex-direction:column;min-height:0}
 .workspace{
   display:grid; grid-template-columns:var(--activity-bar-width) var(--sidebar-width) 1fr;
-  grid-template-rows:1fr auto; min-height:calc(100vh - 57px);
+  grid-template-rows:1fr; flex:1; min-height:0;
 }
 .activity-bar{
-  grid-row:1/3; background:var(--bg); border-right:1px solid var(--border-subtle);
+  background:var(--bg); border-right:1px solid var(--border-subtle);
   display:flex; flex-direction:column; align-items:center; padding:8px 0; gap:4px; z-index:10;
+  overflow-y:auto;
 }
+.activity-bar::-webkit-scrollbar{display:none}
 .activity-btn{
   width:36px;height:36px;border:none;border-radius:8px;background:none;
   color:var(--text-muted);cursor:pointer;display:grid;place-items:center;
@@ -124,7 +127,7 @@ body {
 }
 .activity-btn:hover{background:var(--bg-raised);color:var(--text-dim)}
 .activity-btn.active{background:var(--accent-glow);color:var(--accent)}
-.activity-spacer{flex:1}
+.activity-spacer{flex:1;min-height:0}
 .panel.ai-hidden{display:none}
 .panel,.center{border-right:1px solid var(--border-subtle);background:var(--bg-soft)}
 .panel{padding:14px 12px;overflow-y:auto;overflow-x:hidden}
@@ -212,7 +215,7 @@ pre{background:#0f131b;border:1px solid var(--border);border-radius:8px;padding:
 .track-badge.video{background:rgba(46,120,255,0.22);color:#6fa3ff}
 .track-badge.audio{background:rgba(203,147,66,0.22);color:#e5b86a}
 /* devtools */
-.devtools-drawer{grid-column:1/-1;grid-row:2;background:var(--bg);border-top:1px solid var(--border);height:260px;display:flex;flex-direction:column;overflow:hidden;z-index:50}
+.devtools-drawer{background:var(--bg);border-top:1px solid var(--border);height:260px;display:flex;flex-direction:column;overflow:hidden;z-index:50;flex-shrink:0}
 .devtools-header{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;background:var(--bg-soft);border-bottom:1px solid var(--border-subtle);font-size:11px;font-weight:600;color:var(--text-dim);letter-spacing:0.5px;flex-shrink:0}
 .devtools-out{flex:1;margin:0;border:none;border-radius:0;background:var(--bg);overflow:auto;padding:10px 14px;font-size:11px;color:#7adf9f;white-space:pre-wrap;max-height:none}
 /* home */
@@ -294,6 +297,7 @@ function buildDom(root: HTMLElement): void {
       <button class="btn" id="btn-export" type="button">Export</button>
     </div>
   </header>
+  <div class="studio-body">
   <div class="workspace" id="workspace">
     <nav class="activity-bar" id="activity-bar">
       <button class="activity-btn active" id="act-explorer" title="Project Explorer" type="button">
@@ -374,10 +378,11 @@ function buildDom(root: HTMLElement): void {
         <div id="timeline-grid" class="timeline-grid"></div>
       </section>
     </main>
-    <div class="devtools-drawer" id="devtools-drawer" style="display:none">
-      <div class="devtools-header"><span>Developer Tools — Endpoint Log</span><button class="btn subtle" id="btn-close-devtools" type="button">Close</button></div>
-      <pre id="out" class="devtools-out"></pre>
-    </div>
+  </div>
+  <div class="devtools-drawer" id="devtools-drawer" style="display:none">
+    <div class="devtools-header"><span>Developer Tools — Endpoint Log</span><button class="btn subtle" id="btn-close-devtools" type="button">Close</button></div>
+    <pre id="out" class="devtools-out"></pre>
+  </div>
   </div>
 </div>
 </div>
