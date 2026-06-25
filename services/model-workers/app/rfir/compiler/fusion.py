@@ -1,19 +1,10 @@
 """RFIR Compiler — Fusion pass: batch t2i_keyframe nodes across shots.
 
-This pass collapses all `t2i_keyframe` nodes that share a
-generation config into a single batched node.
+This collapses all 't21_keyframe' nodes that share a generation config into 
+a single batched node, then mutates and returns the graph so it can be 
+chained after `build()`.
 
 Spec reference: rfir-inference-engine-implementation.md §2.1
-  * The fused node keeps `op == "t2i_keyframe"` and carries `attrs["batch"]=True`
-    plus an ordered `prompts` list. The validator never checks output-port arity
-    (validate.py only inspects input ports), so a multi-output t2i node is legal.
-  * The fused node REUSES the original per-shot output tensor names, so every
-    downstream consumer (depth_estimate, vulkan_parallax, vae_encode, …) keeps
-    resolving with zero input rewiring.
-  * `prompts[i]` aligns positionally with the i-th output tensor; the executor
-    generates one image per prompt and writes it to the matching tensor.
-
-This pass mutates and returns the graph so it can be chained after `build()`.
 """
 from __future__ import annotations
 
