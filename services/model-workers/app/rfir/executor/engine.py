@@ -18,7 +18,7 @@ from app.rfir.compiler.scheduler import topological_sort
 from app.rfir.executor.context import ExecutionContext
 from app.rfir.ir.types import RfirGraph, RfirNode
 from app.rfir.models.loader import detect_device, unload_all
-from app.rfir.ops import t2i_keyframe, depth_estimate
+from app.rfir.ops import t2i_keyframe, depth_estimate, rife_interpolate
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ def _register_handlers() -> None:
     _OP_HANDLERS["vae_decode"] = _noop
     _OP_HANDLERS["segment_subject"] = _noop
     _OP_HANDLERS["sparse_t2v_window"] = _noop
-    _OP_HANDLERS["rife_interpolate"] = _noop
+    _OP_HANDLERS["rife_interpolate"] = _run_rife_interpolate
     _OP_HANDLERS["plan_shots"] = _noop
 
 
@@ -83,12 +83,24 @@ def run_graph(graph: RfirGraph, job_id: str, output_dir: str) -> ExecutionContex
 # ---------------------------------------------------------------------------
 
 def _run_t2i_keyframe(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
-    prompt = node.attrs.get("prompt", "")
     steps = node.attrs.get("steps", 4)
     width = node.attrs.get("width", 512)
     height = node.attrs.get("height", 288)
     seed = node.attrs.get("seed")
 
+    # for fusion shots ("batch" attr)
+    if node.attrs.get("batch"):
+        prompts = node.attrs.get("prompts", [])
+        out_tensors = list(node.outputs.values())  # ordered image_0..image_{n-1}
+        for i, (prompt, tensor_name) in enumerate(zip(prompts, out_tensors)):
+            image = t2i_keyframe.run(prompt, width=width, height=height, steps=steps, seed=seed)
+            arena.put(tensor_name, image)
+            img_path = out_path / f"{node.id}_{i}.png"
+            image.save(img_path)
+            ctx.artifacts[f"{node.id}_{i}"] = str(img_path)
+        return
+
+    prompt = node.attrs.get("prompt", "")
     image = t2i_keyframe.run(prompt, width=width, height=height, steps=steps, seed=seed)
 
     for port_name, tensor_name in node.outputs.items():
@@ -117,6 +129,32 @@ def _run_depth_estimate(node: RfirNode, arena: TensorArena, ctx: ExecutionContex
     depth_path = out_path / f"{node.id}.png"
     depth_img.save(depth_path)
     ctx.artifacts[node.id] = str(depth_path)
+
+
+def _run_rife_interpolate(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
+    """Tier B: interpolate frames between the start/end keyframes (§2.5)."""
+    start_t = node.inputs.get("frame_start", "")
+    end_t = node.inputs.get("frame_end", "")
+    if not (arena.has(start_t) and arena.has(end_t)):
+        logger.warning("rife_interpolate: missing keyframe inputs, skipping")
+        return
+
+    start_img = arena.get(start_t)
+    end_img = arena.get(end_t)
+    if not (isinstance(start_img, Image.Image) and isinstance(end_img, Image.Image)):
+        logger.warning("rife_interpolate: inputs are not PIL Images, skipping")
+        return
+
+    factor = int(node.attrs.get("factor", 4))
+    frames = rife_interpolate.run(start_img, end_img, factor=factor)
+
+    # Publish the frame list to every output tensor and save PNGs for the mux.
+    for tensor_name in node.outputs.values():
+        arena.put(tensor_name, frames)
+    for i, frame in enumerate(frames):
+        frame_path = out_path / f"{node.id}_{i}.png"
+        frame.save(frame_path)
+        ctx.artifacts[f"{node.id}_{i}"] = str(frame_path)
 
 
 def _run_vulkan_parallax_stub(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
