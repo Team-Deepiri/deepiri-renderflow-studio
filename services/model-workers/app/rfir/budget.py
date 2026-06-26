@@ -26,22 +26,12 @@ def _downgrade_t2i(node: RfirNode) -> None:
     node.estimated_gpu_ms *= 0.5 # assume time halves with halve steps
 
 
-def _downgrade_sparse_t2v(node: RfirNode) -> None:
-    node.attrs["steps"] = max(4, int(node.attrs.get("steps", 10)) // 2)
-    # Drop full-frame synthesis down to ROI — the single biggest saving.
-    if node.attrs.get("full_frame"):
-        node.attrs["full_frame"] = False
-    node.estimated_gpu_ms *= 0.6
-
-
 def _downgrade_rife(node: RfirNode) -> None:
     node.attrs["factor"] = max(2, int(node.attrs.get("factor", 4)) // 2)
     node.estimated_gpu_ms *= 0.7
 
 
 _DEPTH_MIN_SCALE = 0.5
-
-
 def _downgrade_depth(node: RfirNode) -> None:
     scale = float(node.attrs.get("infer_scale", 1.0))
     if scale <= _DEPTH_MIN_SCALE:
@@ -53,7 +43,6 @@ def _downgrade_depth(node: RfirNode) -> None:
 
 _TEMPLATES = {
     "t2i_keyframe": _downgrade_t2i,
-    "sparse_t2v_window": _downgrade_sparse_t2v,
     "rife_interpolate": _downgrade_rife,
     "depth_estimate": _downgrade_depth,
 }
