@@ -42,6 +42,8 @@ class ExecutionContext:
     node_metrics: list[NodeMetric] = field(default_factory=list)
     artifacts: dict[str, str] = field(default_factory=dict)
     escalations: list[dict[str, Any]] = field(default_factory=list)
+    tier_distribution: dict[str, int] = field(default_factory=dict)
+    downgrades: list[dict[str, Any]] = field(default_factory=list)
 
     def record_escalation(self, node_id: str, decision: EscalationDecision) -> None:
         """Record a Tier B SSIM gate outcome for the review UI / metrics."""
@@ -75,4 +77,6 @@ class ExecutionContext:
             ],
             "artifacts": self.artifacts,
             "escalations": self.escalations,
+            "tier_distribution": self.tier_distribution,
+            "downgrades": self.downgrades,
         }
