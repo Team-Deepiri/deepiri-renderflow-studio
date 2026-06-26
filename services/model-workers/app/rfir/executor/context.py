@@ -5,7 +5,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-
 @dataclass
 class NodeMetric:
     node_id: str
@@ -15,12 +14,43 @@ class NodeMetric:
 
 
 @dataclass
+class EscalationDecision:
+    escalate: bool
+    reason: str
+    ssim: float
+
+
+def decide_escalation(
+    ssim_score: float,
+    *,
+    threshold: float = 0.85, #Default SSIM threshold
+    escalations_remaining: int = 0,
+) -> EscalationDecision:
+    """Decide whether a Tier B segment should escalate to Tier C."""
+    if ssim_score >= threshold:
+        return EscalationDecision(False, "quality_ok", ssim_score)
+    if escalations_remaining <= 0:
+        return EscalationDecision(False, "no_escalations_left", ssim_score)
+    return EscalationDecision(True, "low_ssim", ssim_score)
+
+
+@dataclass
 class ExecutionContext:
     job_id: str
     device: str = "cpu"
     start_time: float = field(default_factory=time.monotonic)
     node_metrics: list[NodeMetric] = field(default_factory=list)
     artifacts: dict[str, str] = field(default_factory=dict)
+    escalations: list[dict[str, Any]] = field(default_factory=list)
+
+    def record_escalation(self, node_id: str, decision: EscalationDecision) -> None:
+        """Record a Tier B SSIM gate outcome for the review UI / metrics."""
+        self.escalations.append({
+            "node_id": node_id,
+            "escalate": decision.escalate,
+            "reason": decision.reason,
+            "ssim": decision.ssim,
+        })
 
     @property
     def elapsed_seconds(self) -> float:
@@ -44,4 +74,5 @@ class ExecutionContext:
                 for m in self.node_metrics
             ],
             "artifacts": self.artifacts,
+            "escalations": self.escalations,
         }
