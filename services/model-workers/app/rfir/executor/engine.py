@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PIL import Image
 
 from app.rfir.arena import TensorArena
+from app.rfir.budget import BudgetGovernor
 from app.rfir.compiler.scheduler import topological_sort
 from app.rfir.executor.context import ExecutionContext, decide_escalation
 from app.rfir.ir.types import RfirGraph, RfirNode
@@ -41,16 +41,21 @@ def _register_handlers() -> None:
     _OP_HANDLERS["plan_shots"] = _noop
 
 
-def run_graph(graph: RfirGraph, job_id: str, output_dir: str) -> ExecutionContext:
+def run_graph(graph: RfirGraph, job_id: str, output_dir: str, budget=None) -> ExecutionContext:
     """Execute all nodes in dependency order. Returns execution context with metrics."""
     if not _OP_HANDLERS:
         _register_handlers()
 
     device = detect_device()
     ctx = ExecutionContext(job_id=job_id, device=device)
+    ctx.tier_distribution = dict(graph.metadata.get("tier_distribution", {}))
     arena = TensorArena()
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
+
+    governor = None
+    if budget is not None:
+        governor = BudgetGovernor(budget, vram_hints=graph.metadata.get("downgrade_hints", []))
 
     order = topological_sort(graph)
     logger.info("Executing %d nodes on %s for job %s", len(order), device, job_id)
@@ -66,14 +71,23 @@ def run_graph(graph: RfirGraph, job_id: str, output_dir: str) -> ExecutionContex
                 logger.warning("No handler for op %s (node %s), skipping", node.op, node_id)
                 continue
 
+            if governor is not None:
+                node = governor.before_node(node)  # may return a downgraded copy
+
             t0 = time.monotonic()
             handler(node, arena, ctx, out_path)
             wall_ms = (time.monotonic() - t0) * 1000
-            ctx.record_node(node_id, node.op, wall_ms)
+            # gpu_ms here is the (post-downgrade) estimate — real profiling is future work.
+            ctx.record_node(node_id, node.op, wall_ms, gpu_ms=node.estimated_gpu_ms)
+            if governor is not None:
+                governor.after_node(node.estimated_gpu_ms / 1000.0)
             logger.info("  %s (%s): %.0f ms", node_id, node.op, wall_ms)
     finally:
         arena.release_all()
         unload_all()
+
+    if governor is not None:
+        ctx.downgrades = governor.metrics()["downgrades"]
 
     return ctx
 
@@ -112,6 +126,8 @@ def _run_t2i_keyframe(node: RfirNode, arena: TensorArena, ctx: ExecutionContext,
 
 
 def _run_depth_estimate(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
+    from PIL import Image
+
     input_tensor = list(node.inputs.values())[0]
     image = arena.get(input_tensor)
 
@@ -133,6 +149,8 @@ def _run_depth_estimate(node: RfirNode, arena: TensorArena, ctx: ExecutionContex
 
 def _run_rife_interpolate(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
     """Tier B: interpolate frames between the start/end keyframes (§2.5)."""
+    from PIL import Image
+
     start_t = node.inputs.get("frame_start", "")
     end_t = node.inputs.get("frame_end", "")
     if not (arena.has(start_t) and arena.has(end_t)):
