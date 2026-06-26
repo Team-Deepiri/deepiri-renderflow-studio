@@ -73,6 +73,8 @@ def load_model(model_id: str, device: str | None = None) -> Any:
         pipeline = _load_t2i_pipeline(manifest, device, precision)
     elif manifest.role == "depth_estimate":
         pipeline = _load_depth_model(manifest, device, precision)
+    elif manifest.role == "plan_shots":
+        pipeline = _load_llm(manifest, device)
     else:
         raise ValueError(f"No loader for role: {manifest.role!r}")
 
@@ -150,3 +152,29 @@ def _load_depth_model(manifest: ModelManifest, device: str, precision: Precision
         model = model.to(device)
 
     return {"model": model, "processor": processor, "device": device}
+
+
+def _load_llm(manifest: ModelManifest, device: str) -> Any:
+    from llama_cpp import Llama
+
+    n_ctx = int(manifest.extras.get("n_ctx", 4096))
+    filename = manifest.extras.get("filename", "*.gguf")
+    n_gpu_layers = -1 if device in ("cuda", "mps") else 0  # -1 = offload all layers
+
+    models_dir = os.environ.get("RENDERFLOW_MODELS_DIR")
+    local_dir = os.path.join(models_dir, manifest.id) if models_dir else None
+    if local_dir and os.path.isdir(local_dir):
+        import glob
+        matches = glob.glob(os.path.join(local_dir, filename))
+        if not matches:
+            raise FileNotFoundError(f"no GGUF matching {filename!r} in {local_dir}")
+        return Llama(model_path=matches[0], n_ctx=n_ctx, n_gpu_layers=n_gpu_layers, verbose=False)
+
+    # Download (and cache) the quantized file from HuggingFace.
+    return Llama.from_pretrained(
+        repo_id=manifest.repo,
+        filename=filename,
+        n_ctx=n_ctx,
+        n_gpu_layers=n_gpu_layers,
+        verbose=False,
+    )
