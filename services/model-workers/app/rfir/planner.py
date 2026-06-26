@@ -72,7 +72,7 @@ def _user_message(prompt: str, num_shots: int | None) -> str:
 
 
 def _generate_with_qwen(prompt: str, num_shots: int | None) -> str:
-    """Run Qwen via llama-cpp; return the raw JSON string. Lazy-loads the model."""
+    """Run Qwen via llama-cpp; return the raw JSON string."""
     from app.rfir.models.loader import load_model
 
     llm = load_model(QWEN_MODEL_ID)
@@ -145,22 +145,18 @@ def _parse_shotlist(raw: str, prompt: str) -> ShotList:
 def plan(
     prompt: str,
     *,
+    guardrail: Callable[[str], bool],
     num_shots: int | None = None,
     max_tier: Tier = Tier.C,
-    guardrail: Callable[[str], bool] | None = None,
     generate_fn: Callable[[str], str] | None = None,
 ) -> ShotList:
-    """Produce a tier-assigned ShotList from a prompt using Qwen.
-
-    Args:
-        num_shots: optional hint passed to Qwen and used as an upper clamp.
-        max_tier: ceiling enforced by the router after planning.
-        guardrail: prompt gate; defaults to `default_prompt_gate`. Returns False
-            to block (raises PlannerBlocked).
-        generate_fn: optional injection point returning the raw JSON string;
-            used by tests to bypass the model. Defaults to the Qwen call.
-    """
-    if not guardrail(prompt):
+    """Produce a tier-assigned ShotList from a prompt using Qwen."""
+    # 🛡️ Mandatory guardrail, fail-closed: any error blocks rather than bypasses.
+    try:
+        allowed = guardrail(prompt)
+    except Exception as e:
+        raise PlannerBlocked(f"guardrail check failed (fail-closed): {e}") from e
+    if not allowed:
         raise PlannerBlocked(f"prompt rejected by guardrail: {prompt[:60]!r}")
 
     if num_shots is not None:
