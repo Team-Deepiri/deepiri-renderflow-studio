@@ -13,14 +13,12 @@ package-mode = false
 python = ">=3.11,<3.15"
 redis = ">=5.0.0"
 deepiri-renderflow-worker-queue = { path = "../../lib/renderflow_queue", develop = true }
+# `diri-agent-guardrails`: mandatory worker-side guardrails for the planner.
+# Track `main`; `poetry lock` pins the commit. Bump with `poetry update diri-agent-guardrails`.
+diri-agent-guardrails = { git = "https://github.com/Team-Deepiri/diri-agent-guardrails.git", branch = "main" }
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
-
-# Optional LLM planner deps (§2.4). Install with: poetry install --with llm
-# Kept optional so base installs and CI stay light (no compiled llama-cpp).
-[tool.poetry.group.llm]
-optional = true
 
 [tool.poetry.group.llm.dependencies]
 llama-cpp-python = ">=0.3.0"
@@ -28,5 +26,3 @@ llama-cpp-python = ">=0.3.0"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-# `diri-agent-guardrails`: track `main`; `poetry lock` pins the commit. Bump with `poetry update diri-agent-guardrails`.
-diri-agent-guardrails = { git = "https://github.com/Team-Deepiri/diri-agent-guardrails.git", branch = "main" }
