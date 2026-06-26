@@ -156,9 +156,7 @@ def _run_rife_interpolate(node: RfirNode, arena: TensorArena, ctx: ExecutionCont
         frame.save(frame_path)
         ctx.artifacts[f"{node.id}_{i}"] = str(frame_path)
 
-    # SSIM quality gate (§2.6): if a verification keyframe is available, compare it
-    # against the RIFE midpoint and record whether this segment should escalate to
-    # Tier C. Dormant until the builder emits a verification keyframe (Phase 3).
+    # SSIM quality gate (§2.6)
     verify_t = node.attrs.get("verify_keyframe")
     if verify_t and arena.has(verify_t) and len(frames) >= 3:
         verify_img = arena.get(verify_t)
@@ -171,11 +169,7 @@ def _run_rife_interpolate(node: RfirNode, arena: TensorArena, ctx: ExecutionCont
 
 
 def compute_ssim(a: Image.Image, b: Image.Image) -> float:
-    """Structural similarity in [0, 1] between two images (§2.6 measurement).
-
-    Uses numpy + skimage (already on the executor's dep path). Greyscales and
-    resizes b to match a before comparing.
-    """
+    """Structural similarity in [0, 1] between two images."""
     from skimage.metrics import structural_similarity as ssim
 
     arr_a = np.asarray(a.convert("L"), dtype="float32")
