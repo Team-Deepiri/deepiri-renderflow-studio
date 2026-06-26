@@ -13,6 +13,11 @@ package-mode = false
 python = ">=3.11,<3.15"
 redis = ">=5.0.0"
 deepiri-renderflow-worker-queue = { path = "../../lib/renderflow_queue", develop = true }
+# `diri-agent-guardrails`: mandatory worker-side guardrails for the planner.
+# Track `main`; `poetry lock` pins the commit. Bump with `poetry update diri-agent-guardrails`.
+diri-agent-guardrails = { git = "https://github.com/Team-Deepiri/diri-agent-guardrails.git", branch = "main" }
+llama-cpp-python = ">=0.3.0"
+scikit-image = ">=0.22"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
@@ -20,5 +25,3 @@ pytest = "^8.0.0"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-# `diri-agent-guardrails`: track `main`; `poetry lock` pins the commit. Bump with `poetry update diri-agent-guardrails`.
-diri-agent-guardrails = { git = "https://github.com/Team-Deepiri/diri-agent-guardrails.git", branch = "main" }

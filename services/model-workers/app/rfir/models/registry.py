@@ -48,6 +48,23 @@ REGISTRY: dict[str, ModelManifest] = {
         license="openrail++",
         extras={"fallback_for": "flux-schnell-fp16"},
     ),
+    "rife-4.6": ModelManifest(
+        id="rife-4.6",
+        role="rife_interpolate",
+        repo="hzwer/Practical-RIFE",
+        quantization="fp16",
+        vram_mb=2048,
+        license="mit",
+    ),
+    "qwen2.5-3b-instruct-gguf": ModelManifest(
+        id="qwen2.5-3b-instruct-gguf",
+        role="plan_shots",
+        repo="Qwen/Qwen2.5-3B-Instruct-GGUF",
+        quantization="q4_k_m",
+        vram_mb=2048,
+        license="apache-2.0",
+        extras={"filename": "*q4_k_m.gguf", "n_ctx": 4096},
+    ),
 }
 
 

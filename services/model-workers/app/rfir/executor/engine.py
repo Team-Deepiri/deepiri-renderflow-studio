@@ -11,14 +11,14 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PIL import Image
 
 from app.rfir.arena import TensorArena
+from app.rfir.budget import BudgetGovernor
 from app.rfir.compiler.scheduler import topological_sort
-from app.rfir.executor.context import ExecutionContext
+from app.rfir.executor.context import ExecutionContext, decide_escalation
 from app.rfir.ir.types import RfirGraph, RfirNode
 from app.rfir.models.loader import detect_device, unload_all
-from app.rfir.ops import t2i_keyframe, depth_estimate
+from app.rfir.ops import t2i_keyframe, depth_estimate, rife_interpolate
 
 logger = logging.getLogger(__name__)
 
@@ -37,20 +37,25 @@ def _register_handlers() -> None:
     _OP_HANDLERS["vae_decode"] = _noop
     _OP_HANDLERS["segment_subject"] = _noop
     _OP_HANDLERS["sparse_t2v_window"] = _noop
-    _OP_HANDLERS["rife_interpolate"] = _noop
+    _OP_HANDLERS["rife_interpolate"] = _run_rife_interpolate
     _OP_HANDLERS["plan_shots"] = _noop
 
 
-def run_graph(graph: RfirGraph, job_id: str, output_dir: str) -> ExecutionContext:
+def run_graph(graph: RfirGraph, job_id: str, output_dir: str, budget=None) -> ExecutionContext:
     """Execute all nodes in dependency order. Returns execution context with metrics."""
     if not _OP_HANDLERS:
         _register_handlers()
 
     device = detect_device()
     ctx = ExecutionContext(job_id=job_id, device=device)
+    ctx.tier_distribution = dict(graph.metadata.get("tier_distribution", {}))
     arena = TensorArena()
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
+
+    governor = None
+    if budget is not None:
+        governor = BudgetGovernor(budget, vram_hints=graph.metadata.get("downgrade_hints", []))
 
     order = topological_sort(graph)
     logger.info("Executing %d nodes on %s for job %s", len(order), device, job_id)
@@ -66,14 +71,23 @@ def run_graph(graph: RfirGraph, job_id: str, output_dir: str) -> ExecutionContex
                 logger.warning("No handler for op %s (node %s), skipping", node.op, node_id)
                 continue
 
+            if governor is not None:
+                node = governor.before_node(node)  # may return a downgraded copy
+
             t0 = time.monotonic()
             handler(node, arena, ctx, out_path)
             wall_ms = (time.monotonic() - t0) * 1000
-            ctx.record_node(node_id, node.op, wall_ms)
+            # gpu_ms here is the (post-downgrade) estimate — real profiling is future work.
+            ctx.record_node(node_id, node.op, wall_ms, gpu_ms=node.estimated_gpu_ms)
+            if governor is not None:
+                governor.after_node(node.estimated_gpu_ms / 1000.0)
             logger.info("  %s (%s): %.0f ms", node_id, node.op, wall_ms)
     finally:
         arena.release_all()
         unload_all()
+
+    if governor is not None:
+        ctx.downgrades = governor.metrics()["downgrades"]
 
     return ctx
 
@@ -83,12 +97,24 @@ def run_graph(graph: RfirGraph, job_id: str, output_dir: str) -> ExecutionContex
 # ---------------------------------------------------------------------------
 
 def _run_t2i_keyframe(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
-    prompt = node.attrs.get("prompt", "")
     steps = node.attrs.get("steps", 4)
     width = node.attrs.get("width", 512)
     height = node.attrs.get("height", 288)
     seed = node.attrs.get("seed")
 
+    # for fusion shots ("batch" attr)
+    if node.attrs.get("batch"):
+        prompts = node.attrs.get("prompts", [])
+        out_tensors = list(node.outputs.values())  # ordered image_0..image_{n-1}
+        for i, (prompt, tensor_name) in enumerate(zip(prompts, out_tensors)):
+            image = t2i_keyframe.run(prompt, width=width, height=height, steps=steps, seed=seed)
+            arena.put(tensor_name, image)
+            img_path = out_path / f"{node.id}_{i}.png"
+            image.save(img_path)
+            ctx.artifacts[f"{node.id}_{i}"] = str(img_path)
+        return
+
+    prompt = node.attrs.get("prompt", "")
     image = t2i_keyframe.run(prompt, width=width, height=height, steps=steps, seed=seed)
 
     for port_name, tensor_name in node.outputs.items():
@@ -100,6 +126,8 @@ def _run_t2i_keyframe(node: RfirNode, arena: TensorArena, ctx: ExecutionContext,
 
 
 def _run_depth_estimate(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
+    from PIL import Image
+
     input_tensor = list(node.inputs.values())[0]
     image = arena.get(input_tensor)
 
@@ -107,7 +135,7 @@ def _run_depth_estimate(node: RfirNode, arena: TensorArena, ctx: ExecutionContex
         logger.warning("depth_estimate: input is not a PIL Image, skipping")
         return
 
-    depth_map = depth_estimate.run(image)
+    depth_map = depth_estimate.run(image, infer_scale=float(node.attrs.get("infer_scale", 1.0)))
 
     for tensor_name in node.outputs.values():
         arena.put(tensor_name, depth_map)
@@ -117,6 +145,56 @@ def _run_depth_estimate(node: RfirNode, arena: TensorArena, ctx: ExecutionContex
     depth_path = out_path / f"{node.id}.png"
     depth_img.save(depth_path)
     ctx.artifacts[node.id] = str(depth_path)
+
+
+def _run_rife_interpolate(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
+    """Tier B: interpolate frames between the start/end keyframes (§2.5)."""
+    from PIL import Image
+
+    start_t = node.inputs.get("frame_start", "")
+    end_t = node.inputs.get("frame_end", "")
+    if not (arena.has(start_t) and arena.has(end_t)):
+        logger.warning("rife_interpolate: missing keyframe inputs, skipping")
+        return
+
+    start_img = arena.get(start_t)
+    end_img = arena.get(end_t)
+    if not (isinstance(start_img, Image.Image) and isinstance(end_img, Image.Image)):
+        logger.warning("rife_interpolate: inputs are not PIL Images, skipping")
+        return
+
+    factor = int(node.attrs.get("factor", 4))
+    frames = rife_interpolate.run(start_img, end_img, factor=factor)
+
+    # Publish the frame list to every output tensor and save PNGs for the mux.
+    for tensor_name in node.outputs.values():
+        arena.put(tensor_name, frames)
+    for i, frame in enumerate(frames):
+        frame_path = out_path / f"{node.id}_{i}.png"
+        frame.save(frame_path)
+        ctx.artifacts[f"{node.id}_{i}"] = str(frame_path)
+
+    # SSIM quality gate (§2.6)
+    verify_t = node.attrs.get("verify_keyframe")
+    if verify_t and arena.has(verify_t) and len(frames) >= 3:
+        verify_img = arena.get(verify_t)
+        if isinstance(verify_img, Image.Image):
+            score = compute_ssim(frames[len(frames) // 2], verify_img)
+            decision = decide_escalation(
+                score, escalations_remaining=int(node.attrs.get("escalations_remaining", 0))
+            )
+            ctx.record_escalation(node.id, decision)
+
+
+def compute_ssim(a: Image.Image, b: Image.Image) -> float:
+    """Structural similarity in [0, 1] between two images."""
+    from skimage.metrics import structural_similarity as ssim
+
+    arr_a = np.asarray(a.convert("L"), dtype="float32")
+    b_resized = b.resize(a.size) if b.size != a.size else b
+    arr_b = np.asarray(b_resized.convert("L"), dtype="float32")
+    score = ssim(arr_a, arr_b, data_range=255.0)
+    return float(max(0.0, min(1.0, score)))
 
 
 def _run_vulkan_parallax_stub(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
