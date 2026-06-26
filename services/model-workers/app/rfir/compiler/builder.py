@@ -48,9 +48,14 @@ def build(
         "total_duration_sec": shot_list.total_duration_sec(),
     })
 
+    tier_distribution: dict[str, int] = {}
     for shot in shot_list.shots:
         effective_tier = _cap_tier(shot.tier, budget.max_tier)
+        tier_distribution[effective_tier.value] = tier_distribution.get(effective_tier.value, 0) + 1
         _build_shot_subgraph(graph, shot, effective_tier)
+
+    # Record the *effective* (post-cap) tier mix for job metrics (§12).
+    graph.metadata["tier_distribution"] = tier_distribution
 
     graph.nodes.append(RfirNode(
         id="mux",

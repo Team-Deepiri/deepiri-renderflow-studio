@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL = "depth-anything-v2-small"
 
 
-def run(image: Image.Image, *, model_id: str | None = None) -> np.ndarray:
+def run(image: Image.Image, *, model_id: str | None = None, infer_scale: float = 1.0) -> np.ndarray:
     """Estimate a depth map from an RGB image.
 
     Returns a float32 numpy array (H, W) with values in [0, 1].
@@ -31,9 +31,19 @@ def run(image: Image.Image, *, model_id: str | None = None) -> np.ndarray:
     processor = bundle["processor"]
     device = bundle["device"]
 
-    logger.info("depth_estimate: %dx%d, model=%s, device=%s", image.width, image.height, mid, device)
+    # Downsample the inference input when infer_scale < 1.0 (output size unchanged).
+    infer_image = image
+    if infer_scale < 1.0:
+        w = max(1, int(round(image.width * infer_scale)))
+        h = max(1, int(round(image.height * infer_scale)))
+        infer_image = image.resize((w, h))
 
-    inputs = processor(images=image, return_tensors="pt")
+    logger.info(
+        "depth_estimate: %dx%d (infer %dx%d, scale=%.2f), model=%s, device=%s",
+        image.width, image.height, infer_image.width, infer_image.height, infer_scale, mid, device,
+    )
+
+    inputs = processor(images=infer_image, return_tensors="pt")
     if device in ("cuda", "mps"):
         inputs = {k: v.to(device) for k, v in inputs.items()}
 
