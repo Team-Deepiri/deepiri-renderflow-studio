@@ -15,7 +15,7 @@ from PIL import Image
 
 from app.rfir.arena import TensorArena
 from app.rfir.compiler.scheduler import topological_sort
-from app.rfir.executor.context import ExecutionContext
+from app.rfir.executor.context import ExecutionContext, decide_escalation
 from app.rfir.ir.types import RfirGraph, RfirNode
 from app.rfir.models.loader import detect_device, unload_all
 from app.rfir.ops import t2i_keyframe, depth_estimate, rife_interpolate
@@ -119,7 +119,7 @@ def _run_depth_estimate(node: RfirNode, arena: TensorArena, ctx: ExecutionContex
         logger.warning("depth_estimate: input is not a PIL Image, skipping")
         return
 
-    depth_map = depth_estimate.run(image)
+    depth_map = depth_estimate.run(image, infer_scale=float(node.attrs.get("infer_scale", 1.0)))
 
     for tensor_name in node.outputs.values():
         arena.put(tensor_name, depth_map)
@@ -155,6 +155,34 @@ def _run_rife_interpolate(node: RfirNode, arena: TensorArena, ctx: ExecutionCont
         frame_path = out_path / f"{node.id}_{i}.png"
         frame.save(frame_path)
         ctx.artifacts[f"{node.id}_{i}"] = str(frame_path)
+
+    # SSIM quality gate (§2.6): if a verification keyframe is available, compare it
+    # against the RIFE midpoint and record whether this segment should escalate to
+    # Tier C. Dormant until the builder emits a verification keyframe (Phase 3).
+    verify_t = node.attrs.get("verify_keyframe")
+    if verify_t and arena.has(verify_t) and len(frames) >= 3:
+        verify_img = arena.get(verify_t)
+        if isinstance(verify_img, Image.Image):
+            score = compute_ssim(frames[len(frames) // 2], verify_img)
+            decision = decide_escalation(
+                score, escalations_remaining=int(node.attrs.get("escalations_remaining", 0))
+            )
+            ctx.record_escalation(node.id, decision)
+
+
+def compute_ssim(a: Image.Image, b: Image.Image) -> float:
+    """Structural similarity in [0, 1] between two images (§2.6 measurement).
+
+    Uses numpy + skimage (already on the executor's dep path). Greyscales and
+    resizes b to match a before comparing.
+    """
+    from skimage.metrics import structural_similarity as ssim
+
+    arr_a = np.asarray(a.convert("L"), dtype="float32")
+    b_resized = b.resize(a.size) if b.size != a.size else b
+    arr_b = np.asarray(b_resized.convert("L"), dtype="float32")
+    score = ssim(arr_a, arr_b, data_range=255.0)
+    return float(max(0.0, min(1.0, score)))
 
 
 def _run_vulkan_parallax_stub(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
