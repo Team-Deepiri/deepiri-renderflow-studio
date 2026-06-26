@@ -1,9 +1,5 @@
 """RFIR Compiler — Fusion pass: batch t2i_keyframe nodes across shots.
 
-This collapses all 't21_keyframe' nodes that share a generation config into 
-a single batched node, then mutates and returns the graph so it can be 
-chained after `build()`.
-
 Spec reference: rfir-inference-engine-implementation.md §2.1
 """
 from __future__ import annotations
@@ -39,7 +35,6 @@ def _single_output_tensor(node: RfirNode) -> str | None:
 
 def fuse(graph: RfirGraph) -> RfirGraph:
     """Collapse same-config t2i_keyframe nodes into batched nodes.
-
     Returns the (mutated) graph. Groups of one node are left untouched.
     """
     # Bucket t2i nodes by config, preserving first-seen order within each group.
@@ -56,8 +51,6 @@ def fuse(graph: RfirGraph) -> RfirGraph:
     fused_count = 0
     nodes_before = sum(len(v) for v in groups.values())
 
-    # Map each member node -> the fused node that replaces it, plus the fused
-    # nodes themselves keyed by the index of the earliest member (insertion point).
     member_to_fused: dict[str, RfirNode] = {}
     insert_at: dict[int, RfirNode] = {}
     index_of = {node.id: i for i, node in enumerate(graph.nodes)}
@@ -104,8 +97,6 @@ def fuse(graph: RfirGraph) -> RfirGraph:
         insert_at[min(index_of[m.id] for m in members)] = fused
         fused_count += 1
 
-    # Rebuild the node list: drop fused members, drop the fused node in at the
-    # position of its earliest member.
     new_nodes: list[RfirNode] = []
     for i, node in enumerate(graph.nodes):
         if i in insert_at:
