@@ -17,6 +17,14 @@ deepiri-renderflow-worker-queue = { path = "../../lib/renderflow_queue", develop
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
 
+# Optional LLM planner deps (§2.4). Install with: poetry install --with llm
+# Kept optional so base installs and CI stay light (no compiled llama-cpp).
+[tool.poetry.group.llm]
+optional = true
+
+[tool.poetry.group.llm.dependencies]
+llama-cpp-python = ">=0.3.0"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
