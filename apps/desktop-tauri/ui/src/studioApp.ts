@@ -159,7 +159,11 @@ body {
 .timeline-grid{margin-top:10px;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#0d1119;user-select:none}
 .hint{font-size:10px;color:var(--text-muted);padding:4px 12px;background:var(--bg);border-bottom:1px solid var(--border-subtle);letter-spacing:0.3px}
 .track-row{display:grid;grid-template-columns:110px 1fr;min-height:46px;border-bottom:1px solid #1f2736}
-.track-name{border-right:1px solid #1f2736;padding:8px;font-size:12px;color:var(--text-dim);display:flex;flex-direction:column;justify-content:center;gap:2px}
+.track-name{border-right:1px solid #1f2736;padding:8px;font-size:12px;color:var(--text-dim);display:flex;align-items:center;justify-content:space-between;gap:4px}
+.track-name-label{cursor:pointer}
+.track-delete{background:none;border:none;color:var(--text-muted);font-size:16px;cursor:pointer;opacity:0;padding:2px 6px;border-radius:4px;transition:opacity 0.15s,color 0.15s}
+.track-row:hover .track-delete{opacity:1}
+.track-delete:hover{color:var(--danger)}
 .track-lane{position:relative}
 .marker{position:absolute;top:0;bottom:0;width:1px;background:rgba(255,219,120,0.9);pointer-events:none}
 .clip{position:absolute;top:8px;bottom:8px;border-radius:6px;padding:6px 8px;font-size:11px;color:#f4f7ff;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;border:1px solid rgba(255,255,255,0.18);touch-action:none}
@@ -608,6 +612,24 @@ export function bootstrapStudioApp(): void {
         state.ui.activeTrackId === trackId ? null : trackId;
       renderTimelineFull();
     },
+    onTrackDelete: (trackId) => {
+      const idx = state.timeline.tracks.findIndex((t) => t.id === trackId);
+      if (idx < 0) return;
+      const track = state.timeline.tracks[idx];
+      if (track.clips.length > 0) {
+        if (!window.confirm(`Delete "${track.name}"? This will also remove ${track.clips.length} clip(s).`)) return;
+      }
+      state.timeline.tracks.splice(idx, 1);
+      if (state.ui.activeTrackId === trackId) {
+        state.ui.activeTrackId = state.timeline.tracks[0]?.id ?? null;
+      }
+      if (state.ui.selectedClipId != null) {
+        const exists = state.timeline.tracks.some((t) => t.clips.some((c) => c.id === state.ui.selectedClipId));
+        if (!exists) state.ui.selectedClipId = null;
+      }
+      renderTimelineFull();
+      updateInspector(state, inspectorEl);
+    },
     onLaneClick: (trackId, tick) => {
       state.ui.activeTrackId = trackId;
       seek(state, tick);
@@ -731,9 +753,10 @@ export function bootstrapStudioApp(): void {
     const offsetSecs = (state.timeline.playheadTick - clip.inTick) / state.timeline.fps;
     previewEmpty.style.display = "none";
     try {
-      const b64 = await fetchFrame(asset.uri, offsetSecs);
-      previewFrame.src = `data:image/png;base64,${b64}`;
-      previewFrame.style.display = "";
+      const path = asset.meta_jsonb?.proxy_path ?? asset.uri;
+      const b64 = await fetchFrame(path, offsetSecs);
+      previewFrame.src = `data:image/jpeg;base64,${b64}`;
+      previewFrame.style.display = "block";
     } catch {
       previewFrame.style.display = "none";
       previewEmpty.style.display = "";
@@ -750,7 +773,7 @@ export function bootstrapStudioApp(): void {
     previewVideo.src = getStreamUrl(proxyPath);
     previewVideo.currentTime = offsetSecs;
     previewVideo.play().catch(() => {});
-    previewVideo.style.display = "";
+    previewVideo.style.display = "block";
     previewFrame.style.display = "none";
     previewEmpty.style.display = "none";
   }
@@ -1041,7 +1064,30 @@ export function bootstrapStudioApp(): void {
     try {
       const asset = await importMedia(state.activeProjectId, path);
       registerAsset(state, asset);
+      // Auto-insert clip onto the first video track
+      const videoTrack = state.timeline.tracks.find((t) => t.kind === "Video");
+      if (videoTrack) {
+        // Clear demo clips (clips without a linked asset)
+        videoTrack.clips = videoTrack.clips.filter((c) => c.serverId);
+        state.ui.activeTrackId = videoTrack.id;
+        insertClipFromAsset(state, asset, history);
+        // Extend timeline if clip exceeds duration
+        const maxOut = videoTrack.clips.reduce((m, c) => Math.max(m, c.outTick), 0);
+        if (maxOut + state.timeline.fps * 2 > state.timeline.durationTicks) {
+          state.timeline.durationTicks = maxOut + state.timeline.fps * 2;
+        }
+        renderTimelineFull();
+      }
       renderAssets();
+      // Start proxy polling if needed
+      if (asset.meta_jsonb?.proxy_status === "pending") {
+        startProxyPolling(state, getAsset, (updated) => {
+          updateAsset(state, updated.id, updated);
+          renderAssets();
+          void fetchFrameForPlayhead();
+        });
+      }
+      void fetchFrameForPlayhead();
       devLog(`Imported: ${asset.uri}`);
     } catch (e) {
       devLog(`Import error: ${String(e)}`);
@@ -1068,11 +1114,30 @@ export function bootstrapStudioApp(): void {
         const filePath = (file as File & { path?: string }).path || file.name;
         const asset = await importMedia(state.activeProjectId, filePath);
         registerAsset(state, asset);
+        const videoTrack = state.timeline.tracks.find((t) => t.kind === "Video");
+        if (videoTrack) {
+          videoTrack.clips = videoTrack.clips.filter((c) => c.serverId);
+          state.ui.activeTrackId = videoTrack.id;
+          insertClipFromAsset(state, asset, history);
+          const maxOut = videoTrack.clips.reduce((m, c) => Math.max(m, c.outTick), 0);
+          if (maxOut + state.timeline.fps * 2 > state.timeline.durationTicks) {
+            state.timeline.durationTicks = maxOut + state.timeline.fps * 2;
+          }
+        }
+        if (asset.meta_jsonb?.proxy_status === "pending") {
+          startProxyPolling(state, getAsset, (updated) => {
+            updateAsset(state, updated.id, updated);
+            renderAssets();
+            void fetchFrameForPlayhead();
+          });
+        }
       } catch (err) {
         devLog(`Drop import error: ${String(err)}`);
       }
     }
+    renderTimelineFull();
     renderAssets();
+    void fetchFrameForPlayhead();
   });
 
   // Add tracks

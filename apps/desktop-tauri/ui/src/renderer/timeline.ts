@@ -2,6 +2,7 @@ import type { StudioState } from "../state";
 
 export type TimelineCallbacks = {
   onTrackNameClick: (trackId: number) => void;
+  onTrackDelete: (trackId: number) => void;
   onLaneClick: (trackId: number, tick: number) => void;
   onClipClick: (clipId: number, trackId: number) => void;
   onClipPointerDown: (
@@ -33,8 +34,22 @@ export function renderTimeline(
 
     const nameEl = document.createElement("div");
     nameEl.className = "track-name";
-    nameEl.textContent = `${track.name} (${track.kind})`;
-    nameEl.addEventListener("click", () => callbacks.onTrackNameClick(track.id));
+
+    const nameLabel = document.createElement("span");
+    nameLabel.className = "track-name-label";
+    nameLabel.textContent = `${track.name} (${track.kind})`;
+    nameLabel.addEventListener("click", () => callbacks.onTrackNameClick(track.id));
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "track-delete";
+    deleteBtn.textContent = "×";
+    deleteBtn.title = "Delete track";
+    deleteBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      callbacks.onTrackDelete(track.id);
+    });
+
+    nameEl.append(nameLabel, deleteBtn);
 
     const lane = document.createElement("div");
     lane.className = "track-lane";
