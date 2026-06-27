@@ -65,6 +65,32 @@ REGISTRY: dict[str, ModelManifest] = {
         license="apache-2.0",
         extras={"filename": "*q4_k_m.gguf", "n_ctx": 4096},
     ),
+    # --- Phase 3 models ---
+    "sam2-hiera-tiny": ModelManifest(
+        id="sam2-hiera-tiny",
+        role="segment_subject",
+        repo="facebook/sam2-hiera-tiny",
+        quantization="fp16",
+        vram_mb=1536,
+        license="apache-2.0",
+    ),
+    "cogvideox-2b": ModelManifest(
+        id="cogvideox-2b",
+        role="sparse_t2v",
+        repo="THUDM/CogVideoX-2b",
+        quantization="fp16",
+        vram_mb=10240,
+        license="apache-2.0",
+    ),
+    "cogvideox-2b-vae": ModelManifest(
+        id="cogvideox-2b-vae",
+        role="vae",
+        repo="THUDM/CogVideoX-2b",
+        quantization="fp16",
+        vram_mb=2048,
+        license="apache-2.0",
+        extras={"component": "vae"},
+    ),
 }
 
 
