@@ -62,6 +62,8 @@ import {
   importMedia,
   listProjectAssets,
   getAsset,
+  fetchFrame,
+  getStreamUrl,
   type Project,
   type Asset,
 } from "./backendApi";
@@ -150,6 +152,8 @@ body {
 .preview{margin-top:10px;border:1px solid var(--border);border-radius:10px;position:relative;overflow:hidden;background:#080a10;box-shadow:inset 0 0 30px rgba(0,0,0,0.4)}
 .preview-overlay{position:absolute;inset:0;display:grid;place-items:center;align-content:center;gap:10px;color:var(--text-dim);font-size:12px;padding:16px;background:rgba(13,17,25,0.82);pointer-events:none}
 .preview-overlay .btn{pointer-events:auto}
+#preview-frame{display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain;border-radius:10px}
+#preview-video{display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain;border-radius:10px}
 .timeline{padding:12px;background:#111621}
 .timeline-controls{display:flex;align-items:center;gap:6px;width:64%}
 .timeline-grid{margin-top:10px;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#0d1119;user-select:none}
@@ -360,6 +364,8 @@ function buildDom(root: HTMLElement): void {
           </div>
         </div>
         <div id="preview" class="preview">
+          <img id="preview-frame" alt="" />
+          <video id="preview-video" playsinline></video>
           <div id="preview-empty" class="preview-overlay"><span>No clip at playhead</span></div>
         </div>
       </section>
@@ -452,6 +458,9 @@ export function bootstrapStudioApp(): void {
   const fpsInput = $("#project-fps") as HTMLInputElement;
   const aiPrompt = $("#ai-prompt") as HTMLTextAreaElement;
   const devModeToggle = $("#btn-toggle-dev-mode");
+  const previewFrame = document.getElementById("preview-frame") as HTMLImageElement;
+  const previewVideo = document.getElementById("preview-video") as HTMLVideoElement;
+  const previewEmpty = $("#preview-empty");
 
   // ── Dev mode ──
   const DEV_MODE_KEY = "deepiri_dev_mode";
@@ -603,6 +612,7 @@ export function bootstrapStudioApp(): void {
       state.ui.activeTrackId = trackId;
       seek(state, tick);
       renderTimelineFull();
+      void fetchFrameForPlayhead();
     },
     onClipClick: (clipId, trackId) => {
       state.ui.selectedClipId =
@@ -692,23 +702,86 @@ export function bootstrapStudioApp(): void {
     window.addEventListener("pointerup", onUp);
   }
 
+  // ── Preview ──
+  let wasPlayingBeforeScrub = false;
+
+  function clipAtPlayhead() {
+    const ph = state.timeline.playheadTick;
+    for (const track of state.timeline.tracks) {
+      if (track.kind !== "Video") continue;
+      for (const clip of track.clips) {
+        if (clip.inTick <= ph && ph < clip.outTick && clip.serverId) {
+          const asset = state.assets.find((a) => a.id === clip.serverId) ?? null;
+          if (asset) return { clip, asset };
+        }
+      }
+    }
+    return null;
+  }
+
+  async function fetchFrameForPlayhead(): Promise<void> {
+    const found = clipAtPlayhead();
+    if (!found) {
+      previewFrame.style.display = "none";
+      previewVideo.style.display = "none";
+      previewEmpty.style.display = "";
+      return;
+    }
+    const { clip, asset } = found;
+    const offsetSecs = (state.timeline.playheadTick - clip.inTick) / state.timeline.fps;
+    previewEmpty.style.display = "none";
+    try {
+      const b64 = await fetchFrame(asset.uri, offsetSecs);
+      previewFrame.src = `data:image/png;base64,${b64}`;
+      previewFrame.style.display = "";
+    } catch {
+      previewFrame.style.display = "none";
+      previewEmpty.style.display = "";
+    }
+  }
+
+  function startProxyPlayback(): void {
+    const found = clipAtPlayhead();
+    if (!found) return;
+    const { clip, asset } = found;
+    const proxyPath = asset.meta_jsonb?.proxy_path;
+    if (asset.meta_jsonb?.proxy_status !== "ready" || !proxyPath) return;
+    const offsetSecs = (state.timeline.playheadTick - clip.inTick) / state.timeline.fps;
+    previewVideo.src = getStreamUrl(proxyPath);
+    previewVideo.currentTime = offsetSecs;
+    previewVideo.play().catch(() => {});
+    previewVideo.style.display = "";
+    previewFrame.style.display = "none";
+    previewEmpty.style.display = "none";
+  }
+
+  function stopProxyPlayback(): void {
+    previewVideo.pause();
+    previewVideo.style.display = "none";
+    void fetchFrameForPlayhead();
+  }
+
   // ── Transport ──
   function jogLeft() {
     jog(state, -1);
     renderTimelineFull();
+    void fetchFrameForPlayhead();
   }
   function jogRight() {
     jog(state, 1);
     renderTimelineFull();
+    void fetchFrameForPlayhead();
   }
   function togglePlay() {
     if (state.playing) {
       pause(state);
+      stopProxyPlayback();
     } else {
       play(state, () => {
         seek(state, state.timeline.playheadTick + 1);
         renderTimelineFull();
       });
+      startProxyPlayback();
     }
     const playBtn = $("#btn-play");
     if (playBtn) playBtn.textContent = state.playing ? "Pause" : "Play";
@@ -722,6 +795,7 @@ export function bootstrapStudioApp(): void {
   }
   function shuttleStop() {
     stop(state);
+    stopProxyPlayback();
     const playBtn = $("#btn-play");
     if (playBtn) playBtn.textContent = "Play";
     renderTimelineFull();
@@ -934,9 +1008,22 @@ export function bootstrapStudioApp(): void {
   });
 
   // Playhead slider
+  sliderEl.addEventListener("pointerdown", () => {
+    if (state.playing) {
+      togglePlay(); // pauses since state.playing is true
+      wasPlayingBeforeScrub = true;
+    }
+  });
   sliderEl.addEventListener("input", () => {
     seek(state, parseInt(sliderEl.value, 10));
     renderTimelineFull();
+    void fetchFrameForPlayhead();
+  });
+  sliderEl.addEventListener("pointerup", () => {
+    if (wasPlayingBeforeScrub) {
+      wasPlayingBeforeScrub = false;
+      togglePlay(); // resumes since state.playing is false
+    }
   });
 
   // AI panel buttons
