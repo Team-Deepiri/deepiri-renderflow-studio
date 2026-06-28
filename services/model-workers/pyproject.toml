@@ -18,6 +18,8 @@ deepiri-renderflow-worker-queue = { path = "../../lib/renderflow_queue", develop
 diri-agent-guardrails = { git = "https://github.com/Team-Deepiri/diri-agent-guardrails.git", branch = "main" }
 llama-cpp-python = ">=0.3.0"
 scikit-image = ">=0.22"
+sam2 = ">=1.0"
+torchvision = ">=0.19"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"

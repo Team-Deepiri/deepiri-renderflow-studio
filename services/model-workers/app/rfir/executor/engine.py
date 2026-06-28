@@ -18,7 +18,8 @@ from app.rfir.compiler.scheduler import topological_sort
 from app.rfir.executor.context import ExecutionContext, decide_escalation
 from app.rfir.ir.types import RfirGraph, RfirNode
 from app.rfir.models.loader import detect_device, unload_all
-from app.rfir.ops import t2i_keyframe, depth_estimate, rife_interpolate
+from app.rfir.ltc import LatentTemporalCache
+from app.rfir.ops import t2i_keyframe, depth_estimate, rife_interpolate, segment_subject, vae, sparse_t2v_window
 
 logger = logging.getLogger(__name__)
 
@@ -31,12 +32,12 @@ def _register_handlers() -> None:
     _OP_HANDLERS["vulkan_parallax"] = _run_vulkan_parallax_stub
     _OP_HANDLERS["vulkan_upscale"] = _run_vulkan_upscale_stub
     _OP_HANDLERS["ffmpeg_mux"] = _run_ffmpeg_mux
-    _OP_HANDLERS["vulkan_composite"] = _noop
+    _OP_HANDLERS["vulkan_composite"] = _run_vulkan_composite
     _OP_HANDLERS["vulkan_motion_blur"] = _noop
-    _OP_HANDLERS["vae_encode"] = _noop
-    _OP_HANDLERS["vae_decode"] = _noop
-    _OP_HANDLERS["segment_subject"] = _noop
-    _OP_HANDLERS["sparse_t2v_window"] = _noop
+    _OP_HANDLERS["vae_encode"] = _run_vae_encode
+    _OP_HANDLERS["vae_decode"] = _run_vae_decode
+    _OP_HANDLERS["segment_subject"] = _run_segment_subject
+    _OP_HANDLERS["sparse_t2v_window"] = _run_sparse_t2v_window
     _OP_HANDLERS["rife_interpolate"] = _run_rife_interpolate
     _OP_HANDLERS["plan_shots"] = _noop
 
@@ -50,6 +51,8 @@ def run_graph(graph: RfirGraph, job_id: str, output_dir: str, budget=None) -> Ex
     ctx = ExecutionContext(job_id=job_id, device=device)
     ctx.tier_distribution = dict(graph.metadata.get("tier_distribution", {}))
     arena = TensorArena()
+    ltc = LatentTemporalCache()
+    ctx._ltc = ltc
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
@@ -84,6 +87,7 @@ def run_graph(graph: RfirGraph, job_id: str, output_dir: str, budget=None) -> Ex
             logger.info("  %s (%s): %.0f ms", node_id, node.op, wall_ms)
     finally:
         arena.release_all()
+        ltc.release_all()
         unload_all()
 
     if governor is not None:
@@ -251,6 +255,183 @@ def _run_ffmpeg_mux(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, o
         logger.error("ffmpeg_mux failed: %s", e.stderr.decode()[:200] if e.stderr else str(e))
     except FileNotFoundError:
         logger.error("ffmpeg not found")
+
+
+def _run_segment_subject(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
+    """Tier C: generate a binary subject mask via SAM2."""
+    from PIL import Image
+
+    input_tensor = list(node.inputs.values())[0]
+    image = arena.get(input_tensor)
+
+    if not isinstance(image, Image.Image):
+        logger.warning("segment_subject: input is not a PIL Image, skipping")
+        return
+
+    mask = segment_subject.run(image)
+
+    for tensor_name in node.outputs.values():
+        arena.put(tensor_name, mask)
+
+    mask_img = Image.fromarray(mask)
+    mask_path = out_path / f"{node.id}.png"
+    mask_img.save(mask_path)
+    ctx.artifacts[node.id] = str(mask_path)
+
+
+def _run_vae_encode(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
+    """Encode an RGB image to latent space."""
+    from PIL import Image
+
+    input_tensor = list(node.inputs.values())[0]
+    image = arena.get(input_tensor)
+
+    if not isinstance(image, Image.Image):
+        logger.warning("vae_encode: input is not a PIL Image, skipping")
+        return
+
+    latent = vae.encode(image)
+
+    for tensor_name in node.outputs.values():
+        arena.put(tensor_name, latent)
+
+
+def _run_vae_decode(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
+    """Decode a latent tensor to an RGB image."""
+    import torch
+
+    input_tensor = list(node.inputs.values())[0]
+    latent = arena.get(input_tensor)
+
+    if not isinstance(latent, torch.Tensor):
+        logger.warning("vae_decode: input is not a tensor, skipping")
+        return
+
+    image = vae.decode(latent)
+
+    for tensor_name in node.outputs.values():
+        arena.put(tensor_name, image)
+
+    img_path = out_path / f"{node.id}.png"
+    image.save(img_path)
+    ctx.artifacts[node.id] = str(img_path)
+
+
+def _run_sparse_t2v_window(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
+    """Tier C/D: sparse windowed text-to-video diffusion."""
+    from PIL import Image
+    import torch
+
+    prompt = node.attrs.get("prompt", "")
+    steps = int(node.attrs.get("steps", 10))
+    full_frame = bool(node.attrs.get("full_frame", False))
+    window_size = int(node.attrs.get("window_size", 16))
+    overlap_val = int(node.attrs.get("overlap", 4))
+
+    latent_tensor = node.inputs.get("latent", "")
+    latent = arena.get(latent_tensor) if arena.has(latent_tensor) else None
+
+    mask_tensor = node.inputs.get("mask", "")
+    mask = arena.get(mask_tensor) if arena.has(mask_tensor) else None
+
+    # Find the source image from earlier in the arena (the keyframe).
+    image = None
+    if latent_tensor:
+        # Walk back to find the original image from the VAE encode's input.
+        for n in ctx.node_metrics:
+            if n.node_id in ctx.artifacts and ctx.artifacts[n.node_id].endswith(".png"):
+                try:
+                    image = Image.open(ctx.artifacts[n.node_id])
+                except Exception:
+                    pass
+
+    shot_id = node.id.split("_")[0] if "_" in node.id else node.id
+    ltc = getattr(ctx, "_ltc", None)
+
+    frames = sparse_t2v_window.run(
+        prompt=prompt,
+        latent=latent if isinstance(latent, torch.Tensor) else None,
+        mask=mask if isinstance(mask, np.ndarray) else None,
+        image=image,
+        full_frame=full_frame,
+        steps=steps,
+        window_size=window_size,
+        overlap=overlap_val,
+        shot_id=shot_id,
+        ltc=ltc,
+    )
+
+    for tensor_name in node.outputs.values():
+        arena.put(tensor_name, frames)
+
+    for i, frame in enumerate(frames):
+        frame_path = out_path / f"{node.id}_{i}.png"
+        frame.save(frame_path)
+        ctx.artifacts[f"{node.id}_{i}"] = str(frame_path)
+
+
+def _run_vulkan_composite(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
+    """Tier C: composite foreground over background using mask (PIL fallback).
+
+    Premultiplied alpha: C_out = C_fg + C_bg * (1 - A_fg)
+    """
+    from PIL import Image
+
+    fg_tensor = node.inputs.get("foreground", "")
+    bg_tensor = node.inputs.get("background", "")
+    mask_tensor = node.inputs.get("mask", "")
+
+    fg = arena.get(fg_tensor) if arena.has(fg_tensor) else None
+    bg = arena.get(bg_tensor) if arena.has(bg_tensor) else None
+    mask = arena.get(mask_tensor) if arena.has(mask_tensor) else None
+
+    if fg is None or bg is None:
+        logger.warning("vulkan_composite: missing foreground or background, passing through")
+        result = fg or bg
+        for tensor_name in node.outputs.values():
+            arena.put(tensor_name, result)
+        return
+
+    # fg may be a list of frames (from sparse_t2v_window) or a single image.
+    if isinstance(fg, list):
+        bg_img = bg if isinstance(bg, Image.Image) else bg
+        mask_pil = Image.fromarray(mask) if isinstance(mask, np.ndarray) else None
+
+        composited = []
+        for frame in fg:
+            if not isinstance(frame, Image.Image):
+                composited.append(frame)
+                continue
+            frame_resized = frame.resize(bg_img.size) if frame.size != bg_img.size else frame
+            if mask_pil is not None:
+                mask_resized = mask_pil.resize(bg_img.size)
+                comp = Image.composite(frame_resized, bg_img, mask_resized)
+            else:
+                comp = frame_resized
+            composited.append(comp)
+
+        for tensor_name in node.outputs.values():
+            arena.put(tensor_name, composited)
+        if composited:
+            comp_path = out_path / f"{node.id}_0.png"
+            composited[0].save(comp_path)
+            ctx.artifacts[node.id] = str(comp_path)
+    elif isinstance(fg, Image.Image):
+        bg_img = bg if isinstance(bg, Image.Image) else fg
+        if isinstance(mask, np.ndarray):
+            mask_pil = Image.fromarray(mask).resize(bg_img.size)
+            fg_resized = fg.resize(bg_img.size) if fg.size != bg_img.size else fg
+            result = Image.composite(fg_resized, bg_img, mask_pil)
+        else:
+            result = fg
+        for tensor_name in node.outputs.values():
+            arena.put(tensor_name, result)
+        comp_path = out_path / f"{node.id}.png"
+        result.save(comp_path)
+        ctx.artifacts[node.id] = str(comp_path)
+    else:
+        for tensor_name in node.outputs.values():
+            arena.put(tensor_name, fg)
 
 
 def _noop(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:

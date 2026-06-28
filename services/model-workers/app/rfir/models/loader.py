@@ -75,6 +75,12 @@ def load_model(model_id: str, device: str | None = None) -> Any:
         pipeline = _load_depth_model(manifest, device, precision)
     elif manifest.role == "plan_shots":
         pipeline = _load_llm(manifest, device)
+    elif manifest.role == "segment_subject":
+        pipeline = _load_sam2(manifest, device)
+    elif manifest.role == "sparse_t2v":
+        pipeline = _load_t2v_pipeline(manifest, device, precision)
+    elif manifest.role == "vae":
+        pipeline = _load_vae(manifest, device, precision)
     else:
         raise ValueError(f"No loader for role: {manifest.role!r}")
 
@@ -178,3 +184,63 @@ def _load_llm(manifest: ModelManifest, device: str) -> Any:
         n_gpu_layers=n_gpu_layers,
         verbose=False,
     )
+
+
+def _load_sam2(manifest: ModelManifest, device: str) -> Any:
+    from sam2.sam2_image_predictor import SAM2ImagePredictor
+
+    models_dir = os.environ.get("RENDERFLOW_MODELS_DIR")
+    repo = manifest.repo
+    if models_dir and os.path.isdir(os.path.join(models_dir, "sam2-hiera-tiny")):
+        repo = os.path.join(models_dir, "sam2-hiera-tiny")
+
+    predictor = SAM2ImagePredictor.from_pretrained(repo)
+    if device in ("cuda", "mps"):
+        predictor.model = predictor.model.to(device)
+
+    return {"predictor": predictor, "device": device}
+
+
+def _load_t2v_pipeline(manifest: ModelManifest, device: str, precision: PrecisionConfig) -> Any:
+    from diffusers import CogVideoXPipeline
+    import torch
+
+    torch_dtype = _get_torch_dtype(precision.torch_dtype)
+    models_dir = os.environ.get("RENDERFLOW_MODELS_DIR")
+
+    repo = manifest.repo
+    if models_dir and os.path.isdir(os.path.join(models_dir, "cogvideox-2b")):
+        repo = os.path.join(models_dir, "cogvideox-2b")
+
+    pipe = CogVideoXPipeline.from_pretrained(repo, torch_dtype=torch_dtype)
+
+    if device == "mps":
+        pipe = pipe.to("mps")
+    elif device == "cuda":
+        if precision.device_map:
+            pass
+        else:
+            pipe = pipe.to("cuda")
+    else:
+        pipe = pipe.to("cpu")
+
+    return {"pipe": pipe, "device": device}
+
+
+def _load_vae(manifest: ModelManifest, device: str, precision: PrecisionConfig) -> Any:
+    from diffusers import AutoencoderKL
+    import torch
+
+    torch_dtype = _get_torch_dtype(precision.torch_dtype)
+    models_dir = os.environ.get("RENDERFLOW_MODELS_DIR")
+
+    repo = manifest.repo
+    if models_dir and os.path.isdir(os.path.join(models_dir, "cogvideox-2b")):
+        repo = os.path.join(models_dir, "cogvideox-2b")
+
+    vae = AutoencoderKL.from_pretrained(repo, subfolder="vae", torch_dtype=torch_dtype)
+
+    if device in ("cuda", "mps"):
+        vae = vae.to(device)
+
+    return {"vae": vae, "device": device, "dtype": torch_dtype}
