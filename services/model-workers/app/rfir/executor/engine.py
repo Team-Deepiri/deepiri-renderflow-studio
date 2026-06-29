@@ -14,9 +14,10 @@ import numpy as np
 
 from app.rfir.arena import TensorArena
 from app.rfir.budget import BudgetGovernor
+from app.rfir.checkpoint import Checkpoint, checkpoint_uri, save as save_checkpoint, load as load_checkpoint, delete as delete_checkpoint
 from app.rfir.compiler.scheduler import topological_sort
 from app.rfir.executor.context import ExecutionContext, decide_escalation
-from app.rfir.ir.types import RfirGraph, RfirNode
+from app.rfir.ir.types import InferenceBudget, RfirGraph, RfirNode
 from app.rfir.models.loader import detect_device, unload_all
 from app.rfir.ltc import LatentTemporalCache
 from app.rfir.ops import t2i_keyframe, depth_estimate, rife_interpolate, segment_subject, vae, sparse_t2v_window
@@ -42,8 +43,18 @@ def _register_handlers() -> None:
     _OP_HANDLERS["plan_shots"] = _noop
 
 
-def run_graph(graph: RfirGraph, job_id: str, output_dir: str, budget=None) -> ExecutionContext:
-    """Execute all nodes in dependency order. Returns execution context with metrics."""
+def run_graph(
+    graph: RfirGraph,
+    job_id: str,
+    output_dir: str,
+    budget: InferenceBudget | None = None,
+    checkpoint_dir: str | None = None,
+) -> ExecutionContext:
+    """Execute all nodes in dependency order. Returns execution context with metrics.
+
+    If checkpoint_dir is set, saves state at shot boundaries and supports
+    resuming from a prior checkpoint (§4.2 / §4.3).
+    """
     if not _OP_HANDLERS:
         _register_handlers()
 
@@ -61,10 +72,29 @@ def run_graph(graph: RfirGraph, job_id: str, output_dir: str, budget=None) -> Ex
         governor = BudgetGovernor(budget, vram_hints=graph.metadata.get("downgrade_hints", []))
 
     order = topological_sort(graph)
-    logger.info("Executing %d nodes on %s for job %s", len(order), device, job_id)
+
+    # Resume from checkpoint if one exists.
+    cp_uri = checkpoint_uri(job_id, checkpoint_dir) if checkpoint_dir is not None else None
+    start_cursor = 0
+    if cp_uri:
+        cp = load_checkpoint(cp_uri)
+        if cp is not None:
+            start_cursor = cp.node_cursor
+            ctx.artifacts.update(cp.artifacts)
+            ctx.downgrades = cp.downgrades
+            if budget is not None:
+                budget.spent_gpu_seconds = cp.spent_gpu_seconds
+            logger.info("Resuming job %s from node %d/%d (%.1fs GPU spent)",
+                        job_id, start_cursor, len(order), cp.spent_gpu_seconds)
+
+    logger.info("Executing %d nodes on %s for job %s (starting at %d)",
+                len(order), device, job_id, start_cursor)
 
     try:
-        for node_id in order:
+        for cursor, node_id in enumerate(order):
+            if cursor < start_cursor:
+                continue
+
             node = graph.get_node(node_id)
             if node is None:
                 continue
@@ -75,16 +105,30 @@ def run_graph(graph: RfirGraph, job_id: str, output_dir: str, budget=None) -> Ex
                 continue
 
             if governor is not None:
-                node = governor.before_node(node)  # may return a downgraded copy
+                node = governor.before_node(node)
 
             t0 = time.monotonic()
             handler(node, arena, ctx, out_path)
             wall_ms = (time.monotonic() - t0) * 1000
-            # gpu_ms here is the (post-downgrade) estimate — real profiling is future work.
             ctx.record_node(node_id, node.op, wall_ms, gpu_ms=node.estimated_gpu_ms)
             if governor is not None:
                 governor.after_node(node.estimated_gpu_ms / 1000.0)
             logger.info("  %s (%s): %.0f ms", node_id, node.op, wall_ms)
+
+            # Checkpoint at shot boundaries (upscale is the last node per shot).
+            if cp_uri and node.op in ("vulkan_upscale", "ffmpeg_mux"):
+                shot_idx = _shot_index_from_node_id(node_id)
+                spent = budget.spent_gpu_seconds if budget else 0.0
+                cp = Checkpoint(
+                    job_id=job_id,
+                    shot_index=shot_idx,
+                    spent_gpu_seconds=spent,
+                    node_cursor=cursor + 1,
+                    artifacts=dict(ctx.artifacts),
+                    tier_distribution=ctx.tier_distribution,
+                    downgrades=governor.metrics()["downgrades"] if governor else [],
+                )
+                save_checkpoint(cp, cp_uri)
     finally:
         arena.release_all()
         ltc.release_all()
@@ -92,6 +136,10 @@ def run_graph(graph: RfirGraph, job_id: str, output_dir: str, budget=None) -> Ex
 
     if governor is not None:
         ctx.downgrades = governor.metrics()["downgrades"]
+
+    # Clean up checkpoint on successful completion.
+    if cp_uri:
+        delete_checkpoint(cp_uri)
 
     return ctx
 
@@ -432,6 +480,14 @@ def _run_vulkan_composite(node: RfirNode, arena: TensorArena, ctx: ExecutionCont
     else:
         for tensor_name in node.outputs.values():
             arena.put(tensor_name, fg)
+
+
+def _shot_index_from_node_id(node_id: str) -> int:
+    """Extract the shot index from a node ID like 's2_upscale' → 2."""
+    prefix = node_id.split("_")[0]
+    if prefix.startswith("s") and prefix[1:].isdigit():
+        return int(prefix[1:])
+    return -1
 
 
 def _noop(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
