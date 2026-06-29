@@ -32,6 +32,8 @@ DEFAULT_MODEL = "cogvideox-2b"
 DEFAULT_STEPS = 10
 DEFAULT_WINDOW_SIZE = 16
 DEFAULT_OVERLAP = 4
+TIER_D_MAX_DURATION_SEC = 3.0
+TIER_D_DEFAULT_FPS = 24
 
 
 def _crop_to_roi(
@@ -91,6 +93,7 @@ def run(
     window_size: int = DEFAULT_WINDOW_SIZE,
     overlap: int = DEFAULT_OVERLAP,
     num_frames: int = 24,
+    fps: int = TIER_D_DEFAULT_FPS,
     shot_id: str = "",
     ltc: LatentTemporalCache | None = None,
     model_id: str | None = None,
@@ -98,10 +101,17 @@ def run(
     """Generate video frames via sparse windowed diffusion.
 
     For Tier C (full_frame=False): crops to ROI mask, runs diffusion on crop.
-    For Tier D (full_frame=True): runs on the full frame.
+    For Tier D (full_frame=True): runs on the full frame, hard-capped at 3s.
 
     Returns a list of PIL Images (generated frames).
     """
+    # Tier D hard duration cap (design doc §4.4: max 3s per hero shot).
+    if full_frame:
+        max_frames = int(TIER_D_MAX_DURATION_SEC * fps)
+        if num_frames > max_frames:
+            logger.info("tier_d: capping %d frames to %d (%.1fs at %d fps)",
+                        num_frames, max_frames, TIER_D_MAX_DURATION_SEC, fps)
+            num_frames = max_frames
     mid = model_id or DEFAULT_MODEL
 
     try:

@@ -65,12 +65,17 @@ class ExecutionContext:
     def record_node(self, node_id: str, op: str, wall_ms: float, gpu_ms: float = 0.0) -> None:
         self.node_metrics.append(NodeMetric(node_id=node_id, op=op, gpu_ms=gpu_ms, wall_ms=wall_ms))
 
+    def cost_estimate_usd(self, rate_per_gpu_second: float = 0.0001) -> float:
+        """Estimate job cost: total GPU seconds * rate card (§4.7)."""
+        return (self.total_gpu_ms / 1000.0) * rate_per_gpu_second
+
     def to_metrics_dict(self) -> dict[str, Any]:
         return {
             "job_id": self.job_id,
             "device": self.device,
             "total_wall_seconds": self.elapsed_seconds,
             "total_gpu_ms": self.total_gpu_ms,
+            "cost_estimate_usd": self.cost_estimate_usd(),
             "nodes": [
                 {"id": m.node_id, "op": m.op, "gpu_ms": m.gpu_ms, "wall_ms": m.wall_ms}
                 for m in self.node_metrics

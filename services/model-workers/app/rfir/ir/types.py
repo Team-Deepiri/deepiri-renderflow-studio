@@ -162,3 +162,25 @@ class InferenceBudget:
 
     def spend(self, seconds: float) -> None:
         self.spent_gpu_seconds += seconds
+
+
+# ---------------------------------------------------------------------------
+# Routing policy
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RoutingPolicy:
+    """Controls where inference work runs (§10 hybrid routing)."""
+    local_only: bool = False
+    cloud_allowed: bool = True
+
+    def effective_max_tier(self, requested: Tier) -> Tier:
+        """Cap tier based on routing policy. local_only caps at B."""
+        if self.local_only:
+            order = [Tier.A, Tier.B, Tier.C, Tier.D]
+            max_local = Tier.B
+            req_idx = order.index(requested)
+            cap_idx = order.index(max_local)
+            if req_idx > cap_idx:
+                return max_local
+        return requested
