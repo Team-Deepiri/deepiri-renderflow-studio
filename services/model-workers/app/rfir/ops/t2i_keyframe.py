@@ -3,7 +3,7 @@
 Uses FLUX.1-schnell (primary) or SDXL-Turbo (fallback).
 Works on CUDA (fp16/INT4) and MPS (fp16).
 
-Spec reference: rfir-inference-engine-implementation.md §1.4
+Spec reference: rfir-inference-engine-implementation.md §1.4, §5.1 (torch.compile)
 """
 from __future__ import annotations
 
@@ -13,12 +13,35 @@ from typing import Any
 
 from PIL import Image
 
-from app.rfir.models.loader import load_model
+from app.rfir.models.compile_utils import compiled_call
+from app.rfir.models.loader import detect_device, load_model
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "flux-schnell-fp16"
 FALLBACK_MODEL = "sdxl-turbo-fp16"
+
+
+def _denoiser_attr(mid: str) -> str:
+    """The diffusers pipeline attribute holding the compute-heavy denoiser."""
+    return "transformer" if "flux" in mid else "unet"
+
+
+def _compile_denoiser(pipe: Any, mid: str, device: str, width: int, height: int, steps: int) -> None:
+    """Compile the pipeline's denoiser in place, bucketed by (model, shape, steps).
+
+    torch.compile keys on first-call shapes; calling it repeatedly with the
+    same (width, height, steps) bucket reuses the compiled graph instead of
+    re-tracing. Different buckets compile lazily on first use.
+    """
+    attr = _denoiser_attr(mid)
+    denoiser = getattr(pipe, attr, None)
+    if denoiser is None:
+        return
+
+    cache_key = (mid, attr, width, height, steps)
+    compiled = compiled_call(denoiser, cache_key=cache_key, device=device)
+    setattr(pipe, attr, compiled)
 
 
 def run(
@@ -41,6 +64,9 @@ def run(
         pipe = load_model(mid)
 
     import torch
+
+    device = detect_device()
+    _compile_denoiser(pipe, mid, device, width, height, steps)
 
     generator = torch.Generator()
     if seed is not None:

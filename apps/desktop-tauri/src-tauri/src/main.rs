@@ -25,6 +25,7 @@ fn main() {
             commands::orchestrator::orchestrator_delete_project,
             commands::orchestrator::orchestrator_list_sequences,
             commands::orchestrator::orchestrator_create_sequence,
+            commands::orchestrator::rfir_preview_tier_a,
             commands::engine::timeline_resolve_active,
             commands::engine::render_graph_schedule,
             commands::engine::vulkan_discover,
