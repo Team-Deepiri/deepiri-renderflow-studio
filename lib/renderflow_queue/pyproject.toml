@@ -16,3 +16,7 @@ python = "^3.11"
 
 [tool.poetry.group.dev.dependencies]
 ruff = "^0.8.0"
+pytest = "^8.0.0"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

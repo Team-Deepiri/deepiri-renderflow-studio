@@ -194,9 +194,10 @@ def _load_sam2(manifest: ModelManifest, device: str) -> Any:
     if models_dir and os.path.isdir(os.path.join(models_dir, "sam2-hiera-tiny")):
         repo = os.path.join(models_dir, "sam2-hiera-tiny")
 
-    predictor = SAM2ImagePredictor.from_pretrained(repo)
-    if device in ("cuda", "mps"):
-        predictor.model = predictor.model.to(device)
+    # build_sam2() defaults to device="cuda" internally — must be passed
+    # explicitly or it crashes with "Torch not compiled with CUDA enabled"
+    # on MPS/CPU machines.
+    predictor = SAM2ImagePredictor.from_pretrained(repo, device=device)
 
     return {"predictor": predictor, "device": device}
 
@@ -228,7 +229,10 @@ def _load_t2v_pipeline(manifest: ModelManifest, device: str, precision: Precisio
 
 
 def _load_vae(manifest: ModelManifest, device: str, precision: PrecisionConfig) -> Any:
-    from diffusers import AutoencoderKL
+    # CogVideoX's VAE is a 3D video autoencoder (AutoencoderKLCogVideoX), not
+    # the generic 2D AutoencoderKL — the generic class can't instantiate the
+    # 3D conv block types in this checkpoint's config (CogVideoXDownBlock3D).
+    from diffusers import AutoencoderKLCogVideoX
     import torch
 
     torch_dtype = _get_torch_dtype(precision.torch_dtype)
@@ -238,7 +242,7 @@ def _load_vae(manifest: ModelManifest, device: str, precision: PrecisionConfig) 
     if models_dir and os.path.isdir(os.path.join(models_dir, "cogvideox-2b")):
         repo = os.path.join(models_dir, "cogvideox-2b")
 
-    vae = AutoencoderKL.from_pretrained(repo, subfolder="vae", torch_dtype=torch_dtype)
+    vae = AutoencoderKLCogVideoX.from_pretrained(repo, subfolder="vae", torch_dtype=torch_dtype)
 
     if device in ("cuda", "mps"):
         vae = vae.to(device)
