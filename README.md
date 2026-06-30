@@ -54,7 +54,96 @@ Layout: clone **`deepiri-gpu-utils`** next to **`deepiri-renderflow-studio`** (s
 
 ### Desktop → orchestrator
 
-Set `RENDERFLOW_ORCHESTRATOR_URL` (default `http://127.0.0.1:8080`). Tauri commands: `orchestrator_health`, `submit_ai_job`, `get_ai_job`.
+Set `RENDERFLOW_ORCHESTRATOR_URL` (default `http://127.0.0.1:8080`). Tauri commands: `orchestrator_health`, `submit_ai_job`, `get_ai_job`, `rfir_preview_tier_a`.
+
+---
+
+## RFIR (AI video generation)
+
+RenderFlow's optional AI copilot generates short clips via the **RenderFlow Inference Runtime (RFIR)** — a compiled, tier-routed engine that mixes cheap keyframe+motion synthesis (Tier A/B) with sparse diffusion (Tier C/D), rather than diffusing every frame. See [docs/specs/rfir-inference-engine-design.md](docs/specs/rfir-inference-engine-design.md) for the full design.
+
+RFIR is **fully open-source** — no paid generation API is called. Model weights are downloaded once from HuggingFace and run locally (CUDA or Apple Silicon MPS).
+
+### Architecture: orchestrator dispatches, model-workers executes
+
+`services/orchestrator` and `services/model-workers` are **separate Poetry projects that both use the top-level package name `app`** — the orchestrator cannot `import app.rfir` in-process (Python resolves `app` to whichever package loaded first, not a merged namespace). Because of this, **all RFIR planning, compiling, and execution happens inside `services/model-workers`' `redis_worker.py` process**, never in the orchestrator:
+
+```
+1. POST /v1/jobs          (orchestrator: guardrails, job_store.create, status=queued)
+2. enqueue_job()           orchestrator pushes {prompt, budget, guardrail_verdict, project}
+                            onto Redis (REDIS_KEY_JOBS) — no RFIR import needed here
+3. redis_worker.py          model-workers blpop's the job, refuses if guardrail_verdict
+   (model-workers)          != "allow", then runs planner -> builder -> fusion ->
+                            memory_plan -> executor.run_graph() entirely in its own process
+4. JobStatusReporter        model-workers writes {state, stage, artifacts, metrics} to a
+                            Redis key per job (renderflow:ai_jobs:status:{job_id})
+5. _rfir_status_loop()      orchestrator polls that key and mirrors it into job_store,
+   (orchestrator)           emitting the same SSE events as the legacy stub pipeline
+6. GET /v1/jobs/{id}        status=review, metadata.output_path points at the real MP4
+   POST .../accept          creates the video asset as usual
+```
+
+When `RENDERFLOW_RFIR_ENABLED=true` **and** `REDIS_URL` is set, the orchestrator's own worker loop does **not** consume `REDIS_KEY_JOBS` itself — model-workers' `redis_worker.py` is the sole consumer, avoiding two processes racing to pop the same queue. If RFIR is enabled but no `REDIS_URL` is configured, there's no channel to model-workers and the orchestrator logs a warning and falls back to the legacy in-process stub pipeline (fake stage data, no real generation).
+
+### Running both processes locally
+
+```bash
+docker compose -f infra/docker/docker-compose.yml up -d redis   # REDIS_URL=redis://127.0.0.1:6380/0
+
+# Terminal 1 — orchestrator
+cd services/orchestrator
+REDIS_URL=redis://127.0.0.1:6380/0 RENDERFLOW_RFIR_ENABLED=true \
+  poetry run uvicorn app.main:app --host 127.0.0.1 --port 8080
+
+# Terminal 2 — model worker (the actual RFIR executor)
+cd services/model-workers
+REDIS_URL=redis://127.0.0.1:6380/0 poetry run python -m app.redis_worker
+```
+
+Then `POST /v1/jobs` as usual — job status will progress `queued` → `preparing` → `running` → `review`, with `metadata.output_path` pointing at a real MP4 once model-workers finishes.
+
+### Enabling RFIR
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RENDERFLOW_RFIR_ENABLED` | `false` | Turn on the CFSV/RFIR pipeline (off = legacy stub pipeline) |
+| `RENDERFLOW_MODELS_DIR` | `./models` | Local directory for downloaded model weights |
+| `RENDERFLOW_RFIR_MAX_GPU_SEC` | `120` | Per-job GPU time budget |
+| `RENDERFLOW_RFIR_MAX_TIER` | `C` | Highest tier allowed (`A`, `B`, `C`, or `D`) |
+| `RENDERFLOW_RFIR_T2I_MODEL` | `flux-schnell-fp16` | Keyframe model id from `models/registry.py` (e.g. `sdxl-turbo-fp16` for smaller/faster local dev) |
+| `RENDERFLOW_RFIR_GEN_RES` | `512x288` | Internal generation resolution |
+| `RENDERFLOW_RFIR_T2I_STEPS` | `4` | FLUX/SDXL keyframe steps |
+| `RENDERFLOW_RFIR_T2V_STEPS` | `10` | Sparse T2V steps (Tier C/D) |
+| `RENDERFLOW_RFIR_LTC_WINDOW` | `16` | Latent Temporal Cache window size |
+| `RENDERFLOW_RFIR_LTC_OVERLAP` | `4` | LTC window overlap (frames) |
+| `RENDERFLOW_RFIR_DISABLE_COMPILE` | unset | Set to `1` to disable `torch.compile` (debugging) |
+| `RENDERFLOW_CHECKPOINT_DIR` | `/tmp/rfir-checkpoints` | Shot-boundary checkpoint storage (local path or `s3://...`) |
+| `RENDERFLOW_RENDER_OUTPUT_DIR` | `../orchestrator/data/render_outputs` (model-workers side) | Where finished MP4s/artifacts are written — must be reachable by the orchestrator for local single-machine dev |
+
+### Model weights
+
+All models are open-source (Apache 2.0 / MIT / OpenRAIL++) — see `services/model-workers/app/rfir/models/registry.py` for the full manifest and licenses. Weights are **not** committed to git; they download automatically on first use, or you can pre-fetch them into `RENDERFLOW_MODELS_DIR`.
+
+Approximate sizes (fp16):
+
+- FLUX.1-schnell (keyframes): ~12 GB — or SDXL-Turbo fallback: ~6 GB
+- CogVideoX-2B (sparse video, Tier C/D): ~10 GB
+- Depth Anything V2 Small: ~200 MB
+- SAM2 hiera-tiny (subject masks, Tier C): ~150 MB
+- Qwen2.5-3B GGUF Q4 (shot planner): ~2 GB
+- RIFE 4.6 (Tier B interpolation): ~100 MB
+
+Total: **~20–30 GB** depending on which T2I model you use. On 8 GB-class GPUs (including most MacBooks), prefer SDXL-Turbo over FLUX.
+
+### Platform notes
+
+- **CUDA**: full feature set — AWQ/NF4 quantization, CUDA graph capture, `torch.compile`.
+- **Apple Silicon (MPS)**: fp16 inference works for all ops; no `bitsandbytes`/`autoawq` quantization support (CUDA-only), so models run unquantized (more memory, fine with unified memory). CUDA graph capture (§5.2) is a no-op on MPS — there is no Metal equivalent in PyTorch.
+- **CPU**: fp32 fallback, functional but slow — useful for testing the compile graph/pipeline without a GPU.
+
+### Worker metrics (optional)
+
+The model worker can expose Prometheus-style metrics (`rfir_gpu_seconds_total`, `rfir_tier_count`, `rfir_jobs_total`, `rfir_cost_usd_total`) via `app.rfir.metrics.serve_metrics(port)`, scraped at `/metrics`.
 
 ---
 

@@ -7,7 +7,7 @@ fallback philosophy.
 
 Returns a list of frames: [start, ...intermediates..., end].
 
-Spec reference: rfir-inference-engine-implementation.md §2.5
+Spec reference: rfir-inference-engine-implementation.md §2.5, §5.1 (torch.compile)
 """
 from __future__ import annotations
 
@@ -15,7 +15,8 @@ import logging
 
 from PIL import Image
 
-from app.rfir.models.loader import load_model
+from app.rfir.models.compile_utils import compiled_call
+from app.rfir.models.loader import detect_device, load_model
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,20 @@ def _blend_fallback(frame_start: Image.Image, frame_end: Image.Image, factor: in
         frames.append(Image.blend(frame_start, end, alpha))
     frames.append(end)
     return frames
+
+
+def _compiled_model(model, mid: str, device: str, factor: int, size: tuple[int, int]):
+    """Wrap the RIFE model's forward pass with torch.compile, bucketed by shape/factor.
+
+    Prepares the model for compiled inference ahead of the real RIFE forward
+    pass landing (currently the fallback below is still in effect).
+    """
+    import torch.nn as nn
+
+    if not isinstance(model, nn.Module):
+        return model
+    cache_key = (mid, factor, size)
+    return compiled_call(model, cache_key=cache_key, device=device)
 
 
 def run(
@@ -53,9 +68,13 @@ def run(
     try:
         import torch  # noqa: F401
 
+        device = detect_device()
+        model = _compiled_model(model, mid, device, factor, frame_start.size)
+
         logger.info("rife_interpolate: factor=%d, model=%s", factor, mid)
         # Real RIFE inference plugs in here once weights are wired; until then
-        # the loaded model is unused and we fall back to a correct blend.
+        # the loaded (and compile-ready) model is unused and we fall back to a
+        # correct blend.
         return _blend_fallback(frame_start, frame_end, factor)
     except Exception as e:
         logger.warning("rife inference failed (%s) — using blend fallback", e)

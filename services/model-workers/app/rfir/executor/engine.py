@@ -141,6 +141,9 @@ def run_graph(
     if cp_uri:
         delete_checkpoint(cp_uri)
 
+    from app.rfir.metrics import registry as metrics_registry
+    metrics_registry.record_job(ctx)
+
     return ctx
 
 

@@ -8,8 +8,14 @@ from queue import Empty, Queue
 from uuid import UUID
 
 from app.config import Settings
-from app.job_store import JobStatus, store
-from renderflow_queue import REDIS_KEY_JOBS, RedisJobQueue
+from app.job_store import AiJobRecord, JobStatus, store
+from renderflow_queue import (
+    REDIS_KEY_JOBS,
+    JobStatusReporter,
+    RedisJobQueue,
+    RfirJobState,
+    RfirJobStatus,
+)
 from app.stage_runner import run_audio_stages, run_scene_stages
 from app.api.utils import get_event_emitter
 from app.paths import data_subdir
@@ -24,6 +30,12 @@ _stop = threading.Event()
 _worker_thread: threading.Thread | None = None
 _cancelled_jobs: set[str] = set()
 
+# Job IDs dispatched to model-workers over Redis, awaiting status mirroring.
+# Separate from `_cancelled_jobs`/`_local_pending`, which are the legacy
+# in-process stub's bookkeeping.
+_rfir_inflight: set[str] = set()
+_rfir_lock = threading.Lock()
+
 
 def _emit(job_id: str, status: str, stage: str | None = None, project_id: str | None = None) -> None:
     payload: dict[str, object] = {"job_id": job_id, "status": status}
@@ -37,8 +49,59 @@ def _emit(job_id: str, status: str, stage: str | None = None, project_id: str | 
         pass
 
 
+def _build_rfir_payload(rec: AiJobRecord, settings: Settings) -> dict[str, object]:
+    """Build the Redis job payload consumed by model-workers' redis_worker.py.
+
+    Carries everything the worker needs to plan, compile, and execute the
+    RFIR graph in its own process — the orchestrator never imports
+    `app.rfir` itself (see rfir_preview.py for why that's impossible).
+    """
+    return {
+        "prompt": rec.prompt,
+        "mode": rec.mode,
+        "budget": {
+            "max_gpu_seconds": settings.rfir_max_gpu_sec,
+            "max_tier": settings.rfir_max_tier,
+        },
+        "guardrail_verdict": rec.metadata.get("guardrail_verdict", "allow"),
+        "guardrail_flags": rec.metadata.get("guardrail_flags", []),
+        "project": {
+            "fps_num": 24,
+            "fps_den": 1,
+            "resolution_w": 1920,
+            "resolution_h": 1080,
+        },
+    }
+
+
 def enqueue_job(job_id: str, settings: Settings) -> None:
     _cancelled_jobs.discard(job_id)
+
+    if settings.rfir_enabled and settings.redis_url:
+        try:
+            import redis
+
+            r = redis.Redis.from_url(settings.redis_url, decode_responses=True)
+            uid = UUID(job_id)
+            rec = store.get(uid)
+            if rec is None:
+                logger.error("enqueue_job: RFIR job %s not found in store", job_id)
+                return
+            payload = _build_rfir_payload(rec, settings)
+            RedisJobQueue(r).push_job(job_id, payload)
+            with _rfir_lock:
+                _rfir_inflight.add(job_id)
+            logger.info("dispatched RFIR job %s to model-workers", job_id)
+            return
+        except Exception as e:
+            logger.warning("RFIR dispatch failed for %s, falling back to stub pipeline: %s", job_id, e)
+    elif settings.rfir_enabled and not settings.redis_url:
+        logger.warning(
+            "RENDERFLOW_RFIR_ENABLED=true but REDIS_URL is not set — "
+            "no channel to model-workers; falling back to the stub pipeline for job %s",
+            job_id,
+        )
+
     if settings.redis_url:
         try:
             import redis
@@ -108,7 +171,97 @@ def _process_job(job_id: str, settings: Settings) -> None:
     _emit(job_id, "review", project_id=pid)
 
 
+def _apply_rfir_status(uid: UUID, rec: AiJobRecord, status: RfirJobStatus) -> None:
+    """Mirror a model-workers status report into the orchestrator's job_store."""
+    pid = str(rec.project_id)
+
+    if status.state == RfirJobState.PREPARING:
+        store.update_status(uid, JobStatus.PREPARING, stages=["preparing"])
+        _emit(str(uid), "preparing", project_id=pid)
+    elif status.state == RfirJobState.RUNNING:
+        stage_name = status.stage or "running"
+        stages = rec.stages if stage_name in rec.stages else rec.stages + [stage_name]
+        store.update_status(uid, JobStatus.RUNNING, stages=stages)
+        for k, v in status.metadata.items():
+            store.merge_meta(uid, k, v)
+        _emit(str(uid), "running", stage=stage_name, project_id=pid)
+    elif status.state == RfirJobState.REVIEW:
+        store.update_status(uid, JobStatus.REVIEW, stages=rec.stages + ["review"])
+        if status.artifacts:
+            store.merge_meta(uid, "artifacts", status.artifacts)
+            if "output_mp4" in status.artifacts:
+                store.merge_meta(uid, "output_path", status.artifacts["output_mp4"])
+        if status.metrics:
+            store.merge_meta(uid, "rfir_metrics", status.metrics)
+        _emit(str(uid), "review", project_id=pid)
+    elif status.state == RfirJobState.FAILED:
+        store.update_status(uid, JobStatus.FAILED, stages=rec.stages + ["failed"])
+        if status.error:
+            store.merge_meta(uid, "error", status.error)
+        _emit(str(uid), "failed", project_id=pid)
+
+
+def _rfir_status_loop(settings: Settings) -> None:
+    """Poll Redis for status reports from model-workers and mirror them.
+
+    The orchestrator does NOT consume REDIS_KEY_JOBS in this mode — model-
+    workers' redis_worker.py is the sole consumer of RFIR jobs, avoiding two
+    processes racing to blpop the same queue.
+    """
+    import redis
+
+    r = redis.Redis.from_url(settings.redis_url, decode_responses=True)
+    reporter = JobStatusReporter(r)
+    logger.info("worker in RFIR dispatch mode: mirroring status via Redis")
+
+    while not _stop.is_set():
+        with _rfir_lock:
+            job_ids = list(_rfir_inflight)
+
+        if not job_ids:
+            time.sleep(0.5)
+            continue
+
+        for job_id in job_ids:
+            if job_id in _cancelled_jobs:
+                with _rfir_lock:
+                    _rfir_inflight.discard(job_id)
+                continue
+            try:
+                uid = UUID(job_id)
+            except ValueError:
+                with _rfir_lock:
+                    _rfir_inflight.discard(job_id)
+                continue
+
+            rec = store.get(uid)
+            if rec is None:
+                with _rfir_lock:
+                    _rfir_inflight.discard(job_id)
+                continue
+
+            status = reporter.get_status(job_id)
+            if status is None:
+                continue
+
+            _apply_rfir_status(uid, rec, status)
+
+            if status.is_terminal:
+                with _rfir_lock:
+                    _rfir_inflight.discard(job_id)
+                reporter.clear_status(job_id)
+
+        time.sleep(0.5)
+
+
 def _loop(settings: Settings) -> None:
+    if settings.rfir_enabled and settings.redis_url:
+        try:
+            _rfir_status_loop(settings)
+            return
+        except Exception as e:
+            logger.warning("RFIR status loop failed, falling back to stub pipeline: %s", e)
+
     if settings.redis_url:
         try:
             import redis
@@ -116,7 +269,13 @@ def _loop(settings: Settings) -> None:
             r = redis.Redis.from_url(settings.redis_url, decode_responses=True)
             logger.info("worker using Redis queue %s", REDIS_KEY_JOBS)
             while not _stop.is_set():
-                item = r.blpop(REDIS_KEY_JOBS, timeout=2)
+                try:
+                    item = r.blpop(REDIS_KEY_JOBS, timeout=2)
+                except redis.exceptions.TimeoutError:
+                    # Socket-level read timeout — equivalent to blpop's own
+                    # timeout elapsing with no item. Keep polling rather than
+                    # falling all the way back to the in-process queue.
+                    continue
                 if not item:
                     continue
                 _, raw = item

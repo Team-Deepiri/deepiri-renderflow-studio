@@ -228,3 +228,35 @@ pub fn orchestrator_get_capabilities(base_url: Option<String>) -> Result<Value, 
     }
     resp.json().map_err(|e| e.to_string())
 }
+
+/// Compile a single Tier A shot for a fast local preview (§5.5).
+///
+/// Does not yet return rendered pixels — the orchestrator endpoint compiles
+/// the RFIR graph only; actual execution still goes through the model-worker
+/// Redis queue (see `submit_ai_job` for the full staged-review job flow).
+#[tauri::command]
+pub fn rfir_preview_tier_a(
+    prompt: String,
+    duration_sec: Option<f64>,
+    base_url: Option<String>,
+) -> Result<Value, String> {
+    let url = format!("{}/v1/rfir/preview", resolve_base(base_url));
+    let body = serde_json::json!({
+        "prompt": prompt,
+        "duration_sec": duration_sec.unwrap_or(5.0),
+    });
+    let client = reqwest::blocking::Client::new();
+    let resp = client
+        .post(&url)
+        .json(&body)
+        .send()
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "HTTP {}: {}",
+            resp.status(),
+            resp.text().unwrap_or_default()
+        ));
+    }
+    resp.json().map_err(|e| e.to_string())
+}
