@@ -136,7 +136,7 @@ export function timelineResolveActive(payload: unknown): Promise<unknown> {
   return invoke("timeline_resolve_active", { payload });
 }
 
-export async function submitAiJob(projectId: string, prompt: string, mode = "scene-generation"): Promise<{ job_id: string; status: string }> {
+export async function submitAiJob(projectId: string, prompt: string, mode = "scene"): Promise<{ job_id: string; status: string }> {
   const res = await fetch(`${BASE}/v1/jobs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

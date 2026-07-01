@@ -2193,7 +2193,7 @@ export function bootstrapStudioApp(): void {
       writeOutput({ submitted: result, status: result.status });
       startJobEvents(lastJobId);
     } catch (e) {
-      writeOutput(e);
+      writeOutput({ error: e instanceof Error ? e.message : String(e) });
     }
   });
 
@@ -2206,7 +2206,7 @@ export function bootstrapStudioApp(): void {
       const result = await getAiJob(lastJobId);
       writeOutput(result);
     } catch (e) {
-      writeOutput(e);
+      writeOutput({ error: e instanceof Error ? e.message : String(e) });
     }
   });
 
