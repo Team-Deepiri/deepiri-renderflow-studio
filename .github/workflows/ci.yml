@@ -125,7 +125,7 @@ jobs:
         working-directory: services/orchestrator
 
       - name: Install model worker dependencies
-        run: poetry install --no-interaction --no-ansi
+        run: poetry install --no-interaction --no-ansi -vvv
         working-directory: services/model-workers
 
       - name: Install shared queue dependencies
