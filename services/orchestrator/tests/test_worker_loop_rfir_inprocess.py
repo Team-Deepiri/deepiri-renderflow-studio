@@ -5,7 +5,8 @@ When RENDERFLOW_RFIR_ENABLED=true and a scene job is processed locally
 pipeline instead of run_scene_stages() stubs: real MP4 on disk, RFIR-aware
 stage names, and FAILED with a meaningful error when inference breaks.
 
-ML ops are monkeypatched with cheap fakes — no torch or weights needed.
+ML ops are replaced by the shared fake_ml_ops fixture (conftest.py) —
+no torch or weights needed.
 """
 from __future__ import annotations
 
@@ -20,36 +21,11 @@ from PIL import Image
 import app.main  # noqa: F401 -- resolves the app.api <-> app.worker_loop import cycle first
 from app.config import Settings
 from app.job_store import JobStatus, JobStore
+from tests.conftest import EXPECTED_RFIR_SCENE_STAGES
 
 ffmpeg_required = pytest.mark.skipif(
     not shutil.which("ffmpeg"), reason="ffmpeg not found in PATH"
 )
-
-
-@pytest.fixture(autouse=True)
-def _no_db(monkeypatch):
-    import app.db as db_mod
-
-    monkeypatch.setattr(db_mod, "pool_ready", lambda: False)
-    monkeypatch.setattr(db_mod, "insert_ai_job", lambda *a, **kw: None)
-    monkeypatch.setattr(db_mod, "update_ai_job_status", lambda *a, **kw: None)
-    monkeypatch.setattr(db_mod, "sync_job_stages", lambda *a, **kw: None)
-    monkeypatch.setattr(db_mod, "get_ai_job", lambda *a: None)
-    monkeypatch.setattr(db_mod, "get_ai_job_stages", lambda *a: [])
-
-
-@pytest.fixture
-def fake_ops(monkeypatch):
-    from app.rfir.ops import depth_estimate, t2i_keyframe
-
-    monkeypatch.setattr(
-        t2i_keyframe, "run",
-        lambda prompt, *, width=512, height=288, **kw: Image.new("RGB", (width, height), (10, 90, 160)),
-    )
-    monkeypatch.setattr(
-        depth_estimate, "run",
-        lambda image, **kw: np.zeros((image.height, image.width), dtype=np.float32),
-    )
 
 
 def _settings(tmp_path) -> Settings:
@@ -57,7 +33,7 @@ def _settings(tmp_path) -> Settings:
 
 
 @ffmpeg_required
-def test_scene_job_lands_in_review_with_real_mp4(tmp_path, fake_ops):
+def test_scene_job_lands_in_review_with_real_mp4(tmp_path, fake_ml_ops):
     from app.worker_loop import _process_job
     from pathlib import Path
 
@@ -76,7 +52,7 @@ def test_scene_job_lands_in_review_with_real_mp4(tmp_path, fake_ops):
 
 
 @ffmpeg_required
-def test_scene_job_reports_rfir_stages(tmp_path, fake_ops):
+def test_scene_job_reports_rfir_stages(tmp_path, fake_ml_ops):
     from app.worker_loop import _process_job
 
     store = JobStore()
@@ -86,8 +62,7 @@ def test_scene_job_reports_rfir_stages(tmp_path, fake_ops):
         _process_job(str(job.id), _settings(tmp_path))
 
     final = store.get(job.id)
-    for stage in ("preparing", "compiling", "generating_keyframe",
-                  "estimating_depth", "rendering_frames", "muxing", "review"):
+    for stage in EXPECTED_RFIR_SCENE_STAGES:
         assert stage in final.stages, f"missing stage {stage!r} in {final.stages}"
 
 

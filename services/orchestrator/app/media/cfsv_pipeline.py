@@ -38,7 +38,10 @@ def _build_tier_a(
     max_gpu_sec: int,
     max_tier: str,
 ) -> tuple[RfirGraph, ShotList, InferenceBudget]:
-    """Build a single Tier-A shot graph. Raises CompileError on bad input."""
+    """Build and validate a single Tier-A shot graph.
+
+    Raises CompileError on bad input or a graph that fails validation.
+    """
     shot_list = ShotList(
         prompt=prompt,
         shots=[
@@ -58,6 +61,11 @@ def _build_tier_a(
     )
 
     graph = build(shot_list, budget=budget)
+
+    errors = validate(graph)
+    if errors:
+        raise CompileError(f"Graph validation failed: {errors[0].message}")
+
     return graph, shot_list, budget
 
 
@@ -94,10 +102,6 @@ def compile_tier_a(
         )
     except CompileError as e:
         return {"ok": False, "error": str(e)}
-
-    errors = validate(graph)
-    if errors:
-        return {"ok": False, "error": f"Graph validation failed: {errors[0].message}"}
 
     graph_path = _write_graph_json(graph, output_dir)
 
@@ -136,10 +140,6 @@ def compile_and_run_tier_a(
         )
     except CompileError as e:
         return {"ok": False, "error": str(e)}
-
-    errors = validate(graph)
-    if errors:
-        return {"ok": False, "error": f"Graph validation failed: {errors[0].message}"}
 
     graph_path = _write_graph_json(graph, output_dir)
 

@@ -24,8 +24,11 @@ Spec reference: rfir-inference-engine-implementation.md §1.11
 """
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _env_dir = os.environ.get("RENDERFLOW_RFIR_PACKAGE_DIR")
 _default_dir = Path(__file__).resolve().parents[3] / "model-workers" / "app" / "rfir"
@@ -33,7 +36,13 @@ _rfir_dir = Path(_env_dir) if _env_dir else _default_dir
 
 if _rfir_dir.is_dir():
     __path__.append(str(_rfir_dir))
-# If the directory is missing (orchestrator deployed without the monorepo
-# checkout), `app.rfir.<submodule>` imports raise ModuleNotFoundError, which
-# callers already degrade on: rfir_preview returns a 503 and the worker
-# fails the job with a clear error message.
+else:
+    # Not fatal here: `app.rfir.<submodule>` imports will raise
+    # ModuleNotFoundError, which callers already degrade on (rfir_preview
+    # returns a 503; the worker fails the job with a clear error message).
+    logger.warning(
+        "app.rfir bridge: RFIR sources not found at %s%s — RFIR features "
+        "will be unavailable (set RENDERFLOW_RFIR_PACKAGE_DIR to override)",
+        _rfir_dir,
+        " (from RENDERFLOW_RFIR_PACKAGE_DIR)" if _env_dir else "",
+    )

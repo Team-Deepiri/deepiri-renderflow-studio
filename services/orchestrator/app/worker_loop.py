@@ -15,6 +15,7 @@ from renderflow_queue import (
     RedisJobQueue,
     RfirJobState,
     RfirJobStatus,
+    stage_for_op,
 )
 from app.stage_runner import run_audio_stages, run_scene_stages
 from app.api.utils import get_event_emitter
@@ -34,16 +35,6 @@ class _JobCancelled(BaseException):
     Derives from BaseException so it can't be swallowed by the pipeline's
     `except Exception` error handling on its way back to _process_job.
     """
-
-
-# Maps RFIR graph ops to the user-facing stage names shown in the jobs UI.
-# Ops without an entry fall back to "rendering_frames".
-_RFIR_OP_STAGES: dict[str, str] = {
-    "plan_shots": "compiling",
-    "t2i_keyframe": "generating_keyframe",
-    "depth_estimate": "estimating_depth",
-    "ffmpeg_mux": "muxing",
-}
 
 # Job IDs dispatched to model-workers over Redis, awaiting status mirroring.
 # Separate from `_cancelled_jobs`/`_local_pending`, which are the legacy
@@ -210,12 +201,13 @@ def _process_scene_job_rfir(uid: UUID, rec: AiJobRecord, settings: Settings) -> 
         if stage == stages[-1]:
             return
         stages.append(stage)
-        store.update_status(uid, JobStatus.RUNNING, stages=list(stages))
-        store.set_stages(uid, list(stages), completed_through=len(stages) - 2)
+        snapshot = list(stages)
+        store.update_status(uid, JobStatus.RUNNING, stages=snapshot)
+        store.set_stages(uid, snapshot, completed_through=len(snapshot) - 2)
         _emit(job_id, "running", stage=stage, project_id=pid)
 
     def _on_node_start(node) -> None:
-        _advance(_RFIR_OP_STAGES.get(node.op, "rendering_frames"))
+        _advance(stage_for_op(node.op))
 
     def _fail(error: str) -> None:
         logger.warning("RFIR job %s failed: %s", job_id, error)
@@ -259,8 +251,9 @@ def _process_scene_job_rfir(uid: UUID, rec: AiJobRecord, settings: Settings) -> 
     store.merge_meta(uid, "rfir_metrics", result.get("metrics", {}))
 
     stages.append("review")
-    store.set_stages(uid, list(stages), completed_through=len(stages) - 1)
-    store.update_status(uid, JobStatus.REVIEW, stages=list(stages))
+    snapshot = list(stages)
+    store.set_stages(uid, snapshot, completed_through=len(snapshot) - 1)
+    store.update_status(uid, JobStatus.REVIEW, stages=snapshot)
     _emit(job_id, "review", project_id=pid)
 
 

@@ -25,6 +25,24 @@ from typing import Any
 REDIS_KEY_JOB_STATUS_PREFIX = "renderflow:ai_jobs:status:"
 DEFAULT_STATUS_TTL_SEC = 3600
 
+# Maps RFIR graph ops to the user-facing stage names shown in the jobs UI.
+# Part of the cross-service stage contract: any executor reporting per-op
+# progress (the orchestrator's in-process worker today, model-workers'
+# redis_worker as it adopts per-op reporting) should use stage_for_op() so
+# both paths show users the same vocabulary.
+RFIR_OP_STAGES: dict[str, str] = {
+    "plan_shots": "compiling",
+    "t2i_keyframe": "generating_keyframe",
+    "depth_estimate": "estimating_depth",
+    "ffmpeg_mux": "muxing",
+}
+RFIR_DEFAULT_STAGE = "rendering_frames"
+
+
+def stage_for_op(op: str) -> str:
+    """User-facing stage name for an RFIR graph op."""
+    return RFIR_OP_STAGES.get(op, RFIR_DEFAULT_STAGE)
+
 
 class RfirJobState(str, Enum):
     PREPARING = "preparing"

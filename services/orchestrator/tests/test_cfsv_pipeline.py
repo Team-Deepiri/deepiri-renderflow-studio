@@ -1,8 +1,9 @@
 """Tests for the CFSV pipeline: compile_tier_a and compile_and_run_tier_a (§1.11).
 
-The ML ops (t2i, depth) are monkeypatched with cheap fakes so no torch,
-model weights, or GPU are needed — the tests exercise the real compiler,
-validator, executor engine, and ffmpeg mux end to end.
+The ML ops (t2i, depth) are replaced by the shared fake_ml_ops fixture
+(conftest.py) so no torch, model weights, or GPU are needed — the tests
+exercise the real compiler, validator, executor engine, and ffmpeg mux
+end to end.
 """
 from __future__ import annotations
 
@@ -10,30 +11,13 @@ import json
 import shutil
 from pathlib import Path
 
-import numpy as np
 import pytest
-from PIL import Image
 
 from app.media.cfsv_pipeline import compile_and_run_tier_a, compile_tier_a
 
 ffmpeg_required = pytest.mark.skipif(
     not shutil.which("ffmpeg"), reason="ffmpeg not found in PATH"
 )
-
-
-@pytest.fixture
-def fake_ops(monkeypatch):
-    """Replace the ML ops with deterministic fakes (no torch / weights)."""
-    from app.rfir.ops import depth_estimate, t2i_keyframe
-
-    def fake_t2i(prompt, *, width=512, height=288, steps=4, seed=None, **kw):
-        return Image.new("RGB", (width, height), color=(120, 40, 200))
-
-    def fake_depth(image, **kw):
-        return np.zeros((image.height, image.width), dtype=np.float32)
-
-    monkeypatch.setattr(t2i_keyframe, "run", fake_t2i)
-    monkeypatch.setattr(depth_estimate, "run", fake_depth)
 
 
 # ── compile only ──────────────────────────────────────────────────────────────
@@ -56,7 +40,7 @@ def test_compile_tier_a_writes_graph_json(tmp_path):
 
 
 @ffmpeg_required
-def test_compile_and_run_tier_a_returns_ok_with_artifacts(tmp_path, fake_ops):
+def test_compile_and_run_tier_a_returns_ok_with_artifacts(tmp_path, fake_ml_ops):
     result = compile_and_run_tier_a(
         "a lone samurai on a misty mountain", str(tmp_path), job_id="test-job",
     )
@@ -74,7 +58,7 @@ def test_compile_and_run_tier_a_returns_ok_with_artifacts(tmp_path, fake_ops):
 
 
 @ffmpeg_required
-def test_compile_and_run_tier_a_reports_node_progress(tmp_path, fake_ops):
+def test_compile_and_run_tier_a_reports_node_progress(tmp_path, fake_ml_ops):
     seen_ops: list[str] = []
 
     result = compile_and_run_tier_a(
@@ -102,7 +86,7 @@ def test_compile_and_run_tier_a_missing_model_fails_cleanly(tmp_path, monkeypatc
     assert "model weights not found" in result["error"]
 
 
-def test_compile_and_run_tier_a_callback_exceptions_propagate(tmp_path, fake_ops):
+def test_compile_and_run_tier_a_callback_exceptions_propagate(tmp_path, fake_ml_ops):
     class Abort(BaseException):
         pass
 
