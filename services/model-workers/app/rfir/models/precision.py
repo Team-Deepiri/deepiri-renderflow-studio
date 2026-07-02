@@ -43,8 +43,9 @@ def resolve(device: str, vram_mb: int = 0, prefer_quantized: bool = True) -> Pre
         )
 
     if device == "mps":
+        # float16 produces garbage output on Apple Silicon for SDXL/UNet ops
         return PrecisionConfig(
-            torch_dtype="float16",
+            torch_dtype="float32",
             quantization=None,
             device_map=None,
         )
