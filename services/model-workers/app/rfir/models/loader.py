@@ -121,10 +121,12 @@ def _load_t2i_pipeline(manifest: ModelManifest, device: str, precision: Precisio
     models_dir = os.environ.get("RENDERFLOW_MODELS_DIR")
 
     if "flux" in manifest.id:
-        repo = models_dir if models_dir and os.path.isdir(os.path.join(models_dir, "flux-schnell")) else manifest.repo
+        local = os.path.join(models_dir, "flux-schnell") if models_dir else None
+        repo = local if local and os.path.isdir(local) else manifest.repo
         pipe = FluxPipeline.from_pretrained(repo, torch_dtype=torch_dtype)
     else:
-        repo = models_dir if models_dir and os.path.isdir(os.path.join(models_dir, "sdxl-turbo")) else manifest.repo
+        local = os.path.join(models_dir, "sdxl-turbo") if models_dir else None
+        repo = local if local and os.path.isdir(local) else manifest.repo
         pipe = StableDiffusionXLPipeline.from_pretrained(repo, torch_dtype=torch_dtype)
 
     if device == "mps":
