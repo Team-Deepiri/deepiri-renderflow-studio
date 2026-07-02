@@ -121,7 +121,7 @@ def compile_and_run_tier_a(
     job_id: str = "adhoc",
     duration_sec: float = 5.0,
     max_gpu_sec: int = 120,
-    max_tier: str = "C",
+    max_tier: str = "A",
     nsfw_mode: str = "block",
     on_node_start: Callable[[RfirNode], None] | None = None,
 ) -> dict[str, Any]:
