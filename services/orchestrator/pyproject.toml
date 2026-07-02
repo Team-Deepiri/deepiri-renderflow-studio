@@ -20,6 +20,12 @@ psycopg = { version = ">=3.2.0", extras = ["binary"] }
 psycopg-pool = ">=3.2.0"
 grpcio = ">=1.60.0"
 grpcio-tools = ">=1.60.0"
+# Needed by the app.rfir bridge (see app/rfir/__init__.py): the RFIR compiler
+# and executor engine import numpy/PIL at module level. Heavy ML runtimes
+# (torch, diffusers, transformers) stay lazy inside the RFIR ops and are NOT
+# orchestrator dependencies — install them separately for in-process inference.
+numpy = ">=1.26.0"
+pillow = ">=10.0.0"
 # `deepiri-gpu-utils`: track `main`; `poetry lock` pins the commit. Bump with `poetry update deepiri-gpu-utils`.
 deepiri-gpu-utils = { git = "https://github.com/Team-Deepiri/deepiri-gpu-utils.git", branch = "main" }
 # In-repo library under deepiri-renderflow-studio/lib/renderflow_queue (not a separate Git project).

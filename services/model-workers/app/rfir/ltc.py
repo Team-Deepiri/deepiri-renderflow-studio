@@ -10,10 +10,11 @@ Spec reference: rfir-inference-engine-implementation.md §3.4
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
-import torch
+if TYPE_CHECKING:
+    import torch
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,8 @@ def cosine_blend_weights(overlap: int, device: torch.device | str = "cpu") -> to
     The weight ramps from 0 → 1 for the incoming window.
     Multiply the outgoing window by (1 - weights).
     """
+    import torch
+
     if overlap <= 0:
         return torch.zeros(0, device=device)
     t = torch.linspace(0.0, 1.0, overlap, device=device)
@@ -118,6 +121,8 @@ def warp_latent(
 
     Returns the warped latent with the same shape.
     """
+    import torch
+
     squeeze = latent.dim() == 3
     if squeeze:
         latent = latent.unsqueeze(0)
@@ -163,6 +168,7 @@ def compute_flow_raft(
     Both frames: (3, H, W) uint8 or float tensors.
     Returns flow: (1, 2, H, W) float tensor.
     """
+    import torch
     from torchvision.models.optical_flow import raft_small, Raft_Small_Weights
 
     weights = Raft_Small_Weights.DEFAULT
