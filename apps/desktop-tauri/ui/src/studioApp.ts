@@ -784,6 +784,15 @@ export function bootstrapStudioApp(): void {
     void fetchFrameForPlayhead();
   }
 
+  function playClipInMonitor(path: string): void {
+    previewVideo.src = getStreamUrl(path);
+    previewVideo.currentTime = 0;
+    previewVideo.play().catch(() => {});
+    previewVideo.style.display = "block";
+    previewFrame.style.display = "none";
+    previewEmpty.style.display = "none";
+  }
+
   // ── Transport ──
   function jogLeft() {
     jog(state, -1);
@@ -903,8 +912,13 @@ export function bootstrapStudioApp(): void {
   async function doAcceptJob() {
     if (!state.lastJobId) return;
     try {
-      await acceptAiJob(state.lastJobId);
+      const job = await acceptAiJob(state.lastJobId);
       devLog(`Job ${state.lastJobId} accepted`);
+      const outputPath = job.metadata?.output_path;
+      if (outputPath) {
+        playClipInMonitor(outputPath);
+        devLog(`Playing accepted clip in monitor`);
+      }
     } catch (e) {
       devLog(`Accept error: ${String(e)}`);
     }
