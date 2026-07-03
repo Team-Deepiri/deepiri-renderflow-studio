@@ -11,7 +11,7 @@ from app.job_store import JobStatus, store
 from app.runtime_state import get_settings
 from app.worker_loop import cancel_job, enqueue_job, worker_stats
 from app.media import ffmpeg as ffmpeg_util
-from app.paths import data_subdir
+from app.paths import data_subdir, is_persisted_output
 from app.services import studio
 
 from pathlib import Path
@@ -160,11 +160,9 @@ def accept_ai_job(job_id: UUID) -> AiJobOut:
     # Create video asset from the job output if not already created
     if not rec.metadata.get("asset_id"):
         output_path = rec.metadata.get("output_path")
-        if not output_path:
-            raise HTTPException(status_code=409, detail="job has no output to accept (output_path not set)")
+        if not is_persisted_output(output_path):
+            raise HTTPException(status_code=409, detail=f"job output file is missing or unset: {output_path!r}")
         out_file = Path(output_path)
-        if not out_file.is_file():
-            raise HTTPException(status_code=409, detail=f"job output file is missing at {output_path}")
         output_path = str(out_file.resolve())
 
         label = rec.prompt[:60] if rec.prompt else "AI Generated"
