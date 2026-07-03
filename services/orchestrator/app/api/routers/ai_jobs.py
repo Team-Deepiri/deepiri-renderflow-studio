@@ -15,6 +15,7 @@ from app.paths import data_subdir
 from app.services import studio
 
 from pathlib import Path
+import hashlib
 import threading
 
 router = APIRouter()
@@ -137,6 +138,15 @@ def retry_ai_job(job_id: UUID) -> AiJobOut:
     return AiJobOut.from_record(current or rec)
 
 
+def _sha256_file(path: Path) -> str:
+    """Content hash of a job artifact, streamed so large MP4s don't load into RAM."""
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 @router.post("/v1/jobs/{job_id}/accept", response_model=AiJobOut, tags=["ai"])
 def accept_ai_job(job_id: UUID) -> AiJobOut:
     from app import memory_store
@@ -149,11 +159,18 @@ def accept_ai_job(job_id: UUID) -> AiJobOut:
 
     # Create video asset from the job output if not already created
     if not rec.metadata.get("asset_id"):
-        output_path = rec.metadata.get("output_path") or f"renderflow://jobs/{job_id}/output.mp4"
+        output_path = rec.metadata.get("output_path")
+        if not output_path:
+            raise HTTPException(status_code=409, detail="job has no output to accept (output_path not set)")
+        out_file = Path(output_path)
+        if not out_file.is_file():
+            raise HTTPException(status_code=409, detail=f"job output file is missing at {output_path}")
+        output_path = str(out_file.resolve())
+
         label = rec.prompt[:60] if rec.prompt else "AI Generated"
         arow = memory_store.asset_create(
-            rec.project_id, "video", str(output_path),
-            sha256="pending",
+            rec.project_id, "video", output_path,
+            sha256=_sha256_file(out_file),
             duration_ms=10_000,
             meta={
                 "name": f"AI · {label}",
@@ -171,7 +188,7 @@ def accept_ai_job(job_id: UUID) -> AiJobOut:
 
         def _start_proxy(asset_id: str, path: str) -> None:
             pass  # placeholder for future proxy transcoding
-        threading.Thread(target=_start_proxy, args=(aid, str(output_path)), daemon=True).start()
+        threading.Thread(target=_start_proxy, args=(aid, output_path), daemon=True).start()
 
     store.update_status(job_id, JobStatus.COMMITTED, stages=rec.stages + ["committed"])
     current = store.get(job_id)
