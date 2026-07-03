@@ -66,6 +66,7 @@ import {
   getStreamUrl,
   type Project,
   type Asset,
+  type AIJob,
 } from "./backendApi";
 
 // ── Shared SVG logo (DeepIRI gradient icon) ──
@@ -133,6 +134,8 @@ body {
 .panel.ai-hidden{display:none}
 .panel,.center{border-right:1px solid var(--border-subtle);background:var(--bg-soft)}
 .panel{padding:14px 12px;overflow-y:auto;overflow-x:hidden}
+#ai-mode-select{width:100%;background:#0f131b;border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px;margin-bottom:8px}
+.ai-job-status{margin-top:10px;padding:8px;border:1px solid var(--border-subtle);border-radius:6px;background:#0f131b;font-size:11px;color:var(--text-dim);white-space:pre-wrap}
 .panel-title{
   font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;
   color:var(--text-muted);margin-bottom:12px;padding-bottom:8px;
@@ -342,6 +345,10 @@ function buildDom(root: HTMLElement): void {
     <aside class="panel left ai-hidden" id="ai-panel">
       <div class="panel-title">AI Copilot</div>
       <div class="ai-mode">Manual path parity: every action has a no-AI equivalent.</div>
+      <select id="ai-mode-select" title="Generation mode">
+        <option value="scene">Scene (video)</option>
+        <!-- Only video generation is wired today; audio/voice/dialogue come later. -->
+      </select>
       <textarea id="ai-prompt" rows="4" placeholder="Describe a scene, shot list, or generation request..."></textarea>
       <div class="stack">
         <button class="btn" id="btn-health" type="button">Orchestrator Health</button>
@@ -353,6 +360,7 @@ function buildDom(root: HTMLElement): void {
           <button class="btn btn-reject" id="btn-reject-job" type="button" disabled>Reject</button>
         </div>
       </div>
+      <div id="ai-job-status" class="ai-job-status">No job submitted.</div>
       <div id="inspector" class="inspector">No clip selected.</div>
     </aside>
     <main class="center">
@@ -465,6 +473,10 @@ export function bootstrapStudioApp(): void {
   const previewFrame = document.getElementById("preview-frame") as HTMLImageElement;
   const previewVideo = document.getElementById("preview-video") as HTMLVideoElement;
   const previewEmpty = $("#preview-empty");
+  const aiModeSelect = $("#ai-mode-select") as HTMLSelectElement;
+  const jobStatusEl = $("#ai-job-status") as HTMLElement;
+  const acceptBtn = $("#btn-accept-job") as HTMLButtonElement;
+  const rejectBtn = $("#btn-reject-job") as HTMLButtonElement;
 
   // ── Dev mode ──
   const DEV_MODE_KEY = "deepiri_dev_mode";
@@ -885,16 +897,71 @@ export function bootstrapStudioApp(): void {
   async function doListProjects() {
     navigateTo("home");
   }
+  // ── AI job progress (Task 12): poll status, show stages, gate review buttons ──
+  let jobPollTimer: number | null = null;
+  // States the worker won't move on from on its own (review/failed) plus the
+  // post-review user states — polling stops here.
+  const JOB_TERMINAL = new Set(["review", "failed", "committed", "accepted", "rejected"]);
+
+  function setReviewButtons(enabled: boolean): void {
+    acceptBtn.disabled = !enabled;
+    rejectBtn.disabled = !enabled;
+  }
+
+  function renderJobStatus(job: AIJob): void {
+    const stages = (job.stages || []).join(" → ");
+    let line = `Status: ${job.status}`;
+    if (stages) line += `\nStages: ${stages}`;
+    if (job.status === "failed") {
+      const err = job.metadata?.error || job.metadata?.artifact_error;
+      if (err) line += `\nError: ${String(err)}`;
+    }
+    jobStatusEl.textContent = line;
+    // Accept/Reject are only meaningful while the job awaits review.
+    setReviewButtons(job.status === "review");
+  }
+
+  function stopJobPolling(): void {
+    if (jobPollTimer !== null) {
+      clearInterval(jobPollTimer);
+      jobPollTimer = null;
+    }
+  }
+
+  function startJobPolling(jobId: string): void {
+    stopJobPolling();
+    jobPollTimer = window.setInterval(async () => {
+      try {
+        const job = await getAiJob(jobId);
+        renderJobStatus(job);
+        if (JOB_TERMINAL.has(job.status)) {
+          stopJobPolling();
+          devLog(`Job ${jobId} reached ${job.status}`);
+        }
+      } catch (e) {
+        stopJobPolling();
+        devLog(`Poll error: ${String(e)}`);
+      }
+    }, 800);
+  }
+
   async function doSubmitJob() {
     if (!state.activeProjectId || !aiPrompt.value.trim()) return;
+    stopJobPolling();
+    setReviewButtons(false);
+    jobStatusEl.textContent = "Submitting…";
     try {
       const res = await submitAiJob(
         state.activeProjectId,
         aiPrompt.value.trim(),
+        aiModeSelect.value,
       );
-      devLog(`AI job submitted: ${res.job_id}`);
+      devLog(`AI job submitted: ${res.job_id} (mode=${aiModeSelect.value})`);
       state.lastJobId = res.job_id;
+      jobStatusEl.textContent = `Status: ${res.status}`;
+      startJobPolling(res.job_id);
     } catch (e) {
+      jobStatusEl.textContent = `Submit failed: ${String(e)}`;
       devLog(`Submit job error: ${String(e)}`);
     }
   }
@@ -902,9 +969,8 @@ export function bootstrapStudioApp(): void {
     if (!state.lastJobId) return;
     try {
       const job = await getAiJob(state.lastJobId);
-      devLog(
-        `Job ${job.id}: ${job.status} stages=[${(job.stages || []).join(",")}]`,
-      );
+      renderJobStatus(job);
+      devLog(`Job ${job.id}: ${job.status} stages=[${(job.stages || []).join(",")}]`);
     } catch (e) {
       devLog(`Refresh job error: ${String(e)}`);
     }
@@ -913,6 +979,9 @@ export function bootstrapStudioApp(): void {
     if (!state.lastJobId) return;
     try {
       const job = await acceptAiJob(state.lastJobId);
+      stopJobPolling();
+      setReviewButtons(false);
+      jobStatusEl.textContent = `Status: ${job.status}`;
       devLog(`Job ${state.lastJobId} accepted`);
       const outputPath = job.metadata?.output_path;
       if (outputPath) {
@@ -920,6 +989,7 @@ export function bootstrapStudioApp(): void {
         devLog(`Playing accepted clip in monitor`);
       }
     } catch (e) {
+      jobStatusEl.textContent = `Accept failed: ${String(e)}`;
       devLog(`Accept error: ${String(e)}`);
     }
   }
@@ -927,6 +997,9 @@ export function bootstrapStudioApp(): void {
     if (!state.lastJobId) return;
     try {
       await rejectAIJob(state.lastJobId);
+      stopJobPolling();
+      setReviewButtons(false);
+      jobStatusEl.textContent = "Status: rejected";
       devLog(`Job ${state.lastJobId} rejected`);
     } catch (e) {
       devLog(`Reject error: ${String(e)}`);
