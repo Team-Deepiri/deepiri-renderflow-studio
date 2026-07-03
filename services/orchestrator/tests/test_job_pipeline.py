@@ -238,3 +238,75 @@ def test_accept_creates_video_asset(tmp_path, monkeypatch):
     assert assets[0]["kind"] == "video"
     assert assets[0]["meta_jsonb"].get("source") == "ai"
     assert assets[0]["meta_jsonb"].get("proxy_status") == "pending"
+
+
+class _NoThread:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def start(self):
+        return None
+
+
+def test_accept_asset_uses_real_path_and_hash(tmp_path, monkeypatch):
+    """The created asset must reference the real resolved file with a real
+    content hash"""
+    from app.api.routers.ai_jobs import accept_ai_job
+    from app.services import studio
+
+    output = tmp_path / "clip.mp4"
+    output.write_bytes(b"real mp4 bytes")
+
+    store = _store()
+    pid = uuid4()
+    job = store.create(pid, "scene", "hash check")
+    store.update_status(job.id, JobStatus.REVIEW, stages=["review"])
+    store.merge_meta(job.id, "output_path", str(output))
+
+    monkeypatch.setattr("app.api.routers.ai_jobs.store", store)
+    monkeypatch.setattr("app.api.routers.ai_jobs.threading.Thread", _NoThread)
+
+    result = accept_ai_job(job.id)
+    assert result.status == JobStatus.COMMITTED
+
+    asset = studio.list_assets(pid)[0]
+    assert asset["uri"] == str(output.resolve())          
+    assert asset["sha256"] != "pending"                   
+    assert len(asset["sha256"]) == 64                     
+
+
+def test_accept_rejects_when_output_path_unset(monkeypatch):
+    """A job with no output_path can't be accepted — 409, no asset created."""
+    from fastapi import HTTPException
+
+    from app.api.routers.ai_jobs import accept_ai_job
+
+    store = _store()
+    job = store.create(uuid4(), "scene", "no output job")
+    store.update_status(job.id, JobStatus.REVIEW, stages=["review"])  # output_path never set
+    monkeypatch.setattr("app.api.routers.ai_jobs.store", store)
+
+    with pytest.raises(HTTPException) as exc:
+        accept_ai_job(job.id)
+    assert exc.value.status_code == 409
+    assert store.get(job.id).status == JobStatus.REVIEW          
+    assert "asset_id" not in store.get(job.id).metadata
+
+
+def test_accept_rejects_when_output_file_missing(monkeypatch, tmp_path):
+    """output_path set but the file doesn't exist on disk -> 409, no asset."""
+    from fastapi import HTTPException
+
+    from app.api.routers.ai_jobs import accept_ai_job
+
+    store = _store()
+    job = store.create(uuid4(), "scene", "missing file job")
+    store.update_status(job.id, JobStatus.REVIEW, stages=["review"])
+    store.merge_meta(job.id, "output_path", str(tmp_path / "never-created.mp4"))
+    monkeypatch.setattr("app.api.routers.ai_jobs.store", store)
+
+    with pytest.raises(HTTPException) as exc:
+        accept_ai_job(job.id)
+    assert exc.value.status_code == 409
+    assert store.get(job.id).status == JobStatus.REVIEW
+    assert "asset_id" not in store.get(job.id).metadata
