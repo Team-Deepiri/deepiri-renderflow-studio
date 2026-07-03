@@ -186,10 +186,6 @@ def _apply_rfir_status(uid: UUID, rec: AiJobRecord, status: RfirJobStatus) -> No
             store.merge_meta(uid, k, v)
         _emit(str(uid), "running", stage=stage_name, project_id=pid)
     elif status.state == RfirJobState.REVIEW:
-        # Fail-closed: a job only reaches REVIEW if the worker persisted a real,
-        # readable MP4. A missing/unreachable path (e.g. the worker wrote to a
-        # filesystem the orchestrator can't see) becomes a failure, never a
-        # "successful" job pointing at nothing (Task 9, gap B).
         out = (status.artifacts or {}).get("output_mp4")
         if not is_persisted_output(out):
             store.merge_meta(uid, "error", f"worker reported no readable output (output_mp4={out!r})")
