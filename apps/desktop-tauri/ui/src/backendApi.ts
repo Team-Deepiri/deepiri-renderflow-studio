@@ -337,3 +337,7 @@ export async function fetchFrame(path: string, timeSeconds: number): Promise<str
 export function getStreamUrl(path: string): string {
   return `${BASE}/v1/media/stream?path=${encodeURIComponent(path)}`;
 }
+
+export function getAssetStreamUrl(assetId: string): string {
+  return `${BASE}/v1/assets/${assetId}/stream`;
+}
