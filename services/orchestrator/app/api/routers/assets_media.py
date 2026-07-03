@@ -12,7 +12,7 @@ from app.api.schemas.studio import AssetCreate, AssetImportBody, FrameBody, Prob
 from app.media import ffmpeg as ffmpeg_util
 from app.services import studio
 
-from app.paths import data_subdir, is_persisted_output, resolve_data_dir
+from app.paths import data_subdir, resolve_data_dir
 
 router = APIRouter()
 
@@ -116,14 +116,3 @@ def media_stream(path: str) -> FileResponse:
     if not p.is_file():
         raise HTTPException(404, "file not found")
     return FileResponse(str(p), media_type="video/mp4")
-
-
-@router.api_route("/v1/assets/{asset_id}/stream", methods=["GET", "HEAD"], tags=["assets"])
-def stream_asset(asset_id: UUID) -> FileResponse:
-    asset = studio.get_asset(asset_id)
-    if not asset:
-        raise HTTPException(404, "asset not found")
-    uri = asset.get("uri")
-    if not is_persisted_output(uri):
-        raise HTTPException(404, "asset file missing")
-    return FileResponse(uri, media_type="video/mp4")
