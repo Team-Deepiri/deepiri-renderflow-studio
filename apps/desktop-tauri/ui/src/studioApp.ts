@@ -672,15 +672,24 @@ export function bootstrapStudioApp(): void {
     renderTimeline(state, timelineGrid, timecodeEl, sliderEl, timelineCbs);
   }
 
+  // Stream an asset straight into the program monitor (single-click preview).
+  // Uses the ready proxy (for AI clips that's the generated mp4 itself); if no
+  // proxy is available yet there's nothing web-playable to show.
+  function previewAssetInMonitor(asset: Asset): void {
+    const meta = asset.meta_jsonb ?? {};
+    const src = meta.proxy_status === "ready" && meta.proxy_path
+      ? String(meta.proxy_path)
+      : null;
+    if (!src) {
+      devLog(`No playable proxy for "${meta.name ?? asset.uri}" (proxy_status=${meta.proxy_status ?? "unavailable"})`);
+      return;
+    }
+    playClipInMonitor(src);
+  }
+
   function renderAssets(): void {
     renderAssetList(state.assets, assetList, {
-      onAssetClick: (asset) => {
-        if (state.ui.activeTrackId !== null) {
-          insertClipFromAsset(state, asset, history);
-          renderTimelineFull();
-          renderAssets();
-        }
-      },
+      onAssetPreview: (asset) => previewAssetInMonitor(asset),
     });
   }
 
