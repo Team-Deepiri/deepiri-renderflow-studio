@@ -15,13 +15,11 @@ from renderflow_queue import (
     RedisJobQueue,
     RfirJobState,
     RfirJobStatus,
+    stage_for_op,
 )
 from app.stage_runner import run_audio_stages, run_scene_stages
 from app.api.utils import get_event_emitter
 from app.paths import data_subdir
-
-from pathlib import Path
-import subprocess, shutil
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +27,14 @@ _local_pending: Queue[str] = Queue()
 _stop = threading.Event()
 _worker_thread: threading.Thread | None = None
 _cancelled_jobs: set[str] = set()
+
+
+class _JobCancelled(BaseException):
+    """Raised from inside the RFIR executor callback to abort a cancelled job.
+
+    Derives from BaseException so it can't be swallowed by the pipeline's
+    `except Exception` error handling on its way back to _process_job.
+    """
 
 # Job IDs dispatched to model-workers over Redis, awaiting status mirroring.
 # Separate from `_cancelled_jobs`/`_local_pending`, which are the legacy
@@ -149,6 +155,12 @@ def _process_job(job_id: str, settings: Settings) -> None:
 
     if rec.mode in ("audio", "voice", "dialogue"):
         results = run_audio_stages(rec.prompt)
+    elif rec.mode == "scene" and settings.rfir_enabled:
+        # RFIR is on but this job wasn't dispatched to model-workers (no
+        # Redis, or dispatch failed) — run the real pipeline in-process
+        # instead of the stub stages.
+        _process_scene_job_rfir(uid, rec, settings)
+        return
     else:
         results = run_scene_stages(rec.prompt)
 
@@ -168,6 +180,83 @@ def _process_job(job_id: str, settings: Settings) -> None:
 
     store.set_stages(uid, names, completed_through=len(names) - 1)
     store.update_status(uid, JobStatus.REVIEW, stages=names)
+    _emit(job_id, "review", project_id=pid)
+
+
+def _process_scene_job_rfir(uid: UUID, rec: AiJobRecord, settings: Settings) -> None:
+    """Run a scene job through the real RFIR pipeline in-process (§1.14).
+
+    Stages mirror the actual graph execution (compiling, generating_keyframe,
+    estimating_depth, rendering_frames, muxing). Any failure — RFIR bridge
+    unavailable, missing ML runtime/weights, no ffmpeg — lands the job in
+    FAILED with metadata["error"] explaining why.
+    """
+    job_id = str(uid)
+    pid = str(rec.project_id)
+    stages: list[str] = ["preparing"]
+
+    def _advance(stage: str) -> None:
+        if job_id in _cancelled_jobs:
+            raise _JobCancelled()
+        if stage == stages[-1]:
+            return
+        stages.append(stage)
+        snapshot = list(stages)
+        store.update_status(uid, JobStatus.RUNNING, stages=snapshot)
+        store.set_stages(uid, snapshot, completed_through=len(snapshot) - 2)
+        _emit(job_id, "running", stage=stage, project_id=pid)
+
+    def _on_node_start(node) -> None:
+        _advance(stage_for_op(node.op))
+
+    def _fail(error: str) -> None:
+        logger.warning("RFIR job %s failed: %s", job_id, error)
+        store.merge_meta(uid, "error", error)
+        store.update_status(uid, JobStatus.FAILED, stages=stages + ["failed"])
+        _emit(job_id, "failed", project_id=pid)
+
+    try:
+        from app.media.cfsv_pipeline import compile_and_run_tier_a
+    except (ImportError, ModuleNotFoundError) as e:
+        _fail(f"RFIR unavailable in this environment: {e}")
+        return
+
+    out_dir = data_subdir("render_outputs", settings) / job_id
+
+    try:
+        _advance("compiling")
+        result = compile_and_run_tier_a(
+            rec.prompt,
+            str(out_dir),
+            job_id=job_id,
+            max_gpu_sec=settings.rfir_max_gpu_sec,
+            max_tier=settings.rfir_max_tier,
+            on_node_start=_on_node_start,
+        )
+    except _JobCancelled:
+        store.update_status(uid, JobStatus.CANCELLED, stages=stages + ["cancelled"])
+        _emit(job_id, "cancelled", project_id=pid)
+        return
+    except Exception as e:
+        _fail(f"RFIR pipeline crashed: {e}")
+        return
+
+    if not result.get("ok"):
+        _fail(str(result.get("error", "RFIR pipeline failed")))
+        return
+
+    store.merge_meta(uid, "output_path", result["output_path"])
+    store.merge_meta(uid, "artifacts", {
+        "output_mp4": result["output_path"],
+        "keyframes": result.get("keyframes", []),
+        "graph_uri": result.get("graph_uri"),
+    })
+    store.merge_meta(uid, "rfir_metrics", result.get("metrics", {}))
+
+    stages.append("review")
+    snapshot = list(stages)
+    store.set_stages(uid, snapshot, completed_through=len(snapshot) - 1)
+    store.update_status(uid, JobStatus.REVIEW, stages=snapshot)
     _emit(job_id, "review", project_id=pid)
 
 
