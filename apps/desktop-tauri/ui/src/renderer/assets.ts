@@ -1,7 +1,8 @@
 import type { Asset } from "../types";
 
 export type AssetCallbacks = {
-  onAssetClick: (asset: Asset) => void;
+  /** Single click — preview the asset in the program monitor. */
+  onAssetPreview?: (asset: Asset) => void;
 };
 
 /** Re-renders the asset list into `root`. */
@@ -61,7 +62,8 @@ export function renderAssetList(
       </div>
     `;
 
-    li.addEventListener("click", () => callbacks.onAssetClick(asset));
+    li.title = "Click to preview";
+    li.addEventListener("click", () => callbacks.onAssetPreview?.(asset));
     root.appendChild(li);
   }
 }
