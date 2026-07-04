@@ -24,3 +24,11 @@ def resolve_data_dir(settings: Settings | None = None) -> Path:
 def data_subdir(name: str, settings: Settings | None = None) -> Path:
     """e.g. data_subdir('proxies'), data_subdir('ai_outputs', settings)."""
     return resolve_data_dir(settings) / name
+
+
+def is_persisted_output(path: str | None) -> bool:
+    """True if `path` names a real file on disk — the single definition of a
+    valid, persisted job artifact. Used both when a job's output is recorded
+    (worker_loop) and when it's consumed (accept), so the two never disagree.
+    """
+    return bool(path) and Path(path).is_file()

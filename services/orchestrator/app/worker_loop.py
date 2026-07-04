@@ -19,7 +19,7 @@ from renderflow_queue import (
 )
 from app.stage_runner import run_audio_stages, run_scene_stages
 from app.api.utils import get_event_emitter
-from app.paths import data_subdir
+from app.paths import data_subdir, is_persisted_output
 
 logger = logging.getLogger(__name__)
 
@@ -275,13 +275,18 @@ def _apply_rfir_status(uid: UUID, rec: AiJobRecord, status: RfirJobStatus) -> No
             store.merge_meta(uid, k, v)
         _emit(str(uid), "running", stage=stage_name, project_id=pid)
     elif status.state == RfirJobState.REVIEW:
-        store.update_status(uid, JobStatus.REVIEW, stages=rec.stages + ["review"])
-        if status.artifacts:
-            store.merge_meta(uid, "artifacts", status.artifacts)
-            if "output_mp4" in status.artifacts:
-                store.merge_meta(uid, "output_path", status.artifacts["output_mp4"])
+        out = (status.artifacts or {}).get("output_mp4")
+        if not is_persisted_output(out):
+            store.merge_meta(uid, "error", f"worker reported no readable output (output_mp4={out!r})")
+            store.update_status(uid, JobStatus.FAILED, stages=rec.stages + ["failed"])
+            _emit(str(uid), "failed", project_id=pid)
+            return
+
+        store.merge_meta(uid, "artifacts", status.artifacts)
+        store.merge_meta(uid, "output_path", str(Path(out).resolve()))
         if status.metrics:
             store.merge_meta(uid, "rfir_metrics", status.metrics)
+        store.update_status(uid, JobStatus.REVIEW, stages=rec.stages + ["review"])
         _emit(str(uid), "review", project_id=pid)
     elif status.state == RfirJobState.FAILED:
         store.update_status(uid, JobStatus.FAILED, stages=rec.stages + ["failed"])

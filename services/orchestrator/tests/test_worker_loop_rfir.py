@@ -130,19 +130,35 @@ def test_apply_rfir_status_running_merges_metadata():
     assert updated.metadata["stage_storyboard"] == {"shot_count": 3}
 
 
-def test_apply_rfir_status_review_sets_output_path():
+def test_apply_rfir_status_review_sets_output_path(tmp_path):
+    mp4 = tmp_path / "out.mp4"
+    mp4.write_bytes(b"fake mp4")  # a real, readable artifact
     rec = store.create(uuid4(), "scene", "prompt")
     status = RfirJobStatus(
         job_id=str(rec.id), state=RfirJobState.REVIEW,
-        artifacts={"output_mp4": "/tmp/out.mp4"},
+        artifacts={"output_mp4": str(mp4)},
         metrics={"total_gpu_ms": 500.0},
     )
     _apply_rfir_status(rec.id, rec, status)
 
     updated = store.get(rec.id)
     assert updated.status == JobStatus.REVIEW
-    assert updated.metadata["output_path"] == "/tmp/out.mp4"
+    assert updated.metadata["output_path"] == str(mp4.resolve())
     assert updated.metadata["rfir_metrics"]["total_gpu_ms"] == 500.0
+
+
+def test_apply_rfir_status_review_missing_output_fails():
+    rec = store.create(uuid4(), "scene", "prompt")
+    status = RfirJobStatus(
+        job_id=str(rec.id), state=RfirJobState.REVIEW,
+        artifacts={"output_mp4": "/tmp/does-not-exist-abcxyz.mp4"},
+    )
+    _apply_rfir_status(rec.id, rec, status)
+
+    updated = store.get(rec.id)
+    assert updated.status == JobStatus.FAILED
+    assert "output_path" not in updated.metadata
+    assert "output" in updated.metadata["error"]
 
 
 def test_apply_rfir_status_failed_records_error():
