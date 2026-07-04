@@ -155,7 +155,7 @@ def _process_job(job_id: str, settings: Settings) -> None:
 
     if rec.mode in ("audio", "voice", "dialogue"):
         results = run_audio_stages(rec.prompt)
-    elif settings.rfir_enabled:
+    elif rec.mode == "scene" and settings.rfir_enabled:
         # RFIR is on but this job wasn't dispatched to model-workers (no
         # Redis, or dispatch failed) — run the real pipeline in-process
         # instead of the stub stages.
@@ -236,6 +236,9 @@ def _process_scene_job_rfir(uid: UUID, rec: AiJobRecord, settings: Settings) -> 
     except _JobCancelled:
         store.update_status(uid, JobStatus.CANCELLED, stages=stages + ["cancelled"])
         _emit(job_id, "cancelled", project_id=pid)
+        return
+    except Exception as e:
+        _fail(f"RFIR pipeline crashed: {e}")
         return
 
     if not result.get("ok"):
