@@ -684,6 +684,18 @@ export function bootstrapStudioApp(): void {
     });
   }
 
+  async function refreshAssets(): Promise<void> {
+    if (!state.activeProjectId) return;
+    try {
+      const assets = await listProjectAssets(state.activeProjectId);
+      state.assets = [];
+      for (const a of assets) registerAsset(state, a);
+      renderAssets();
+    } catch {
+      /* leave existing assets in place on failure */
+    }
+  }
+
   // ── Clip drag logic ──
   function handleClipDrag(
     clipId: number,
@@ -988,6 +1000,9 @@ export function bootstrapStudioApp(): void {
         playClipInMonitor(outputPath);
         devLog(`Playing accepted clip in monitor`);
       }
+      // Surface the new AI asset in the library so the user can click/drag it
+      // onto the timeline later (it plays there now that its proxy is ready).
+      await refreshAssets();
     } catch (e) {
       jobStatusEl.textContent = `Accept failed: ${String(e)}`;
       devLog(`Accept error: ${String(e)}`);
