@@ -10,12 +10,15 @@ Spec reference: rfir-inference-engine-implementation.md §3.2
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 import numpy as np
-import torch
 from PIL import Image
 
 from app.rfir.models.loader import load_model
+
+if TYPE_CHECKING:
+    import torch
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +36,8 @@ def encode(
     device — the VAE is 3D (video) and requires a temporal dimension even for
     a single frame.
     """
+    import torch
+
     mid = model_id or DEFAULT_MODEL
     bundle = load_model(mid)
     vae = bundle["vae"]
@@ -64,6 +69,8 @@ def decode(
     common case here) or (1, C, H', W'), which is promoted to T=1. Returns a
     PIL Image of the first decoded frame.
     """
+    import torch
+
     mid = model_id or DEFAULT_MODEL
     bundle = load_model(mid)
     vae = bundle["vae"]

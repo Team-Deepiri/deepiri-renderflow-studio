@@ -12,9 +12,9 @@ Spec reference: rfir-inference-engine-implementation.md §3.3
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 import numpy as np
-import torch
 from PIL import Image
 
 from app.rfir.ltc import (
@@ -25,6 +25,9 @@ from app.rfir.ltc import (
     warp_latent,
 )
 from app.rfir.models.loader import load_model
+
+if TYPE_CHECKING:
+    import torch
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +108,8 @@ def run(
 
     Returns a list of PIL Images (generated frames).
     """
+    import torch
+
     # Tier D hard duration cap (design doc §4.4: max 3s per hero shot).
     if full_frame:
         max_frames = int(TIER_D_MAX_DURATION_SEC * fps)

@@ -201,10 +201,10 @@ docs/specs/
 
 #### Orchestrator integration
 
-- [ ] **1.11** `app/media/cfsv_pipeline.py` — `compile_and_run_tier_a(prompt) -> artifact paths`.
+- [x] **1.11** `app/media/cfsv_pipeline.py` — `compile_and_run_tier_a(prompt) -> artifact paths`.
 - [ ] **1.12** `app/media/rfir_client.py` — serialize graph; extend Redis payload with `compiled_graph_uri`.
 - [ ] **1.13** Update `text_video_pipeline.py` to delegate to `cfsv_pipeline` when `RENDERFLOW_RFIR_ENABLED=true`.
-- [ ] **1.14** Update `stage_runner.py` / `worker_loop.py` to call real RFIR stages (or delegate to Redis worker).
+- [x] **1.14** Update `stage_runner.py` / `worker_loop.py` to call real RFIR stages (or delegate to Redis worker).
 - [ ] **1.15** `redis_worker.py` — invoke `rfir.executor.engine.run_graph()` instead of stub.
 - [ ] 🛡️ **1.16** Executor refuses to start if guardrail pre-check failed (read `guardrail_verdict` from payload).
 
