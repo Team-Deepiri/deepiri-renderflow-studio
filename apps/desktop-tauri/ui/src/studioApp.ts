@@ -784,10 +784,16 @@ export function bootstrapStudioApp(): void {
     }
     const { clip, asset } = found;
     const offsetSecs = (state.timeline.playheadTick - clip.inTick) / state.timeline.fps;
+    
+    const proxyPath = asset.meta_jsonb?.proxy_path;
+    if (!proxyPath) {
+      previewFrame.style.display = "none";
+      previewEmpty.style.display = "";
+      return;
+    }
     previewEmpty.style.display = "none";
     try {
-      const path = asset.meta_jsonb?.proxy_path ?? asset.uri;
-      const b64 = await fetchFrame(path, offsetSecs);
+      const b64 = await fetchFrame(proxyPath, offsetSecs);
       previewFrame.src = `data:image/jpeg;base64,${b64}`;
       previewFrame.style.display = "block";
     } catch {
