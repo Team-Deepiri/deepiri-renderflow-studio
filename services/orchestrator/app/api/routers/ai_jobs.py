@@ -16,6 +16,7 @@ from app.services import studio
 
 from pathlib import Path
 import hashlib
+import threading
 
 router = APIRouter()
 
@@ -182,6 +183,10 @@ def accept_ai_job(job_id: UUID) -> AiJobOut:
         aid = str(arow["id"])
         store.merge_meta(job_id, "asset_id", aid)
         db_repos.insert_ai_job_artifact(str(job_id), aid, "ai_bundle", None)
+
+        def _start_proxy(asset_id: str, path: str) -> None:
+            pass  # placeholder for future proxy transcoding
+        threading.Thread(target=_start_proxy, args=(aid, output_path), daemon=True).start()
 
     store.update_status(job_id, JobStatus.COMMITTED, stages=rec.stages + ["committed"])
     current = store.get(job_id)

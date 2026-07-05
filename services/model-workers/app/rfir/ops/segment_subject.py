@@ -12,7 +12,6 @@ from __future__ import annotations
 import logging
 
 import numpy as np
-import torch
 from PIL import Image
 
 from app.rfir.models.loader import load_model
