@@ -49,6 +49,6 @@ curl -I "$BASE/Renderflow-Studio-latest-setup.exe"
 ## Notes
 
 - The desktop app is the Tauri shell only; the Python orchestrator remains a separate service (see landing terminal install docs).
-- CI generates Tauri icons on the fly (`scripts/ci/generate_tauri_icons.py`) because `tauri.conf.json` had no icon set checked in.
+- App icons are committed under `apps/desktop-tauri/src-tauri/icons/` (see `tauri.conf.json`).
 - v1 builds are **unsigned**; expect Gatekeeper / SmartScreen prompts.
 - Linux builds require WebKitGTK and related packages (mirrors main CI).

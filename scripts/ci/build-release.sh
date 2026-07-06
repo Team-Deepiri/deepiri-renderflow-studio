@@ -19,9 +19,6 @@ npm run build --prefix "$UI"
 echo "==> Installing Tauri CLI"
 npm ci --prefix "$DESKTOP"
 
-echo "==> Generating application icons"
-python3 scripts/ci/generate_tauri_icons.py
-
 echo "==> Installing Rust toolchain"
 if ! command -v cargo >/dev/null 2>&1; then
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
