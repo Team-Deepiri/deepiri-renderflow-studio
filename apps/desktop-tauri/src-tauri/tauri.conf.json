@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Deepiri Renderflow Studio",
+  "productName": "Renderflow Studio",
   "version": "0.1.0",
   "identifier": "ai.deepiri.renderflow",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Deepiri Renderflow Studio",
+        "title": "Renderflow Studio",
         "width": 1600,
         "height": 980
       }
@@ -32,7 +32,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "publisher": "Deepiri",
-    "copyright": "Deepiri"
+    "publisher": "Renderflow Studio",
+    "copyright": "Renderflow Studio"
   }
 }
