@@ -12,7 +12,7 @@ from app.api.schemas.studio import AssetCreate, AssetImportBody, FrameBody, Prob
 from app.media import ffmpeg as ffmpeg_util
 from app.services import studio
 
-from app.paths import data_subdir
+from app.paths import data_subdir, resolve_within_data_dir
 
 router = APIRouter()
 
@@ -96,12 +96,20 @@ def get_asset_by_id(asset_id: UUID) -> dict[str, Any]:
 
 @router.post("/v1/media/probe", tags=["media"])
 def media_probe(body: ProbeBody) -> dict[str, Any]:
-    return ffmpeg_util.probe(body.path)
+    try:
+        p = resolve_within_data_dir(body.path)
+    except ValueError:
+        raise HTTPException(403, "path outside data directory")
+    return ffmpeg_util.probe(str(p))
 
 
 @router.post("/v1/media/frame", tags=["media"])
 def media_frame(body: FrameBody) -> dict[str, Any]:
-    result = ffmpeg_util.extract_frame_base64(body.path, body.time_seconds)
+    try:
+        p = resolve_within_data_dir(body.path)
+    except ValueError:
+        raise HTTPException(403, "path outside data directory")
+    result = ffmpeg_util.extract_frame_base64(str(p), body.time_seconds)
     if not result.get("ok"):
         raise HTTPException(500, result.get("error", "frame extraction failed"))
     return result
@@ -109,7 +117,10 @@ def media_frame(body: FrameBody) -> dict[str, Any]:
 
 @router.api_route("/v1/media/stream", methods=["GET", "HEAD"], tags=["media"])
 def media_stream(path: str) -> FileResponse:
-    p = Path(path)
-    if not p.exists() or not p.is_file():
+    try:
+        p = resolve_within_data_dir(path)
+    except ValueError:
+        raise HTTPException(403, "path outside data directory")
+    if not p.is_file():
         raise HTTPException(404, "file not found")
     return FileResponse(str(p), media_type="video/mp4")

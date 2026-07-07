@@ -22,10 +22,10 @@ _ENV_DISABLE = "RENDERFLOW_RFIR_DISABLE_COMPILE"
 
 
 def is_compile_enabled(device: str) -> bool:
-    """torch.compile is attempted on CUDA and MPS; skipped on CPU and when disabled."""
+    """torch.compile is attempted on CUDA only; MPS produces silent wrong output with it."""
     if os.environ.get(_ENV_DISABLE, "").lower() in ("1", "true", "yes"):
         return False
-    return device in ("cuda", "mps")
+    return device == "cuda"
 
 
 def compiled_call(

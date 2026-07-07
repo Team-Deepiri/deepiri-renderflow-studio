@@ -8,7 +8,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -49,11 +49,17 @@ def run_graph(
     output_dir: str,
     budget: InferenceBudget | None = None,
     checkpoint_dir: str | None = None,
+    on_node_start: Callable[[RfirNode], None] | None = None,
 ) -> ExecutionContext:
     """Execute all nodes in dependency order. Returns execution context with metrics.
 
     If checkpoint_dir is set, saves state at shot boundaries and supports
     resuming from a prior checkpoint (§4.2 / §4.3).
+
+    on_node_start is invoked with each node before its handler runs, so
+    callers can surface per-stage progress. Exceptions it raises propagate
+    out of run_graph (after arena/model cleanup), which callers may use to
+    abort a cancelled job.
     """
     if not _OP_HANDLERS:
         _register_handlers()
@@ -103,6 +109,9 @@ def run_graph(
             if handler is None:
                 logger.warning("No handler for op %s (node %s), skipping", node.op, node_id)
                 continue
+
+            if on_node_start is not None:
+                on_node_start(node)
 
             if governor is not None:
                 node = governor.before_node(node)
