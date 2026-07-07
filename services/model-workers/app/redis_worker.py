@@ -55,6 +55,29 @@ def _plan_shots(prompt: str, max_tier):
         ])
 
 
+def _warmup() -> None:
+    """Run one tiny throwaway generation at startup so the Metal/CUDA JIT
+    shader compilation (~200s cold on MPS) happens once when the worker
+    boots, not on the user's first job. Models stay resident afterwards.
+
+    Disable with RENDERFLOW_RFIR_WARMUP=0 (e.g. in tests or CI where model
+    weights aren't available).
+    """
+    if os.environ.get("RENDERFLOW_RFIR_WARMUP", "1") != "1":
+        logger.info("warmup disabled via RENDERFLOW_RFIR_WARMUP")
+        return
+
+    from app.rfir.ops import t2i_keyframe
+
+    logger.info("warmup: compiling t2i pipeline (first run may take minutes)...")
+    t0 = time.monotonic()
+    try:
+        t2i_keyframe.run("warmup", width=512, height=288, steps=1, seed=0)
+        logger.info("warmup: done in %.1fs — models resident, JIT compiled", time.monotonic() - t0)
+    except Exception as e:
+        logger.warning("warmup failed (%s) — first job will pay the JIT cost instead", e)
+
+
 def run_rfir_job(job_id: str, payload: dict, reporter: JobStatusReporter) -> None:
     """Run the full RFIR pipeline for one job: plan -> compile -> execute."""
     from app.rfir.ir.types import InferenceBudget, Tier
@@ -145,6 +168,7 @@ def main() -> None:
 
     r = redis.Redis.from_url(args.redis_url, decode_responses=True)
     reporter = JobStatusReporter(r)
+    _warmup()
     logger.info("listening %s on %s", REDIS_KEY_JOBS, args.redis_url)
 
     while True:

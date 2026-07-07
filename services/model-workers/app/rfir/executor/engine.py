@@ -141,7 +141,12 @@ def run_graph(
     finally:
         arena.release_all()
         ltc.release_all()
-        unload_all()
+        # Keep models resident between jobs by default: unloading throws away
+        # the Metal/CUDA-compiled kernels, so the next job pays the full JIT
+        # warmup again (~200s on MPS for the SDXL UNet). Opt back into
+        # per-job unloading on memory-constrained hosts via env.
+        if os.environ.get("RENDERFLOW_RFIR_UNLOAD_MODELS", "0") == "1":
+            unload_all()
 
     if governor is not None:
         ctx.downgrades = governor.metrics()["downgrades"]

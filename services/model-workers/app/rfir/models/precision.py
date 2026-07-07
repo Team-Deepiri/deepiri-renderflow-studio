@@ -9,6 +9,7 @@ Spec reference: rfir-inference-engine-implementation.md §1.3
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -43,9 +44,18 @@ def resolve(device: str, vram_mb: int = 0, prefer_quantized: bool = True) -> Pre
         )
 
     if device == "mps":
-        # float16 produces garbage output on Apple Silicon for SDXL/UNet ops
+        # fp16 halves memory and is ~1.5x faster than fp32 on MPS. Older
+        # torch builds produced garbage SDXL output in fp16 on Apple Silicon;
+        # torch >= 2.4 is reliable. Set RENDERFLOW_RFIR_MPS_FP32=1 to fall
+        # back if a host still shows black/noise frames.
+        if os.environ.get("RENDERFLOW_RFIR_MPS_FP32", "0") == "1":
+            return PrecisionConfig(
+                torch_dtype="float32",
+                quantization=None,
+                device_map=None,
+            )
         return PrecisionConfig(
-            torch_dtype="float32",
+            torch_dtype="float16",
             quantization=None,
             device_map=None,
         )
