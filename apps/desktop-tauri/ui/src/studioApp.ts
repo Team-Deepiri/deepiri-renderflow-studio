@@ -1,5 +1,5 @@
 // ============================================================
-// studioApp.ts — DeepIRI Renderflow Studio
+// studioApp.ts — Renderflow Studio
 // Bootstrap and orchestrate the full UI (home + studio views).
 // Logic is delegated to modular ops/ and renderer/ files.
 // ============================================================
@@ -69,7 +69,7 @@ import {
   type AIJob,
 } from "./backendApi";
 
-// ── Shared SVG logo (DeepIRI gradient icon) ──
+// ── Shared SVG logo (Renderflow gradient icon) ──
 const LOGO_SVG = `<svg class="brand-logo" width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="logoGrad" x1="4" y1="4" x2="28" y2="28" gradientUnits="userSpaceOnUse">
@@ -264,7 +264,7 @@ function buildDom(root: HTMLElement): void {
 <!-- HOME VIEW -->
 <div id="home-view" class="home-view">
   <header class="topbar topbar-home">
-    <div class="brand" id="brand-home">${LOGO_SVG}<span class="brand-text">DeepIRI <span class="brand-sub">Renderflow</span></span></div>
+    <div class="brand" id="brand-home">${LOGO_SVG}<span class="brand-text">Renderflow <span class="brand-sub">Studio</span></span></div>
     <div class="toolbar">
       <button class="btn subtle" id="btn-toggle-theme-home" type="button">Theme</button>
       <button class="btn subtle dev-mode-toggle" id="btn-toggle-dev-mode" type="button" title="Toggle Developer Mode">Dev Mode: OFF</button>
@@ -272,7 +272,7 @@ function buildDom(root: HTMLElement): void {
   </header>
   <main class="home-main">
     <section class="home-hero">
-      <h1>Welcome to <span class="hero-accent">DeepIRI Renderflow Studio</span></h1>
+      <h1>Welcome to <span class="hero-accent">Renderflow Studio</span></h1>
       <p class="hero-sub">AI-powered video editing and rendering platform. Create, edit, and export professional video content.</p>
       <div class="hero-actions">
         <button class="btn btn-large" id="btn-home-new-project" type="button">
@@ -298,7 +298,7 @@ function buildDom(root: HTMLElement): void {
 <div id="studio-view" class="studio-view" style="display:none">
 <div class="studio">
   <header class="topbar">
-    <div class="brand" id="brand-studio" style="cursor:pointer" title="Back to Home">${LOGO_SVG}<span class="brand-text">DeepIRI <span class="brand-sub">Renderflow</span></span></div>
+    <div class="brand" id="brand-studio" style="cursor:pointer" title="Back to Home">${LOGO_SVG}<span class="brand-text">Renderflow <span class="brand-sub">Studio</span></span></div>
     <div class="toolbar">
       <button class="btn subtle" id="btn-home-nav" type="button">Home</button>
       <button class="btn subtle" id="btn-toggle-theme" type="button">Theme</button>
