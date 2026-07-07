@@ -112,7 +112,7 @@ def _build_tier_a(graph: RfirGraph, prefix: str, shot: Shot) -> None:
         RfirNode(
             id=f"{prefix}_t2i", op="t2i_keyframe",
             outputs={"image": img},
-            attrs={"prompt": shot.description, "steps": 4},
+            attrs={"prompt": shot.description, "steps": 2},
             estimated_gpu_ms=800, vram_mb=6144,
         ),
         RfirNode(
@@ -142,13 +142,13 @@ def _build_tier_b(graph: RfirGraph, prefix: str, shot: Shot) -> None:
         RfirNode(
             id=f"{prefix}_t2i_start", op="t2i_keyframe",
             outputs={"image": img_start},
-            attrs={"prompt": shot.description, "steps": 4, "keyframe": "start"},
+            attrs={"prompt": shot.description, "steps": 2, "keyframe": "start"},
             estimated_gpu_ms=800, vram_mb=6144,
         ),
         RfirNode(
             id=f"{prefix}_t2i_end", op="t2i_keyframe",
             outputs={"image": img_end},
-            attrs={"prompt": shot.description, "steps": 4, "keyframe": "end"},
+            attrs={"prompt": shot.description, "steps": 2, "keyframe": "end"},
             estimated_gpu_ms=800, vram_mb=6144,
         ),
         RfirNode(
@@ -180,7 +180,7 @@ def _build_tier_c(graph: RfirGraph, prefix: str, shot: Shot) -> None:
         RfirNode(
             id=f"{prefix}_bg_t2i", op="t2i_keyframe",
             outputs={"image": bg_img},
-            attrs={"prompt": shot.description, "steps": 4},
+            attrs={"prompt": shot.description, "steps": 2},
             estimated_gpu_ms=800, vram_mb=6144,
         ),
         RfirNode(
@@ -243,7 +243,7 @@ def _build_tier_d(graph: RfirGraph, prefix: str, shot: Shot) -> None:
         RfirNode(
             id=f"{prefix}_t2i", op="t2i_keyframe",
             outputs={"image": img},
-            attrs={"prompt": shot.description, "steps": 4},
+            attrs={"prompt": shot.description, "steps": 2},
             estimated_gpu_ms=800, vram_mb=6144,
         ),
         RfirNode(
