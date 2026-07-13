@@ -51,10 +51,11 @@ REGISTRY: dict[str, ModelManifest] = {
     "rife-4.6": ModelManifest(
         id="rife-4.6",
         role="rife_interpolate",
-        repo="hzwer/Practical-RIFE",
+        repo="",  
         quantization="fp16",
         vram_mb=2048,
         license="mit",
+        extras={"filename": "flownet.pkl"},
     ),
     "qwen2.5-3b-instruct-gguf": ModelManifest(
         id="qwen2.5-3b-instruct-gguf",
