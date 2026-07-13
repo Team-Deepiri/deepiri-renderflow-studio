@@ -1,13 +1,14 @@
 """Op: rife_interpolate — interpolate frames between two keyframes (§2.5).
 
-Primary path: RIFE 4.6 optical-flow interpolation on CUDA/MPS.
-Fallback: linear cross-fade blend (PIL only) when the model isn't available —
-keeps Tier B functional without GPU weights, mirroring the Tier A FFmpeg
-fallback philosophy.
+Primary path: RIFE 4.6 optical-flow interpolation on CUDA/MPS (vendored net,
+loaded via the model loader / registry as role "rife_interpolate").
+Fallback: linear cross-fade blend (PIL only) when the model or its weights
+aren't available — keeps Tier B/C functional without GPU weights, mirroring the
+Tier A FFmpeg fallback philosophy.
 
 Returns a list of frames: [start, ...intermediates..., end].
 
-Spec reference: rfir-inference-engine-implementation.md §2.5, §5.1 (torch.compile)
+Spec reference: rfir-inference-engine-implementation.md §2.5
 """
 from __future__ import annotations
 
@@ -15,8 +16,7 @@ import logging
 
 from PIL import Image
 
-from app.rfir.models.compile_utils import compiled_call
-from app.rfir.models.loader import detect_device, load_model
+from app.rfir.models.loader import load_model
 
 logger = logging.getLogger(__name__)
 
@@ -34,20 +34,6 @@ def _blend_fallback(frame_start: Image.Image, frame_end: Image.Image, factor: in
     return frames
 
 
-def _compiled_model(model, mid: str, device: str, factor: int, size: tuple[int, int]):
-    """Wrap the RIFE model's forward pass with torch.compile, bucketed by shape/factor.
-
-    Prepares the model for compiled inference ahead of the real RIFE forward
-    pass landing (currently the fallback below is still in effect).
-    """
-    import torch.nn as nn
-
-    if not isinstance(model, nn.Module):
-        return model
-    cache_key = (mid, factor, size)
-    return compiled_call(model, cache_key=cache_key, device=device)
-
-
 def run(
     frame_start: Image.Image,
     frame_end: Image.Image,
@@ -55,27 +41,24 @@ def run(
     factor: int = 4,
     model_id: str | None = None,
 ) -> list[Image.Image]:
-    """Interpolate `factor - 1` frames between two keyframes."""
+    """Interpolate `factor - 1` frames between two keyframes.
+
+    Returns `[start, *intermediates, end]` — `factor + 1` frames total. Returns linear-blend 
+    function if RIFE 4.6 couldn't be loaded
+    """
     factor = max(2, int(factor))
     mid = model_id or DEFAULT_MODEL
 
     try:
         model = load_model(mid)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - missing weights/arch → blend
         logger.warning("rife model %s unavailable (%s) — using blend fallback", mid, e)
         return _blend_fallback(frame_start, frame_end, factor)
 
     try:
-        import torch  # noqa: F401
-
-        device = detect_device()
-        model = _compiled_model(model, mid, device, factor, frame_start.size)
-
-        logger.info("rife_interpolate: factor=%d, model=%s", factor, mid)
-        # Real RIFE inference plugs in here once weights are wired; until then
-        # the loaded (and compile-ready) model is unused and we fall back to a
-        # correct blend.
-        return _blend_fallback(frame_start, frame_end, factor)
-    except Exception as e:
+        logger.info("rife_interpolate: real RIFE, factor=%d, model=%s", factor, mid)
+        intermediates = model.interpolate(frame_start, frame_end, factor)
+        return [frame_start, *intermediates, frame_end]
+    except Exception as e:  # noqa: BLE001 - runtime inference failure → blend
         logger.warning("rife inference failed (%s) — using blend fallback", e)
         return _blend_fallback(frame_start, frame_end, factor)
