@@ -255,25 +255,27 @@ def _load_vae(manifest: ModelManifest, device: str, precision: PrecisionConfig) 
 
 
 def _load_rife(manifest: ModelManifest, device: str, precision: PrecisionConfig) -> Any:
-    """Load vendored RIFE 4.6 for frame interpolation (§2.5).
+    """Load RIFE 4.6 for frame interpolation (§2.5).
 
-    Weights (flownet.pkl) live under $RENDERFLOW_MODELS_DIR/<id>/; the arch is
-    vendored via scripts/vendor_rife.py. Raises if either is missing so the op
-    falls back to blend interpolation rather than the pipeline crashing.
+    Weights (flownet.pkl) ship in-repo via Git LFS at
+    services/model-workers/models/<id>/
     """
     from app.rfir.models.rife import RIFEModel
 
-    models_dir = os.environ.get("RENDERFLOW_MODELS_DIR")
-    weights_dir = os.path.join(models_dir, manifest.id) if models_dir else None
-    if not (weights_dir and os.path.isdir(weights_dir)):
+    filename = manifest.extras.get("filename", "flownet.pkl")
+    # loader.py is app/rfir/models/loader.py; the LFS weights live three levels
+    # up at services/model-workers/models/<id>/.
+    models_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "..", "models")
+    )
+    weights_dir = os.path.join(models_dir, manifest.id)
+    if not os.path.isfile(os.path.join(weights_dir, filename)):
         raise FileNotFoundError(
-            f"RIFE weights not found for {manifest.id!r}: expected "
-            f"$RENDERFLOW_MODELS_DIR/{manifest.id}/flownet.pkl "
-            "(run scripts/vendor_rife.py)"
+            f"RIFE weights missing at {os.path.join(weights_dir, filename)} "
+            "(run `git lfs pull`)"
         )
-    # RIFE's warp/inference path mixes CPU/MPS tensors on Apple Silicon and
-    # errors out; it's a small model, so fall back to CPU there rather than the
-    # blend fallback. CUDA runs on-GPU (fp16); CPU runs fp32 for stable warping.
+
+    # RIFE's warp mixes CPU/MPS tensors on Apple Silicon; run on CPU there.
     if device == "mps":
         device = "cpu"
     dtype = "float16" if device == "cuda" else "float32"
