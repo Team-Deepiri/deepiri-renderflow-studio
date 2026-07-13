@@ -81,6 +81,8 @@ def load_model(model_id: str, device: str | None = None) -> Any:
         pipeline = _load_t2v_pipeline(manifest, device, precision)
     elif manifest.role == "vae":
         pipeline = _load_vae(manifest, device, precision)
+    elif manifest.role == "rife_interpolate":
+        pipeline = _load_rife(manifest, device, precision)
     else:
         raise ValueError(f"No loader for role: {manifest.role!r}")
 
@@ -250,3 +252,29 @@ def _load_vae(manifest: ModelManifest, device: str, precision: PrecisionConfig) 
         vae = vae.to(device)
 
     return {"vae": vae, "device": device, "dtype": torch_dtype}
+
+
+def _load_rife(manifest: ModelManifest, device: str, precision: PrecisionConfig) -> Any:
+    """Load vendored RIFE 4.6 for frame interpolation (§2.5).
+
+    Weights (flownet.pkl) live under $RENDERFLOW_MODELS_DIR/<id>/; the arch is
+    vendored via scripts/vendor_rife.py. Raises if either is missing so the op
+    falls back to blend interpolation rather than the pipeline crashing.
+    """
+    from app.rfir.models.rife import RIFEModel
+
+    models_dir = os.environ.get("RENDERFLOW_MODELS_DIR")
+    weights_dir = os.path.join(models_dir, manifest.id) if models_dir else None
+    if not (weights_dir and os.path.isdir(weights_dir)):
+        raise FileNotFoundError(
+            f"RIFE weights not found for {manifest.id!r}: expected "
+            f"$RENDERFLOW_MODELS_DIR/{manifest.id}/flownet.pkl "
+            "(run scripts/vendor_rife.py)"
+        )
+    # RIFE's warp/inference path mixes CPU/MPS tensors on Apple Silicon and
+    # errors out; it's a small model, so fall back to CPU there rather than the
+    # blend fallback. CUDA runs on-GPU (fp16); CPU runs fp32 for stable warping.
+    if device == "mps":
+        device = "cpu"
+    dtype = "float16" if device == "cuda" else "float32"
+    return RIFEModel.load(weights_dir, device, dtype)
