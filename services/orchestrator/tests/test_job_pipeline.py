@@ -263,6 +263,7 @@ def test_accept_asset_uses_real_path_and_hash(tmp_path, monkeypatch):
     store.merge_meta(job.id, "output_path", str(output))
 
     monkeypatch.setattr("app.api.routers.ai_jobs.store", store)
+    monkeypatch.setattr("app.api.routers.ai_jobs.threading.Thread", _NoThread)
 
     result = accept_ai_job(job.id)
     assert result.status == JobStatus.COMMITTED
