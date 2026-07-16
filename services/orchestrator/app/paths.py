@@ -34,7 +34,7 @@ def is_persisted_output(path: str | None) -> bool:
     return bool(path) and Path(path).is_file()
 
 def resolve_within_data_dir(path: str, settings: Settings | None = None) -> Path:
-    """Resolve `path` and makes sure it's inside the data dir. If not, 
+    """Resolve `path` and makes sure it's inside the data dir. If not,
     raise ValueError.
     """
     p = Path(path).resolve()
