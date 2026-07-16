@@ -3,7 +3,7 @@
 This module is RenderFlow integration code only — image<->tensor conversion,
 padding, arbitrary-timestep sampling, device/dtype handling, and PIL output.
 The actual interpolation network (IFNet + warp) is the upstream MIT source
-fetched into `_vendor/` by scripts/vendor_rife.py; we only *call* it here.
+committed in `_vendor/`; we only *call* it here. See NOTICE.md.
 
 Public surface used by the loader/op:
     RIFEModel.load(weights_path, device, dtype) -> RIFEModel
