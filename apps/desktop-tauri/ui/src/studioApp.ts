@@ -1,5 +1,5 @@
 // ============================================================
-// studioApp.ts — DeepIRI Renderflow Studio
+// studioApp.ts — Renderflow Studio
 // Bootstrap and orchestrate the full UI (home + studio views).
 // Logic is delegated to modular ops/ and renderer/ files.
 // ============================================================
@@ -66,9 +66,10 @@ import {
   getStreamUrl,
   type Project,
   type Asset,
+  type AIJob,
 } from "./backendApi";
 
-// ── Shared SVG logo (DeepIRI gradient icon) ──
+// ── Shared SVG logo (Renderflow gradient icon) ──
 const LOGO_SVG = `<svg class="brand-logo" width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="logoGrad" x1="4" y1="4" x2="28" y2="28" gradientUnits="userSpaceOnUse">
@@ -133,6 +134,8 @@ body {
 .panel.ai-hidden{display:none}
 .panel,.center{border-right:1px solid var(--border-subtle);background:var(--bg-soft)}
 .panel{padding:14px 12px;overflow-y:auto;overflow-x:hidden}
+#ai-mode-select{width:100%;background:#0f131b;border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px;margin-bottom:8px}
+.ai-job-status{margin-top:10px;padding:8px;border:1px solid var(--border-subtle);border-radius:6px;background:#0f131b;font-size:11px;color:var(--text-dim);white-space:pre-wrap}
 .panel-title{
   font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;
   color:var(--text-muted);margin-bottom:12px;padding-bottom:8px;
@@ -261,7 +264,7 @@ function buildDom(root: HTMLElement): void {
 <!-- HOME VIEW -->
 <div id="home-view" class="home-view">
   <header class="topbar topbar-home">
-    <div class="brand" id="brand-home">${LOGO_SVG}<span class="brand-text">DeepIRI <span class="brand-sub">Renderflow</span></span></div>
+    <div class="brand" id="brand-home">${LOGO_SVG}<span class="brand-text">Renderflow <span class="brand-sub">Studio</span></span></div>
     <div class="toolbar">
       <button class="btn subtle" id="btn-toggle-theme-home" type="button">Theme</button>
       <button class="btn subtle dev-mode-toggle" id="btn-toggle-dev-mode" type="button" title="Toggle Developer Mode">Dev Mode: OFF</button>
@@ -269,7 +272,7 @@ function buildDom(root: HTMLElement): void {
   </header>
   <main class="home-main">
     <section class="home-hero">
-      <h1>Welcome to <span class="hero-accent">DeepIRI Renderflow Studio</span></h1>
+      <h1>Welcome to <span class="hero-accent">Renderflow Studio</span></h1>
       <p class="hero-sub">AI-powered video editing and rendering platform. Create, edit, and export professional video content.</p>
       <div class="hero-actions">
         <button class="btn btn-large" id="btn-home-new-project" type="button">
@@ -295,7 +298,7 @@ function buildDom(root: HTMLElement): void {
 <div id="studio-view" class="studio-view" style="display:none">
 <div class="studio">
   <header class="topbar">
-    <div class="brand" id="brand-studio" style="cursor:pointer" title="Back to Home">${LOGO_SVG}<span class="brand-text">DeepIRI <span class="brand-sub">Renderflow</span></span></div>
+    <div class="brand" id="brand-studio" style="cursor:pointer" title="Back to Home">${LOGO_SVG}<span class="brand-text">Renderflow <span class="brand-sub">Studio</span></span></div>
     <div class="toolbar">
       <button class="btn subtle" id="btn-home-nav" type="button">Home</button>
       <button class="btn subtle" id="btn-toggle-theme" type="button">Theme</button>
@@ -342,6 +345,10 @@ function buildDom(root: HTMLElement): void {
     <aside class="panel left ai-hidden" id="ai-panel">
       <div class="panel-title">AI Copilot</div>
       <div class="ai-mode">Manual path parity: every action has a no-AI equivalent.</div>
+      <select id="ai-mode-select" title="Generation mode">
+        <option value="scene">Scene (video)</option>
+        <!-- Only video generation is wired today; audio/voice/dialogue come later. -->
+      </select>
       <textarea id="ai-prompt" rows="4" placeholder="Describe a scene, shot list, or generation request..."></textarea>
       <div class="stack">
         <button class="btn" id="btn-health" type="button">Orchestrator Health</button>
@@ -353,6 +360,7 @@ function buildDom(root: HTMLElement): void {
           <button class="btn btn-reject" id="btn-reject-job" type="button" disabled>Reject</button>
         </div>
       </div>
+      <div id="ai-job-status" class="ai-job-status">No job submitted.</div>
       <div id="inspector" class="inspector">No clip selected.</div>
     </aside>
     <main class="center">
@@ -465,6 +473,10 @@ export function bootstrapStudioApp(): void {
   const previewFrame = document.getElementById("preview-frame") as HTMLImageElement;
   const previewVideo = document.getElementById("preview-video") as HTMLVideoElement;
   const previewEmpty = $("#preview-empty");
+  const aiModeSelect = $("#ai-mode-select") as HTMLSelectElement;
+  const jobStatusEl = $("#ai-job-status") as HTMLElement;
+  const acceptBtn = $("#btn-accept-job") as HTMLButtonElement;
+  const rejectBtn = $("#btn-reject-job") as HTMLButtonElement;
 
   // ── Dev mode ──
   const DEV_MODE_KEY = "deepiri_dev_mode";
@@ -660,16 +672,37 @@ export function bootstrapStudioApp(): void {
     renderTimeline(state, timelineGrid, timecodeEl, sliderEl, timelineCbs);
   }
 
+  // Stream an asset straight into the program monitor (single-click preview).
+  // Uses the ready proxy (for AI clips that's the generated mp4 itself); if no
+  // proxy is available yet there's nothing web-playable to show.
+  function previewAssetInMonitor(asset: Asset): void {
+    const meta = asset.meta_jsonb ?? {};
+    const src = meta.proxy_status === "ready" && meta.proxy_path
+      ? String(meta.proxy_path)
+      : null;
+    if (!src) {
+      devLog(`No playable proxy for "${meta.name ?? asset.uri}" (proxy_status=${meta.proxy_status ?? "unavailable"})`);
+      return;
+    }
+    playClipInMonitor(src);
+  }
+
   function renderAssets(): void {
     renderAssetList(state.assets, assetList, {
-      onAssetClick: (asset) => {
-        if (state.ui.activeTrackId !== null) {
-          insertClipFromAsset(state, asset, history);
-          renderTimelineFull();
-          renderAssets();
-        }
-      },
+      onAssetPreview: (asset) => previewAssetInMonitor(asset),
     });
+  }
+
+  async function refreshAssets(): Promise<void> {
+    if (!state.activeProjectId) return;
+    try {
+      const assets = await listProjectAssets(state.activeProjectId);
+      state.assets = [];
+      for (const a of assets) registerAsset(state, a);
+      renderAssets();
+    } catch {
+      /* leave existing assets in place on failure */
+    }
   }
 
   // ── Clip drag logic ──
@@ -751,10 +784,16 @@ export function bootstrapStudioApp(): void {
     }
     const { clip, asset } = found;
     const offsetSecs = (state.timeline.playheadTick - clip.inTick) / state.timeline.fps;
+    
+    const proxyPath = asset.meta_jsonb?.proxy_path;
+    if (!proxyPath) {
+      previewFrame.style.display = "none";
+      previewEmpty.style.display = "";
+      return;
+    }
     previewEmpty.style.display = "none";
     try {
-      const path = asset.meta_jsonb?.proxy_path ?? asset.uri;
-      const b64 = await fetchFrame(path, offsetSecs);
+      const b64 = await fetchFrame(proxyPath, offsetSecs);
       previewFrame.src = `data:image/jpeg;base64,${b64}`;
       previewFrame.style.display = "block";
     } catch {
@@ -782,6 +821,15 @@ export function bootstrapStudioApp(): void {
     previewVideo.pause();
     previewVideo.style.display = "none";
     void fetchFrameForPlayhead();
+  }
+
+  function playClipInMonitor(path: string): void {
+    previewVideo.src = getStreamUrl(path);
+    previewVideo.currentTime = 0;
+    previewVideo.play().catch(() => {});
+    previewVideo.style.display = "block";
+    previewFrame.style.display = "none";
+    previewEmpty.style.display = "none";
   }
 
   // ── Transport ──
@@ -876,16 +924,71 @@ export function bootstrapStudioApp(): void {
   async function doListProjects() {
     navigateTo("home");
   }
+  // ── AI job progress (Task 12): poll status, show stages, gate review buttons ──
+  let jobPollTimer: number | null = null;
+  // States the worker won't move on from on its own (review/failed) plus the
+  // post-review user states — polling stops here.
+  const JOB_TERMINAL = new Set(["review", "failed", "committed", "accepted", "rejected"]);
+
+  function setReviewButtons(enabled: boolean): void {
+    acceptBtn.disabled = !enabled;
+    rejectBtn.disabled = !enabled;
+  }
+
+  function renderJobStatus(job: AIJob): void {
+    const stages = (job.stages || []).join(" → ");
+    let line = `Status: ${job.status}`;
+    if (stages) line += `\nStages: ${stages}`;
+    if (job.status === "failed") {
+      const err = job.metadata?.error || job.metadata?.artifact_error;
+      if (err) line += `\nError: ${String(err)}`;
+    }
+    jobStatusEl.textContent = line;
+    // Accept/Reject are only meaningful while the job awaits review.
+    setReviewButtons(job.status === "review");
+  }
+
+  function stopJobPolling(): void {
+    if (jobPollTimer !== null) {
+      clearInterval(jobPollTimer);
+      jobPollTimer = null;
+    }
+  }
+
+  function startJobPolling(jobId: string): void {
+    stopJobPolling();
+    jobPollTimer = window.setInterval(async () => {
+      try {
+        const job = await getAiJob(jobId);
+        renderJobStatus(job);
+        if (JOB_TERMINAL.has(job.status)) {
+          stopJobPolling();
+          devLog(`Job ${jobId} reached ${job.status}`);
+        }
+      } catch (e) {
+        stopJobPolling();
+        devLog(`Poll error: ${String(e)}`);
+      }
+    }, 800);
+  }
+
   async function doSubmitJob() {
     if (!state.activeProjectId || !aiPrompt.value.trim()) return;
+    stopJobPolling();
+    setReviewButtons(false);
+    jobStatusEl.textContent = "Submitting…";
     try {
       const res = await submitAiJob(
         state.activeProjectId,
         aiPrompt.value.trim(),
+        aiModeSelect.value,
       );
-      devLog(`AI job submitted: ${res.job_id}`);
+      devLog(`AI job submitted: ${res.job_id} (mode=${aiModeSelect.value})`);
       state.lastJobId = res.job_id;
+      jobStatusEl.textContent = `Status: ${res.status}`;
+      startJobPolling(res.job_id);
     } catch (e) {
+      jobStatusEl.textContent = `Submit failed: ${String(e)}`;
       devLog(`Submit job error: ${String(e)}`);
     }
   }
@@ -893,9 +996,8 @@ export function bootstrapStudioApp(): void {
     if (!state.lastJobId) return;
     try {
       const job = await getAiJob(state.lastJobId);
-      devLog(
-        `Job ${job.id}: ${job.status} stages=[${(job.stages || []).join(",")}]`,
-      );
+      renderJobStatus(job);
+      devLog(`Job ${job.id}: ${job.status} stages=[${(job.stages || []).join(",")}]`);
     } catch (e) {
       devLog(`Refresh job error: ${String(e)}`);
     }
@@ -903,9 +1005,21 @@ export function bootstrapStudioApp(): void {
   async function doAcceptJob() {
     if (!state.lastJobId) return;
     try {
-      await acceptAiJob(state.lastJobId);
+      const job = await acceptAiJob(state.lastJobId);
+      stopJobPolling();
+      setReviewButtons(false);
+      jobStatusEl.textContent = `Status: ${job.status}`;
       devLog(`Job ${state.lastJobId} accepted`);
+      const outputPath = job.metadata?.output_path;
+      if (outputPath) {
+        playClipInMonitor(outputPath);
+        devLog(`Playing accepted clip in monitor`);
+      }
+      // Surface the new AI asset in the library so the user can click/drag it
+      // onto the timeline later (it plays there now that its proxy is ready).
+      await refreshAssets();
     } catch (e) {
+      jobStatusEl.textContent = `Accept failed: ${String(e)}`;
       devLog(`Accept error: ${String(e)}`);
     }
   }
@@ -913,6 +1027,9 @@ export function bootstrapStudioApp(): void {
     if (!state.lastJobId) return;
     try {
       await rejectAIJob(state.lastJobId);
+      stopJobPolling();
+      setReviewButtons(false);
+      jobStatusEl.textContent = "Status: rejected";
       devLog(`Job ${state.lastJobId} rejected`);
     } catch (e) {
       devLog(`Reject error: ${String(e)}`);

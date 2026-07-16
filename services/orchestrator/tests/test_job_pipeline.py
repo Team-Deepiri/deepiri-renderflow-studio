@@ -227,7 +227,6 @@ def test_accept_creates_video_asset(tmp_path, monkeypatch):
             return None
 
     monkeypatch.setattr("app.api.routers.ai_jobs.store", store)
-    monkeypatch.setattr("app.api.routers.ai_jobs.threading.Thread", _NoThread)
 
     result = accept_ai_job(job.id)
 
@@ -237,7 +236,7 @@ def test_accept_creates_video_asset(tmp_path, monkeypatch):
     assert len(assets) == 1
     assert assets[0]["kind"] == "video"
     assert assets[0]["meta_jsonb"].get("source") == "ai"
-    assert assets[0]["meta_jsonb"].get("proxy_status") == "pending"
+    assert assets[0]["meta_jsonb"].get("proxy_status") == "ready"
 
 
 class _NoThread:

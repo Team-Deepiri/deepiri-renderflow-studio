@@ -173,8 +173,8 @@ def accept_ai_job(job_id: UUID) -> AiJobOut:
             meta={
                 "name": f"AI · {label}",
                 "source": "ai",
-                "proxy_status": "pending",
-                "proxy_path": None,
+                "proxy_status": "ready",
+                "proxy_path": output_path,
                 "width": 1920,
                 "height": 1080,
             },
