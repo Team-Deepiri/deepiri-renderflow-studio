@@ -1,7 +1,6 @@
 import threading
 
 import torch
-import torch.nn as nn
 
 # Local modifications vs upstream (see NOTICE.md): the grid cache is guarded by
 # a lock so concurrent inference calls can't race on first population, and grids
