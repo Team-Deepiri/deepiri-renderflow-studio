@@ -108,17 +108,25 @@ class RIFEModel:
     def _infer_mid(self, t0, t1, timestep: float):
         """One intermediate frame at `timestep` in (0, 1).
 
-        Calls the vendored IFNet directly: forward(cat(img0, img1), timestep,
-        scale_list) returns (flow, mask, merged); the interpolated frame is the
-        finest-scale entry, merged[-1]. scale_list is the standard 8/4/2/1
-        coarse-to-fine pyramid at scale 1.0.
+        Calls the vendored IFNet: forward(cat(img0, img1), timestep, scale_list)
+        returns (flow, mask, merged); the interpolated frame is the finest-scale
+        entry, merged[-1]. scale_list is the standard 8/4/2/1 coarse-to-fine
+        pyramid at scale 1.0.
+
+        On CUDA the net is wrapped with torch.compile (bucketed by input shape,
+        so it compiles once per resolution) for kernel fusion / lower launch
+        overhead. `compiled_call` is a no-op on MPS/CPU — those run eager,
+        unchanged — and falls back to eager if compilation fails.
         """
         import torch
 
+        from app.rfir.models.compile_utils import compiled_call
+
+        net = compiled_call(
+            self._net, cache_key=("rife", tuple(t0.shape)), device=self.device
+        )
         with torch.no_grad():
-            _flow, _mask, merged = self._net(
-                torch.cat((t0, t1), 1), timestep, [8, 4, 2, 1]
-            )
+            _flow, _mask, merged = net(torch.cat((t0, t1), 1), timestep, [8, 4, 2, 1])
         return merged[-1]
 
     # ── public op interface (ours) ────────────────────────────────────────────
