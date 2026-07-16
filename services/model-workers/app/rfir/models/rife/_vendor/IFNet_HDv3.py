@@ -4,8 +4,6 @@ import torch.nn.functional as F
 from .warplayer import warp
 # from arch.refine import *
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 def conv(in_planes, out_planes, kernel_size=3, stride=1, padding=1, dilation=1):
     return nn.Sequential(
         nn.Conv2d(in_planes, out_planes, kernel_size=kernel_size, stride=stride,
@@ -105,9 +103,9 @@ class IFNet(nn.Module):
             else:
                 f0, m0 = block[i](torch.cat((warped_img0[:, :3], warped_img1[:, :3], timestep, mask), 1), flow, scale=scale_list[i])
                 if ensemble:
-            	    f1, m1 = block[i](torch.cat((warped_img1[:, :3], warped_img0[:, :3], 1-timestep, -mask), 1), torch.cat((flow[:, 2:4], flow[:, :2]), 1), scale=scale_list[i])
-            	    f0 = (f0 + torch.cat((f1[:, 2:4], f1[:, :2]), 1)) / 2
-            	    m0 = (m0 + (-m1)) / 2
+                    f1, m1 = block[i](torch.cat((warped_img1[:, :3], warped_img0[:, :3], 1-timestep, -mask), 1), torch.cat((flow[:, 2:4], flow[:, :2]), 1), scale=scale_list[i])
+                    f0 = (f0 + torch.cat((f1[:, 2:4], f1[:, :2]), 1)) / 2
+                    m0 = (m0 + (-m1)) / 2
                 flow = flow + f0
                 mask = mask + m0
             mask_list.append(mask)
