@@ -11,8 +11,19 @@ the loader/registry pattern used for the other models).
 | Path | Owner | Notes |
 |------|-------|-------|
 | `rife_model.py`, `__init__.py` | RenderFlow | Integration glue only (tensor/pad/timestep/PIL). |
-| `_vendor/` | **upstream (MIT)** | IFNet + warp + Model wrapper, fetched by the script below. Empty in VCS until vendored. |
-| weights `flownet.pkl` | upstream | Placed under `$RENDERFLOW_MODELS_DIR/rife-4.6/`, downloaded/cached — never committed. |
+| `_vendor/IFNet_HDv3.py`, `_vendor/warplayer.py` | **upstream (MIT)** | The RIFE 4.6 network + backward warp, inference-only. |
+| weights `flownet.pkl` | upstream | Under `services/model-workers/models/rife-4.6/`, shipped via Git LFS. |
+
+## Local modifications to vendored files
+
+Kept as close to upstream as possible; deviations, all in `_vendor/`:
+
+- **`IFNet_HDv3.py`** — import changed from `from model.warplayer import warp` to the
+  relative `from .warplayer import warp` (flat vendored package).
+- **`warplayer.py`** — `warp()` now builds its sampling grid on the **input tensor's
+  device** (`tenFlow.device`) instead of a fixed module-level CUDA/CPU `device`
+  (fixes a CPU↔MPS device mismatch; lets RIFE run on Apple Silicon GPU), and the
+  grid cache is guarded by a `threading.Lock` (thread-safe first population).
 
 ## How to vendor (one-time, per checkout / CI cache)
 
