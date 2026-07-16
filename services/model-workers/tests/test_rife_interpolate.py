@@ -5,10 +5,15 @@ vendored weights: the real-model path is exercised via a stub model.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from PIL import Image
 
 from app.rfir.ops import rife_interpolate
+
+# In-repo LFS weights; the real-model test below skips if they aren't present.
+_RIFE_WEIGHTS = Path(__file__).resolve().parents[1] / "models" / "rife-4.6" / "flownet.pkl"
 
 
 def _img(color: tuple[int, int, int], size=(64, 48)) -> Image.Image:
@@ -90,3 +95,19 @@ def test_rife_model_load_raises_without_weights(tmp_path):
 
     with pytest.raises((FileNotFoundError, RuntimeError)):
         RIFEModel.load(str(tmp_path), "cpu", "float32")  # empty dir → no weights
+
+
+# ── real vendored net + LFS weights (skipped when weights aren't pulled) ───────
+
+@pytest.mark.skipif(not _RIFE_WEIGHTS.is_file(),
+                    reason="RIFE weights not present (run `git lfs pull`)")
+def test_rife_real_model_loads_and_interpolates():
+    """When the vendored arch + LFS weights are present, the real IFNet loads
+    and produces `factor - 1` intermediates at the input size."""
+    pytest.importorskip("torch")
+    from app.rfir.models.rife import RIFEModel
+
+    model = RIFEModel.load(str(_RIFE_WEIGHTS.parent), "cpu", "float32")
+    mids = model.interpolate(_img((0, 0, 0)), _img((255, 255, 255)), factor=4)
+    assert len(mids) == 3                              # factor-1 intermediates
+    assert all(f.size == _img((0, 0, 0)).size for f in mids)
