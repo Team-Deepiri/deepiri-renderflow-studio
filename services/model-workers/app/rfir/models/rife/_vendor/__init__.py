@@ -1,9 +1,9 @@
-"""Vendored RIFE 4.6 architecture (populated by scripts/vendor_rife.py).
+"""Vendored RIFE 4.6 architecture.
 
-This package is intentionally empty in version control — run the vendoring
-script once to fetch the upstream MIT-licensed model source (IFNet + warp +
-Model wrapper) and its LICENSE into this directory at a pinned commit.
+The upstream MIT model source (IFNet + backward warp), inference-only, committed
+to the repo. See ../NOTICE.md for provenance and the two local modifications.
 
-Until it's populated, `RIFEModel.load()` raises and the rife_interpolate op
-falls back to the blend interpolation (no pipeline regression).
+If this package is missing or the LFS weights aren't pulled, `RIFEModel.load()`
+raises and the rife_interpolate op falls back to blend interpolation (no
+pipeline regression).
 """
