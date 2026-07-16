@@ -12,9 +12,16 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class ModelManifest:
+    """Static description of a registered model.
+
+    `extras` is a free-form, per-model config bag read by that model's loader —
+    keeps model-specific knobs out of the shared fields. Unknown keys are simply 
+    ignored by loaders that don't use them.
+    """
+
     id: str
     role: str
-    repo: str
+    repo: str = ""  # HF repo for auto-download; unused for in-repo weights (e.g. RIFE/LFS)
     quantization: str = "fp16"
     vram_mb: int = 0
     license: str = "unknown"
