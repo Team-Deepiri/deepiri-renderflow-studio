@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 from app.rfir.models.precision import PrecisionConfig, resolve as resolve_precision
@@ -257,17 +258,15 @@ def _load_vae(manifest: ModelManifest, device: str, precision: PrecisionConfig) 
 def _load_rife(manifest: ModelManifest, device: str, precision: PrecisionConfig) -> Any:
     """Load RIFE 4.6 for frame interpolation (§2.5).
 
-    Weights (flownet.pkl) ship in-repo via Git LFS at
-    services/model-workers/models/<id>/
+    Weights (flownet.pkl) ship in-repo via Git LFS under
+    services/model-workers/models/<id>/. $RENDERFLOW_MODELS_DIR overrides that
+    location (consistent with the other loaders); missing/unreadable weights
+    raise so the op falls back to blend interpolation.
     """
     from app.rfir.models.rife import RIFEModel
 
     filename = manifest.extras.get("filename", "flownet.pkl")
-    # loader.py is app/rfir/models/loader.py; the LFS weights live three levels
-    # up at services/model-workers/models/<id>/.
-    models_dir = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "..", "models")
-    )
+    models_dir = os.environ.get("RENDERFLOW_MODELS_DIR")
     weights_dir = os.path.join(models_dir, manifest.id)
     if not os.path.isfile(os.path.join(weights_dir, filename)):
         raise FileNotFoundError(
@@ -275,8 +274,6 @@ def _load_rife(manifest: ModelManifest, device: str, precision: PrecisionConfig)
             "(run `git lfs pull`)"
         )
 
-    # RIFE's warp mixes CPU/MPS tensors on Apple Silicon; run on CPU there.
-    if device == "mps":
-        device = "cpu"
+    # fp16 helps on CUDA; CPU/MPS run fp32 for numerically-stable warping.
     dtype = "float16" if device == "cuda" else "float32"
     return RIFEModel.load(weights_dir, device, dtype)
