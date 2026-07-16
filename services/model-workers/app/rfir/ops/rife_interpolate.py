@@ -1,4 +1,4 @@
-"""Op: rife_interpolate — interpolate frames between two keyframes (§2.5).
+"""Op: rife_interpolate — interpolate frames between two keyframes.
 
 Primary path: RIFE 4.6 optical-flow interpolation on CUDA/MPS (vendored net,
 loaded via the model loader / registry as role "rife_interpolate").
