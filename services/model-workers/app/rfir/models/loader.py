@@ -19,6 +19,11 @@ logger = logging.getLogger(__name__)
 
 _loaded: dict[str, Any] = {}
 
+# Default location for pre-staged / LFS-shipped model weights, overridable via
+# $RENDERFLOW_MODELS_DIR. loader.py lives at app/rfir/models/loader.py, so
+# parents[3] is services/model-workers/ and the weights dir is its `models/`.
+_MODELS_ROOT = Path(__file__).resolve().parents[3] / "models"
+
 
 def detect_device() -> str:
     """Detect best available device: CUDA -> MPS -> CPU.
@@ -266,7 +271,7 @@ def _load_rife(manifest: ModelManifest, device: str, precision: PrecisionConfig)
     from app.rfir.models.rife import RIFEModel
 
     filename = manifest.extras.get("filename", "flownet.pkl")
-    models_dir = os.environ.get("RENDERFLOW_MODELS_DIR")
+    models_dir = os.environ.get("RENDERFLOW_MODELS_DIR") or str(_MODELS_ROOT)
     weights_dir = os.path.join(models_dir, manifest.id)
     if not os.path.isfile(os.path.join(weights_dir, filename)):
         raise FileNotFoundError(
@@ -274,6 +279,8 @@ def _load_rife(manifest: ModelManifest, device: str, precision: PrecisionConfig)
             "(run `git lfs pull`)"
         )
 
-    # fp16 helps on CUDA; CPU/MPS run fp32 for numerically-stable warping.
+    # RIFE's warp mixes CPU/MPS tensors on Apple Silicon; run on CPU there.
+    if device == "mps":
+        device = "cpu"
     dtype = "float16" if device == "cuda" else "float32"
     return RIFEModel.load(weights_dir, device, dtype)
