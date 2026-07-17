@@ -19,10 +19,21 @@ logger = logging.getLogger(__name__)
 
 _loaded: dict[str, Any] = {}
 
-# Default location for pre-staged / LFS-shipped model weights, overridable via
-# $RENDERFLOW_MODELS_DIR. loader.py lives at app/rfir/models/loader.py, so
-# parents[3] is services/model-workers/ and the weights dir is its `models/`.
-_MODELS_ROOT = Path(__file__).resolve().parents[3] / "models"
+def _default_models_root() -> Path | None:
+    """`<model-workers>/models` — the default weights dir, overridable via
+    $RENDERFLOW_MODELS_DIR.
+
+    Resolved by walking up to the package root (nearest ancestor containing
+    `pyproject.toml`). Returns None if no marker is found (no reliable default fallback), 
+    so the caller must rely on $RENDERFLOW_MODELS_DIR instead of a likely-wrong path.
+    """
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "pyproject.toml").is_file():
+            return parent / "models"
+    return None
+
+
+_MODELS_ROOT = _default_models_root()
 
 
 def detect_device() -> str:
@@ -272,6 +283,11 @@ def _load_rife(manifest: ModelManifest, device: str, precision: PrecisionConfig)
 
     filename = manifest.extras.get("filename", "flownet.pkl")
     models_dir = os.environ.get("RENDERFLOW_MODELS_DIR") or _MODELS_ROOT
+    if models_dir is None:
+        raise RuntimeError(
+            "Cannot locate the models directory: no pyproject.toml found above "
+            f"{__file__}. Set $RENDERFLOW_MODELS_DIR to the weights root."
+        )
     weights_dir = os.path.join(models_dir, manifest.id)
     if not os.path.isfile(os.path.join(weights_dir, filename)):
         raise FileNotFoundError(
