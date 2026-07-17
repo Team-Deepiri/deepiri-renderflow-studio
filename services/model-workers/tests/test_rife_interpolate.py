@@ -111,3 +111,85 @@ def test_rife_real_model_loads_and_interpolates():
     mids = model.interpolate(_img((0, 0, 0)), _img((255, 255, 255)), factor=4)
     assert len(mids) == 3                              # factor-1 intermediates
     assert all(f.size == _img((0, 0, 0)).size for f in mids)
+
+
+# ── loader: RIFE weight-path resolution & fail-safe  ─────────────────────
+
+from app.rfir.models import loader as rife_loader          # noqa: E402
+from app.rfir.models.registry import get_manifest          # noqa: E402
+
+
+def _rife_manifest():
+    m = get_manifest("rife-4.6")
+    assert m is not None                                   # registry sanity
+    return m
+
+
+def _stub_rife_load(monkeypatch, captured: dict):
+    """Replace RIFEModel.load with a recorder; returns nothing, mutates captured."""
+    import app.rfir.models.rife as rife_pkg
+
+    class _FakeRIFE:
+        @staticmethod
+        def load(path, device, dtype):
+            captured.update(path=path, device=device, dtype=dtype)
+            return "MODEL"
+
+    # _load_rife does `from app.rfir.models.rife import RIFEModel` at call time,
+    # so patch the attribute on the package module.
+    monkeypatch.setattr(rife_pkg, "RIFEModel", _FakeRIFE)
+
+
+def test_default_models_root_finds_package_marker():
+    """Walk-up resolves to <package-root>/models, next to pyproject.toml."""
+    root = rife_loader._default_models_root()
+    assert root is not None
+    assert root.name == "models"
+    assert (root.parent / "pyproject.toml").is_file()
+
+
+def test_load_rife_raises_when_models_dir_unresolvable(monkeypatch):
+    """No $RENDERFLOW_MODELS_DIR and no package marker → clear RuntimeError
+    (the op catches it and blends) instead of a silently wrong path."""
+    monkeypatch.delenv("RENDERFLOW_MODELS_DIR", raising=False)
+    monkeypatch.setattr(rife_loader, "_MODELS_ROOT", None)
+    with pytest.raises(RuntimeError, match="Cannot locate the models directory"):
+        rife_loader._load_rife(_rife_manifest(), "cpu", None)
+
+
+def test_load_rife_raises_when_weights_missing(monkeypatch, tmp_path):
+    """Resolvable dir but no flownet.pkl → FileNotFoundError that points the
+    operator at `git lfs pull`."""
+    monkeypatch.setenv("RENDERFLOW_MODELS_DIR", str(tmp_path))
+    with pytest.raises(FileNotFoundError, match="git lfs pull"):
+        rife_loader._load_rife(_rife_manifest(), "cpu", None)
+
+
+@pytest.mark.parametrize("source, device, expected_dtype", [
+    ("env", "cuda", "float16"),   # $RENDERFLOW_MODELS_DIR wins; cuda → fp16
+    ("root", "cpu", "float32"),   # no env var → resolve under _MODELS_ROOT; → fp32
+])
+
+def test_load_rife_resolves_weights_dir_and_dtype(
+    monkeypatch, tmp_path, source, device, expected_dtype
+):
+    """Weights resolve to <models-dir>/<id>/, dtype is device-driven, and the
+    env var takes precedence over _MODELS_ROOT."""
+    weights_dir = tmp_path / "rife-4.6"
+    weights_dir.mkdir()
+    (weights_dir / "flownet.pkl").write_bytes(b"stub")
+    if source == "env":
+        monkeypatch.setenv("RENDERFLOW_MODELS_DIR", str(tmp_path))
+        monkeypatch.setattr(rife_loader, "_MODELS_ROOT", Path("/should/not/be/used"))
+    else:
+        monkeypatch.delenv("RENDERFLOW_MODELS_DIR", raising=False)
+        monkeypatch.setattr(rife_loader, "_MODELS_ROOT", tmp_path)
+
+    captured: dict = {}
+    _stub_rife_load(monkeypatch, captured)
+
+    out = rife_loader._load_rife(_rife_manifest(), device, None)
+    assert out == "MODEL"
+    assert captured["path"] == str(weights_dir)
+    assert captured["device"] == device
+    assert captured["dtype"] == expected_dtype
