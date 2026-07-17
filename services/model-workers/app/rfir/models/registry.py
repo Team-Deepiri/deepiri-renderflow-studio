@@ -58,7 +58,7 @@ REGISTRY: dict[str, ModelManifest] = {
     "rife-4.6": ModelManifest(
         id="rife-4.6",
         role="rife_interpolate",
-        repo="",  
+        repo="", #weights are pointed by LFS, no HF repo exists
         quantization="fp16",
         vram_mb=2048,
         license="mit",
