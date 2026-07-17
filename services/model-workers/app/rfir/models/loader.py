@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 from app.rfir.models.precision import PrecisionConfig, resolve as resolve_precision
@@ -17,6 +18,22 @@ from app.rfir.models.registry import ModelManifest, get_manifest
 logger = logging.getLogger(__name__)
 
 _loaded: dict[str, Any] = {}
+
+def _default_models_root() -> Path | None:
+    """`<model-workers>/models` — the default weights dir, overridable via
+    $RENDERFLOW_MODELS_DIR.
+
+    Resolved by walking up to the package root (nearest ancestor containing
+    `pyproject.toml`). Returns None if no marker is found (no reliable default fallback), 
+    so the caller must rely on $RENDERFLOW_MODELS_DIR instead of a likely-wrong path.
+    """
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "pyproject.toml").is_file():
+            return parent / "models"
+    return None
+
+
+_MODELS_ROOT = _default_models_root()
 
 
 def detect_device() -> str:
@@ -81,6 +98,8 @@ def load_model(model_id: str, device: str | None = None) -> Any:
         pipeline = _load_t2v_pipeline(manifest, device, precision)
     elif manifest.role == "vae":
         pipeline = _load_vae(manifest, device, precision)
+    elif manifest.role == "rife_interpolate":
+        pipeline = _load_rife(manifest, device, precision)
     else:
         raise ValueError(f"No loader for role: {manifest.role!r}")
 
@@ -250,3 +269,32 @@ def _load_vae(manifest: ModelManifest, device: str, precision: PrecisionConfig) 
         vae = vae.to(device)
 
     return {"vae": vae, "device": device, "dtype": torch_dtype}
+
+
+def _load_rife(manifest: ModelManifest, device: str, precision: PrecisionConfig) -> Any:
+    """Load RIFE 4.6 for frame interpolation (§2.5).
+
+    Weights (flownet.pkl) ship in-repo via Git LFS under
+    services/model-workers/models/<id>/. $RENDERFLOW_MODELS_DIR overrides that
+    location (consistent with the other loaders); missing/unreadable weights
+    raise so the op falls back to blend interpolation.
+    """
+    from app.rfir.models.rife import RIFEModel
+
+    filename = manifest.extras.get("filename", "flownet.pkl")
+    models_dir = os.environ.get("RENDERFLOW_MODELS_DIR") or _MODELS_ROOT
+    if models_dir is None:
+        raise RuntimeError(
+            "Cannot locate the models directory: no pyproject.toml found above "
+            f"{__file__}. Set $RENDERFLOW_MODELS_DIR to the weights root."
+        )
+    weights_dir = os.path.join(models_dir, manifest.id)
+    if not os.path.isfile(os.path.join(weights_dir, filename)):
+        raise FileNotFoundError(
+            f"RIFE weights missing at {os.path.join(weights_dir, filename)} "
+            "(run `git lfs pull`)"
+        )
+
+    # fp16 helps on CUDA; CPU/MPS run fp32 for numerically-stable warping.
+    dtype = "float16" if device == "cuda" else "float32"
+    return RIFEModel.load(weights_dir, device, dtype)
