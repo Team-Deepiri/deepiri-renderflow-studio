@@ -6,6 +6,9 @@ canonical RFIR sources from services/model-workers into this process.
 When RENDERFLOW_RFIR_ENABLED=true, worker_loop delegates here for the
 in-process path; production GPU work goes to model-workers over Redis.
 
+Guardrail coverage: this path does NOT run the Layer 3 keyframe guard (§7)
+that model-workers applies after t2i generation
+
 Spec reference: rfir-inference-engine-implementation.md §1.11
 """
 from __future__ import annotations
@@ -146,6 +149,13 @@ def compile_and_run_tier_a(
     from app.rfir.executor.engine import run_graph
 
     try:
+        # NOTE: no keyframe_check passed — Layer 3 (§7) does NOT run here, so
+        # frames generated on this path are never scanned. The guard lives in
+        # model-workers' app/guardrails/runtime_guard.py, which this process
+        # can't import (its own app.guardrails is the orchestrator's package,
+        # with no runtime_guard). Only the Redis/model-workers path is guarded.
+        # Harmless while check_keyframe is an inert stub; revisit when a real
+        # classifier is wired.
         ctx = run_graph(
             graph, job_id=job_id, output_dir=output_dir,
             budget=budget, on_node_start=on_node_start,
