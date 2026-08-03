@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 @dataclass
 class NodeMetric:
@@ -39,6 +39,7 @@ class ExecutionContext:
     job_id: str
     device: str = "cpu"
     nsfw_mode: str = "block"
+    keyframe_check: Callable[..., Any] | None = None
     start_time: float = field(default_factory=time.monotonic)
     node_metrics: list[NodeMetric] = field(default_factory=list)
     artifacts: dict[str, str] = field(default_factory=dict)
