@@ -110,15 +110,20 @@ def run_rfir_job(job_id: str, payload: dict, reporter: JobStatusReporter) -> Non
     from app.rfir.executor.engine import run_graph
 
     prompt = payload.get("prompt", "")
-    guardrail_verdict = payload.get("guardrail_verdict", "allow")
+    guardrail_verdict = payload.get("guardrail_verdict")
+    guardrail_flags = payload.get("guardrail_flags") or []
 
     if guardrail_verdict != "allow":
-        logger.warning("job %s: refusing — guardrail_verdict=%r (not 'allow')", job_id, guardrail_verdict)
+        logger.warning("job %s: refusing — guardrail_verdict=%r", job_id, guardrail_verdict)
         reporter.set_status(RfirJobStatus(
             job_id=job_id, state=RfirJobState.FAILED,
             error=f"guardrail_verdict={guardrail_verdict!r}, refusing to run GPU work",
         ))
         return
+
+    # only logged, no action taken
+    if guardrail_flags:
+        logger.warning("job %s: proceeding with guardrail_flags=%s", job_id, guardrail_flags)
 
     budget_cfg = payload.get("budget") or {}
     try:
