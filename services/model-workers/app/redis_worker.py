@@ -112,6 +112,7 @@ def run_rfir_job(job_id: str, payload: dict, reporter: JobStatusReporter) -> Non
     prompt = payload.get("prompt", "")
     guardrail_verdict = payload.get("guardrail_verdict")
     guardrail_flags = payload.get("guardrail_flags") or []
+    nsfw_mode = payload.get("nsfw_mode", "block")
 
     if guardrail_verdict != "allow":
         logger.warning("job %s: refusing — guardrail_verdict=%r", job_id, guardrail_verdict)
@@ -156,6 +157,7 @@ def run_rfir_job(job_id: str, payload: dict, reporter: JobStatusReporter) -> Non
         graph = fuse(graph)
         mp = memory_plan(graph)
         graph.metadata["downgrade_hints"] = mp.downgrade_hints
+        graph.metadata["nsfw_mode"] = nsfw_mode
 
         reporter.set_status(RfirJobStatus(
             job_id=job_id, state=RfirJobState.RUNNING, stage="asset_generation",
