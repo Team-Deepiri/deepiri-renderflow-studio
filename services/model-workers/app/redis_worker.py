@@ -23,6 +23,8 @@ from pathlib import Path
 
 from renderflow_queue import JobStatusReporter, REDIS_KEY_JOBS, RfirJobState, RfirJobStatus
 
+from app.guardrails.plan_client import PlanBlocked, check_plan
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_OUTPUT_ROOT = Path(__file__).resolve().parents[2] / "orchestrator" / "data" / "render_outputs"
@@ -47,12 +49,33 @@ def _plan_shots(prompt: str, max_tier):
 
     try:
         return planner.plan(prompt, guardrail=lambda p: True, max_tier=max_tier)
+    except planner.PlannerBlocked: 
+        raise
     except Exception as e:
         logger.warning("planner unavailable (%s) — falling back to a single Tier-A shot", e)
         return ShotList(prompt=prompt, shots=[
             Shot(index=0, description=prompt, tier=Tier.A, duration_sec=5.0,
                  camera=CameraPath(motion=CameraMotion.ZOOM, speed=1.0)),
         ])
+
+
+def _apply_tier_adjustments(shot_list, adjusted: list[dict]) -> None:
+    """Write the plan gate's tier downgrades back onto the ShotList.
+
+    The gate caps against the project's policy.max_tier, which can be stricter
+    than the budget max_tier the planner already applied via assign_tiers().
+    Per §6 the plan gate is authoritative, so its result wins.
+    """
+    from app.rfir.ir.types import Tier
+
+    for shot, entry in zip(shot_list.shots, adjusted):
+        raw = str(entry.get("tier", "")).upper()
+        if not raw or raw == shot.tier.value:
+            continue
+        try:
+            shot.tier = Tier[raw]
+        except KeyError:
+            logger.warning("plan gate returned unknown tier %r; keeping %s", raw, shot.tier.value)
 
 
 def _warmup() -> None:
@@ -113,6 +136,12 @@ def run_rfir_job(job_id: str, payload: dict, reporter: JobStatusReporter) -> Non
     try:
         shot_list = _plan_shots(prompt, max_tier)
 
+        # Layer 2 (§6) — the planner's shot descriptions become the per-node
+        # generation prompts, so they get their own pass before compile.
+        # Runs before the storyboard status so a blocked plan never surfaces
+        # a shot count to the review UI.
+        _apply_tier_adjustments(shot_list, check_plan(job_id, shot_list))
+
         reporter.set_status(RfirJobStatus(
             job_id=job_id, state=RfirJobState.RUNNING, stage="storyboard",
             metadata={"stage_storyboard": {"shot_count": len(shot_list.shots)}},
@@ -150,6 +179,12 @@ def run_rfir_job(job_id: str, payload: dict, reporter: JobStatusReporter) -> Non
                     job_id, len(metrics.get("nodes", [])), metrics.get("total_gpu_ms", 0) / 1000.0,
                     metrics.get("cost_estimate_usd", 0.0))
 
+    except PlanBlocked as e:
+        logger.warning("job %s: plan guard blocked: %s", job_id, e)
+        reporter.set_status(RfirJobStatus(
+            job_id=job_id, state=RfirJobState.FAILED,
+            error=f"plan rejected by guardrail: {e}",
+        ))
     except CompileError as e:
         logger.warning("job %s: compile failed: %s", job_id, e)
         reporter.set_status(RfirJobStatus(job_id=job_id, state=RfirJobState.FAILED, error=str(e)))
