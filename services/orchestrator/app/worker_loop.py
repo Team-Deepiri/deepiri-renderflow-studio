@@ -74,6 +74,7 @@ def _build_rfir_payload(rec: AiJobRecord, settings: Settings) -> dict[str, objec
         },
         "guardrail_verdict": rec.metadata.get("guardrail_verdict", "allow"),
         "guardrail_flags": rec.metadata.get("guardrail_flags", []),
+        "nsfw_mode": rec.metadata.get("nsfw_mode", "block"),
         "project": {
             "fps_num": 24,
             "fps_den": 1,
