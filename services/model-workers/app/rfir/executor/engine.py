@@ -18,7 +18,6 @@ from app.rfir.budget import BudgetGovernor
 from app.rfir.checkpoint import Checkpoint, checkpoint_uri, save as save_checkpoint, load as load_checkpoint, delete as delete_checkpoint
 from app.rfir.compiler.scheduler import topological_sort
 from app.rfir.executor.context import ExecutionContext, decide_escalation
-from app.rfir.executor.runtime_guard import check_keyframe
 from app.rfir.ir.types import InferenceBudget, RfirGraph, RfirNode
 from app.rfir.models.loader import detect_device, unload_all
 from app.rfir.ltc import LatentTemporalCache
@@ -52,6 +51,7 @@ def run_graph(
     budget: InferenceBudget | None = None,
     checkpoint_dir: str | None = None,
     on_node_start: Callable[[RfirNode], None] | None = None,
+    keyframe_check: Callable[..., Any] | None = None,
 ) -> ExecutionContext:
     """Execute all nodes in dependency order. Returns execution context with metrics.
 
@@ -70,6 +70,7 @@ def run_graph(
     ctx = ExecutionContext(job_id=job_id, device=device)
     ctx.tier_distribution = dict(graph.metadata.get("tier_distribution", {}))
     ctx.nsfw_mode = graph.metadata.get("nsfw_mode", "block")
+    ctx.keyframe_check = keyframe_check
     arena = TensorArena()
     ltc = LatentTemporalCache()
     ctx._ltc = ltc
@@ -187,9 +188,10 @@ def _run_t2i_keyframe(node: RfirNode, arena: TensorArena, ctx: ExecutionContext,
         for i, (prompt, tensor_name) in enumerate(zip(prompts, out_tensors)):
             image = t2i_keyframe.run(prompt, width=width, height=height, steps=steps, seed=seed)
 
-            result = check_keyframe(_encode_png(image), ctx.nsfw_mode, frame_index=i)
-            if not result.passed:
-                raise RuntimeError(f"generation blocked: {node.id}[{i}]: {result.message}")
+            if ctx.keyframe_check is not None:
+                result = ctx.keyframe_check(_encode_png(image), ctx.nsfw_mode, frame_index=i)
+                if not result.passed:
+                    raise RuntimeError(f"generation blocked: {node.id}[{i}]: {result.message}")
 
             arena.put(tensor_name, image)
             img_path = out_path / f"{node.id}_{i}.png"
@@ -200,9 +202,10 @@ def _run_t2i_keyframe(node: RfirNode, arena: TensorArena, ctx: ExecutionContext,
     prompt = node.attrs.get("prompt", "")
     image = t2i_keyframe.run(prompt, width=width, height=height, steps=steps, seed=seed)
 
-    result = check_keyframe(_encode_png(image), ctx.nsfw_mode)
-    if not result.passed:
-        raise RuntimeError(f"generation blocked: {node.id}: {result.message}")
+    if ctx.keyframe_check is not None:
+        result = ctx.keyframe_check(_encode_png(image), ctx.nsfw_mode)
+        if not result.passed:
+            raise RuntimeError(f"generation blocked: {node.id}: {result.message}")
 
     for port_name, tensor_name in node.outputs.items():
         arena.put(tensor_name, image)
