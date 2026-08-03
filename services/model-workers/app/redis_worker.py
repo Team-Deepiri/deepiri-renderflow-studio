@@ -24,6 +24,7 @@ from pathlib import Path
 from renderflow_queue import JobStatusReporter, REDIS_KEY_JOBS, RfirJobState, RfirJobStatus
 
 from app.guardrails.plan_client import PlanBlocked, check_plan
+from app.guardrails.runtime_guard import check_keyframe
 
 logger = logging.getLogger(__name__)
 
@@ -166,8 +167,11 @@ def run_rfir_job(job_id: str, payload: dict, reporter: JobStatusReporter) -> Non
         ))
 
         out_dir = _output_dir(job_id)
+        # Layer 3 (§7) — check_keyframe is injected rather than imported by
+        # the executor; see app/guardrails/runtime_guard.py for why.
         ctx = run_graph(graph, job_id=job_id, output_dir=str(out_dir),
-                         budget=budget, checkpoint_dir=_checkpoint_dir())
+                         budget=budget, checkpoint_dir=_checkpoint_dir(),
+                         keyframe_check=check_keyframe)
 
         metrics = ctx.to_metrics_dict()
         artifacts = {k: v for k, v in ctx.artifacts.items() if k == "output_mp4" or v.endswith(".mp4")}
