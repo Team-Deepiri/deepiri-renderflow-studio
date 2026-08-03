@@ -41,6 +41,14 @@ class ShotEntry:
     metadata: dict = field(default_factory=dict)
 
 
+def _shots_payload(entries: list[ShotEntry]) -> list[dict]:
+    """Serialize entries so callers can read back tier downgrades, not silently dropped."""
+    return [
+        {"description": e.description, "duration_sec": e.duration_sec, "tier": e.tier}
+        for e in entries
+    ]
+
+
 def run_plan_gate(
     shots: list[ShotEntry] | list[dict],
     project_id: UUID,
@@ -77,4 +85,6 @@ def run_plan_gate(
                 score=result.score, details={"shot_index": i, "shot": shot.description[:120]},
             )
 
-    return GuardrailDecision(gate=GATE, verdict="allow")
+    return GuardrailDecision(
+        gate=GATE, verdict="allow", details={"shots": _shots_payload(entries)},
+    )
