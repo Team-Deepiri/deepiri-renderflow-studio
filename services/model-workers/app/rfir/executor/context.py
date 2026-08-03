@@ -38,6 +38,7 @@ def decide_escalation(
 class ExecutionContext:
     job_id: str
     device: str = "cpu"
+    nsfw_mode: str = "block"
     start_time: float = field(default_factory=time.monotonic)
     node_metrics: list[NodeMetric] = field(default_factory=list)
     artifacts: dict[str, str] = field(default_factory=dict)
