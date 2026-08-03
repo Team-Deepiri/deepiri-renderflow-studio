@@ -16,6 +16,19 @@ class AiJobCreate(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class PlanShotIn(BaseModel):
+    """One shot from the worker's ShotList, as sent to the Layer 2 plan gate."""
+
+    description: str
+    duration_sec: float = 5.0
+    tier: str = "B"
+
+
+class PlanCheckRequest(BaseModel):
+    job_id: str
+    shots: list[PlanShotIn] = Field(default_factory=list)
+
+
 class GuardrailSummary(BaseModel):
     verdict: str = "allow"
     warnings: list[str] = Field(default_factory=list)
