@@ -71,17 +71,44 @@ def test_guardrail_refusal_blocks_before_any_gpu_work():
     assert "guardrail_verdict" in reporter.statuses[0].error
 
 
-def test_default_guardrail_verdict_is_allow():
-    """Missing guardrail_verdict should be treated as a bug, not silently allowed —
-    but since the orchestrator always sets it, absence currently defaults to
-    'allow' for backward compatibility with simpler test payloads."""
+def test_missing_guardrail_verdict_refuses():
+    """A payload with no guardrail_verdict must fail closed, not be treated as
+    an implicit allow — the orchestrator always sets a real value now, so
+    absence means something upstream is broken."""
     reporter = FakeReporter()
-    # Use an empty prompt so planning + compiling are fast/deterministic and we
-    # only care about observing that it does NOT short-circuit as blocked.
     run_rfir_job("job-2", {"prompt": "a test prompt", "budget": {"max_gpu_seconds": 0.001, "max_tier": "A"}}, reporter)
 
-    # Should proceed past the guardrail check (first status is PREPARING, not FAILED-for-guardrail).
+    assert len(reporter.statuses) == 1
+    assert reporter.statuses[0].state == RfirJobState.FAILED
+    assert "guardrail_verdict" in reporter.statuses[0].error
+
+
+def test_guardrail_flags_do_not_block(caplog):
+    """PII_REDACTED / ESCALATED are informational (§3: 'proceed with
+    warnings' / 'modify then continue') — only the verdict gates GPU work.
+    The worker still surfaces flags in its own logs for visibility."""
+    reporter = FakeReporter()
+    run_rfir_job(
+        "job-flags",
+        {"prompt": "a test prompt", "guardrail_verdict": "allow",
+         "guardrail_flags": ["PII_REDACTED"],
+         "budget": {"max_gpu_seconds": 0.001, "max_tier": "A"}},
+        reporter,
+    )
+
     assert reporter.statuses[0].state == RfirJobState.PREPARING
+    assert any("PII_REDACTED" in r.message for r in caplog.records)
+
+
+def test_unknown_guardrail_verdict_refuses():
+    reporter = FakeReporter()
+    run_rfir_job(
+        "job-verdict-bogus",
+        {"prompt": "a test prompt", "guardrail_verdict": "maybe"},
+        reporter,
+    )
+
+    assert reporter.statuses[0].state == RfirJobState.FAILED
 
 
 def test_plan_shots_falls_back_when_planner_unavailable():
