@@ -5,11 +5,13 @@ PIIChecker, RateLimitChecker) into RenderFlow-specific guardrail gates.
 """
 from __future__ import annotations
 
+from app.guardrails.plan_guard import run_plan_gate
 from app.guardrails.policy_gate import run_policy_gate
 from app.guardrails.prompt_guard import check_prompt, run_prompt_gate
 
 __all__ = [
     "check_prompt",
+    "run_plan_gate",
     "run_policy_gate",
     "run_prompt_gate",
 ]
