@@ -44,6 +44,16 @@ def _no_real_model_downloads(monkeypatch):
             monkeypatch.setattr(mod, "load_model", _raise)
 
 
+@pytest.fixture(autouse=True)
+def _plan_gate_allows(monkeypatch):
+    """Stub the Layer 2 callback so tests don't need a live orchestrator.
+
+    check_plan is fail-closed by design, so without this every test would
+    stop at the plan gate. Tests that exercise the gate itself override this.
+    """
+    monkeypatch.setattr("app.redis_worker.check_plan", lambda job_id, shot_list: [])
+
+
 class FakeReporter:
     def __init__(self) -> None:
         self.statuses = []
@@ -119,3 +129,118 @@ def test_run_rfir_job_reports_tier_distribution_in_metadata():
     ]
     assert len(layout_statuses) == 1
     assert "tier_distribution" in layout_statuses[0].metadata["stage_layout"]
+
+
+# --- Layer 2 plan guard -----------------------------------------------------
+
+
+def _payload(prompt="a quiet forest path"):
+    return {
+        "prompt": prompt,
+        "guardrail_verdict": "allow",
+        "budget": {"max_gpu_seconds": 5.0, "max_tier": "A"},
+    }
+
+
+def test_plan_guard_block_stops_before_compile(monkeypatch):
+    """A blocked plan must fail the job without compiling or executing."""
+    from app.guardrails.plan_client import PlanBlocked
+
+    def _blocked(job_id, shot_list):
+        raise PlanBlocked("PLAN_UNSAFE: {'shot_index': 0}")
+
+    monkeypatch.setattr("app.redis_worker.check_plan", _blocked)
+
+    built = []
+
+    def _build(*args, **kwargs):
+        built.append(args)
+        raise AssertionError("build() must not run on a blocked plan")
+
+    import app.rfir.compiler.builder as builder
+    monkeypatch.setattr(builder, "build", _build)
+
+    reporter = FakeReporter()
+    run_rfir_job("job-plan-block", _payload(), reporter)
+
+    assert built == []
+    terminal = reporter.statuses[-1]
+    assert terminal.state == RfirJobState.FAILED
+    assert "plan rejected by guardrail" in terminal.error
+    assert "PLAN_UNSAFE" in terminal.error
+
+
+def test_plan_guard_is_fail_closed_when_unreachable(monkeypatch):
+    """A transport error must block, not wave the job through."""
+    import app.guardrails.plan_client as plan_client
+
+    def _boom(url, body, timeout):
+        raise ConnectionRefusedError("connection refused")
+
+    monkeypatch.setattr(plan_client, "_post", _boom)
+    monkeypatch.setattr("app.redis_worker.check_plan", plan_client.check_plan)
+
+    reporter = FakeReporter()
+    run_rfir_job("job-plan-unreachable", _payload(), reporter)
+
+    terminal = reporter.statuses[-1]
+    assert terminal.state == RfirJobState.FAILED
+    assert "fail-closed" in terminal.error
+
+
+def test_plan_guard_block_reported_before_storyboard(monkeypatch):
+    """A blocked plan must not leak a shot count into the review UI."""
+    from app.guardrails.plan_client import PlanBlocked
+
+    def _blocked(job_id, shot_list):
+        raise PlanBlocked("SAFETY_BLOCK")
+
+    monkeypatch.setattr("app.redis_worker.check_plan", _blocked)
+
+    reporter = FakeReporter()
+    run_rfir_job("job-plan-order", _payload(), reporter)
+
+    assert not any(s.stage == "storyboard" for s in reporter.statuses)
+
+
+def test_apply_tier_adjustments_downgrades():
+    from app.redis_worker import _apply_tier_adjustments
+    from app.rfir.ir.types import CameraPath, Shot, ShotList
+
+    shot_list = ShotList(prompt="p", shots=[
+        Shot(index=0, description="one", tier=Tier.D, duration_sec=5.0, camera=CameraPath()),
+        Shot(index=1, description="two", tier=Tier.A, duration_sec=5.0, camera=CameraPath()),
+    ])
+
+    _apply_tier_adjustments(shot_list, [{"tier": "C"}, {"tier": "A"}])
+
+    assert shot_list.shots[0].tier == Tier.C
+    assert shot_list.shots[1].tier == Tier.A
+
+
+def test_apply_tier_adjustments_ignores_unknown_tier():
+    from app.redis_worker import _apply_tier_adjustments
+    from app.rfir.ir.types import CameraPath, Shot, ShotList
+
+    shot_list = ShotList(prompt="p", shots=[
+        Shot(index=0, description="one", tier=Tier.B, duration_sec=5.0, camera=CameraPath()),
+    ])
+
+    _apply_tier_adjustments(shot_list, [{"tier": "Z"}])
+
+    assert shot_list.shots[0].tier == Tier.B
+
+
+def test_apply_tier_adjustments_tolerates_short_response():
+    """zip() truncation: a mismatched response must not raise."""
+    from app.redis_worker import _apply_tier_adjustments
+    from app.rfir.ir.types import CameraPath, Shot, ShotList
+
+    shot_list = ShotList(prompt="p", shots=[
+        Shot(index=0, description="one", tier=Tier.D, duration_sec=5.0, camera=CameraPath()),
+        Shot(index=1, description="two", tier=Tier.D, duration_sec=5.0, camera=CameraPath()),
+    ])
+
+    _apply_tier_adjustments(shot_list, [])
+
+    assert shot_list.shots[0].tier == Tier.D
