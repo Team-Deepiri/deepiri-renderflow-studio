@@ -5,8 +5,8 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException
 
 from app import db_repos
-from app.api.schemas.studio import AiJobCreate, AiJobOut
-from app.guardrails import run_policy_gate, run_prompt_gate
+from app.api.schemas.studio import AiJobCreate, AiJobOut, PlanCheckRequest
+from app.guardrails import run_plan_gate, run_policy_gate, run_prompt_gate
 from app.job_store import JobStatus, store
 from app.runtime_state import get_settings
 from app.worker_loop import cancel_job, enqueue_job, worker_stats
@@ -216,3 +216,24 @@ def get_ai_job(job_id: UUID) -> AiJobOut:
     if not rec:
         raise HTTPException(status_code=404, detail="job not found")
     return AiJobOut.from_record(rec)
+
+@router.post("/internal/guardrails/plan", tags=["internal"])
+def check_plan(req: PlanCheckRequest) -> dict[str, object]:
+    """Layer 2 — plan guard, called by model-workers after plan_shots()."""
+    try:
+        jid = UUID(req.job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid job_id")
+
+    rec = store.get(jid)
+    if not rec:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    decision = run_plan_gate(
+        [s.model_dump() for s in req.shots],
+        rec.project_id,
+        user_id=rec.metadata.get("user_id"),
+        user_role=rec.metadata.get("user_role", "editor"),
+    )
+    _log_decision(req.job_id, decision)
+    return decision.to_dict()
