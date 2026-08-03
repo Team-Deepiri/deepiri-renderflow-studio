@@ -13,12 +13,12 @@ from typing import Any, Callable
 
 import numpy as np
 
-from app.guardrails.runtime_guard import check_keyframe
 from app.rfir.arena import TensorArena
 from app.rfir.budget import BudgetGovernor
 from app.rfir.checkpoint import Checkpoint, checkpoint_uri, save as save_checkpoint, load as load_checkpoint, delete as delete_checkpoint
 from app.rfir.compiler.scheduler import topological_sort
 from app.rfir.executor.context import ExecutionContext, decide_escalation
+from app.rfir.executor.runtime_guard import check_keyframe
 from app.rfir.ir.types import InferenceBudget, RfirGraph, RfirNode
 from app.rfir.models.loader import detect_device, unload_all
 from app.rfir.ltc import LatentTemporalCache
