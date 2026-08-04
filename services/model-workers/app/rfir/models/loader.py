@@ -100,6 +100,8 @@ def load_model(model_id: str, device: str | None = None) -> Any:
         pipeline = _load_vae(manifest, device, precision)
     elif manifest.role == "rife_interpolate":
         pipeline = _load_rife(manifest, device, precision)
+    elif manifest.role == "nsfw_classify":
+        pipeline = _load_nsfw_classifier(manifest, device, precision)
     else:
         raise ValueError(f"No loader for role: {manifest.role!r}")
 
@@ -174,6 +176,32 @@ def _load_depth_model(manifest: ModelManifest, device: str, precision: Precision
 
     processor = AutoImageProcessor.from_pretrained(repo)
     model = AutoModelForDepthEstimation.from_pretrained(repo, torch_dtype=torch_dtype)
+
+    if device in ("cuda", "mps"):
+        model = model.to(device)
+
+    return {"model": model, "processor": processor, "device": device}
+
+
+def _load_nsfw_classifier(manifest: ModelManifest, device: str, precision: PrecisionConfig) -> Any:
+    """Layer 3 keyframe safety classifier (image -> label probabilities).
+
+    Callers read the label from `model.config.id2label` rather than assuming a
+    fixed index, so a different checkpoint can be swapped in via the registry
+    without touching runtime_guard.
+    """
+    from transformers import AutoImageProcessor, AutoModelForImageClassification
+
+    torch_dtype = _get_torch_dtype(precision.torch_dtype)
+    models_dir = os.environ.get("RENDERFLOW_MODELS_DIR")
+
+    repo = manifest.repo
+    if models_dir and os.path.isdir(os.path.join(models_dir, manifest.id)):
+        repo = os.path.join(models_dir, manifest.id)
+
+    processor = AutoImageProcessor.from_pretrained(repo)
+    model = AutoModelForImageClassification.from_pretrained(repo, torch_dtype=torch_dtype)
+    model.eval()
 
     if device in ("cuda", "mps"):
         model = model.to(device)
