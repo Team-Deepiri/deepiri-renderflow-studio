@@ -184,12 +184,6 @@ def _load_depth_model(manifest: ModelManifest, device: str, precision: Precision
 
 
 def _load_nsfw_classifier(manifest: ModelManifest, device: str, precision: PrecisionConfig) -> Any:
-    """Layer 3 keyframe safety classifier (image -> label probabilities).
-
-    Callers read the label from `model.config.id2label` rather than assuming a
-    fixed index, so a different checkpoint can be swapped in via the registry
-    without touching runtime_guard.
-    """
     from transformers import AutoImageProcessor, AutoModelForImageClassification
 
     torch_dtype = _get_torch_dtype(precision.torch_dtype)
