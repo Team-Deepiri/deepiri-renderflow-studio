@@ -6,8 +6,6 @@ canonical RFIR sources from services/model-workers into this process.
 When RENDERFLOW_RFIR_ENABLED=true, worker_loop delegates here for the
 in-process path; production GPU work goes to model-workers over Redis.
 
-Guardrail coverage: this path does NOT run the Layer 3 keyframe guard (§7)
-that model-workers applies after t2i generation
 
 Spec reference: rfir-inference-engine-implementation.md §1.11
 """
@@ -124,6 +122,7 @@ def compile_and_run_tier_a(
     duration_sec: float = 5.0,
     max_gpu_sec: int = 120,
     max_tier: str = "C",
+    nsfw_mode: str = "block",
     on_node_start: Callable[[RfirNode], None] | None = None,
 ) -> dict[str, Any]:
     """Compile a Tier-A shot and execute the graph in-process.
@@ -131,7 +130,8 @@ def compile_and_run_tier_a(
     Returns artifact paths on success: the muxed output.mp4, the keyframe
     PNGs, the serialized graph, and executor metrics. Failures (bad prompt,
     missing ML runtime or model weights, no ffmpeg) come back as
-    {"ok": False, "error": ...} rather than raising.
+    {"ok": False, "error": ...} rather than raising — including a Layer 3
+    block, which surfaces as "generation blocked".
 
     on_node_start is forwarded to the executor for per-stage progress;
     exceptions it raises (e.g. a cancellation signal) propagate to the
@@ -144,21 +144,19 @@ def compile_and_run_tier_a(
     except CompileError as e:
         return {"ok": False, "error": str(e)}
 
+
+    graph.metadata["nsfw_mode"] = nsfw_mode
+
     graph_path = _write_graph_json(graph, output_dir)
 
     from app.rfir.executor.engine import run_graph
+    from app.guardrails.runtime_guard import check_keyframe
 
     try:
-        # NOTE: no keyframe_check passed — Layer 3 (§7) does NOT run here, so
-        # frames generated on this path are never scanned. The guard lives in
-        # model-workers' app/guardrails/runtime_guard.py, which this process
-        # can't import (its own app.guardrails is the orchestrator's package,
-        # with no runtime_guard). Only the Redis/model-workers path is guarded.
-        # Harmless while check_keyframe is an inert stub; revisit when a real
-        # classifier is wired.
         ctx = run_graph(
             graph, job_id=job_id, output_dir=output_dir,
             budget=budget, on_node_start=on_node_start,
+            keyframe_check=check_keyframe,
         )
     except Exception as e:
         logger.warning("RFIR execution failed for job %s: %s", job_id, e)
