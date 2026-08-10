@@ -12,11 +12,14 @@ from app.guardrails.config import policy_for_project
 from app.job_store import AiJobRecord, JobStatus, store
 from renderflow_queue import (
     REDIS_KEY_JOBS,
+    VERDICT_MISSING,
     JobStatusReporter,
     RedisJobQueue,
     RfirJobState,
     RfirJobStatus,
+    resolve_verdict,
     stage_for_op,
+    verdict_allows_generation,
 )
 from app.stage_runner import run_audio_stages, run_scene_stages
 from app.api.utils import get_event_emitter
@@ -59,6 +62,16 @@ def _emit(job_id: str, status: str, stage: str | None = None, project_id: str | 
         pass
 
 
+def _guardrail_verdict(rec: AiJobRecord) -> str:
+    verdict = resolve_verdict(rec.metadata.get("guardrail_verdict"))
+    if verdict == VERDICT_MISSING:
+        logger.warning(
+            "job %s carries no guardrail_verdict — sending %r so the worker refuses it",
+            rec.id, verdict,
+        )
+    return verdict
+
+
 def _nsfw_mode_for(rec: AiJobRecord) -> str:
     """Resolve the project's Layer 3 nsfw_mode (off | restricted | block)."""
     try:
@@ -90,7 +103,7 @@ def _build_rfir_payload(rec: AiJobRecord, settings: Settings) -> dict[str, objec
             "max_gpu_seconds": settings.rfir_max_gpu_sec,
             "max_tier": settings.rfir_max_tier,
         },
-        "guardrail_verdict": rec.metadata.get("guardrail_verdict", "allow"),
+        "guardrail_verdict": _guardrail_verdict(rec),
         "guardrail_flags": rec.metadata.get("guardrail_flags", []),
         "nsfw_mode": _nsfw_mode_for(rec),
         "project": {
@@ -236,6 +249,14 @@ def _process_scene_job_rfir(uid: UUID, rec: AiJobRecord, settings: Settings) -> 
         store.merge_meta(uid, "error", error)
         store.update_status(uid, JobStatus.FAILED, stages=stages + ["failed"])
         _emit(job_id, "failed", project_id=pid)
+
+    # Same refusal rule redis_worker applies before spending GPU time — this
+    # path generates real frames too, so a job no gate cleared must not run
+    # here just because Redis was unavailable.
+    verdict = rec.metadata.get("guardrail_verdict")
+    if not verdict_allows_generation(verdict):
+        _fail(f"guardrail_verdict={verdict!r}, refusing to run generation")
+        return
 
     try:
         from app.media.cfsv_pipeline import compile_and_run_tier_a

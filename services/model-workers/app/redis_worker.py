@@ -21,7 +21,13 @@ import time
 import traceback
 from pathlib import Path
 
-from renderflow_queue import JobStatusReporter, REDIS_KEY_JOBS, RfirJobState, RfirJobStatus
+from renderflow_queue import (
+    JobStatusReporter,
+    REDIS_KEY_JOBS,
+    RfirJobState,
+    RfirJobStatus,
+    verdict_allows_generation,
+)
 
 from app.guardrails.plan_client import PlanBlocked, check_plan
 from app.guardrails.runtime_guard import check_keyframe
@@ -115,7 +121,7 @@ def run_rfir_job(job_id: str, payload: dict, reporter: JobStatusReporter) -> Non
     guardrail_flags = payload.get("guardrail_flags") or []
     nsfw_mode = payload.get("nsfw_mode", "block")
 
-    if guardrail_verdict != "allow":
+    if not verdict_allows_generation(guardrail_verdict):
         logger.warning("job %s: refusing — guardrail_verdict=%r", job_id, guardrail_verdict)
         reporter.set_status(RfirJobStatus(
             job_id=job_id, state=RfirJobState.FAILED,
