@@ -27,6 +27,11 @@ ffmpeg_required = pytest.mark.skipif(
     not shutil.which("ffmpeg"), reason="ffmpeg not found in PATH"
 )
 
+# What POST /v1/jobs stamps on a job that cleared Layers 0-1 (see
+# api/routers/ai_jobs.py). _process_scene_job_rfir refuses to generate without
+# it, so these fixtures have to carry it like a real record does.
+_CLEARED = {"guardrail_verdict": "allow", "guardrail_flags": []}
+
 
 def _settings(tmp_path) -> Settings:
     return Settings(rfir_enabled=True, ai_stages_simulate_ms=0, data_dir=str(tmp_path))
@@ -38,7 +43,7 @@ def test_scene_job_lands_in_review_with_real_mp4(tmp_path, fake_ml_ops):
     from pathlib import Path
 
     store = JobStore()
-    job = store.create(uuid4(), "scene", "a calm lake at sunrise")
+    job = store.create(uuid4(), "scene", "a calm lake at sunrise", metadata=_CLEARED)
 
     with patch("app.worker_loop.store", store):
         _process_job(str(job.id), _settings(tmp_path))
@@ -56,7 +61,7 @@ def test_scene_job_reports_rfir_stages(tmp_path, fake_ml_ops):
     from app.worker_loop import _process_job
 
     store = JobStore()
-    job = store.create(uuid4(), "scene", "a red balloon")
+    job = store.create(uuid4(), "scene", "a red balloon", metadata=_CLEARED)
 
     with patch("app.worker_loop.store", store):
         _process_job(str(job.id), _settings(tmp_path))
@@ -76,7 +81,7 @@ def test_scene_job_failure_sets_failed_with_error(tmp_path, monkeypatch):
     monkeypatch.setattr(t2i_keyframe, "run", broken)
 
     store = JobStore()
-    job = store.create(uuid4(), "scene", "anything")
+    job = store.create(uuid4(), "scene", "anything", metadata=_CLEARED)
 
     with patch("app.worker_loop.store", store):
         _process_job(str(job.id), _settings(tmp_path))
@@ -92,7 +97,7 @@ def test_scene_job_cancelled_mid_run(tmp_path, monkeypatch):
     from app.worker_loop import _cancelled_jobs, _process_job
 
     store = JobStore()
-    job = store.create(uuid4(), "scene", "cancel me mid-flight")
+    job = store.create(uuid4(), "scene", "cancel me mid-flight", metadata=_CLEARED)
 
     def t2i_then_cancel(prompt, *, width=512, height=288, **kw):
         _cancelled_jobs.add(str(job.id))
