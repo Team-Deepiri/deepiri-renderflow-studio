@@ -274,6 +274,7 @@ def _process_scene_job_rfir(uid: UUID, rec: AiJobRecord, settings: Settings) -> 
             job_id=job_id,
             max_gpu_sec=settings.rfir_max_gpu_sec,
             max_tier=settings.rfir_max_tier,
+            nsfw_mode=_nsfw_mode_for(rec),
             on_node_start=_on_node_start,
         )
     except _JobCancelled:
