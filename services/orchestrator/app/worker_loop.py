@@ -8,6 +8,7 @@ from queue import Empty, Queue
 from uuid import UUID
 
 from app.config import Settings
+from app.guardrails.config import policy_for_project
 from app.job_store import AiJobRecord, JobStatus, store
 from renderflow_queue import (
     REDIS_KEY_JOBS,
@@ -58,6 +59,23 @@ def _emit(job_id: str, status: str, stage: str | None = None, project_id: str | 
         pass
 
 
+def _nsfw_mode_for(rec: AiJobRecord) -> str:
+    """Resolve the project's Layer 3 nsfw_mode (off | restricted | block)."""
+    try:
+        policy = policy_for_project(
+            rec.project_id,
+            user_id=rec.metadata.get("user_id"),
+            user_role=rec.metadata.get("user_role", "editor"),
+        )
+    except Exception as e:
+        logger.warning(
+            "could not resolve nsfw_mode for project %s (%s) — falling back to 'block'",
+            rec.project_id, e,
+        )
+        return "block"
+    return policy.nsfw_mode
+
+
 def _build_rfir_payload(rec: AiJobRecord, settings: Settings) -> dict[str, object]:
     """Build the Redis job payload consumed by model-workers' redis_worker.py.
 
@@ -74,7 +92,7 @@ def _build_rfir_payload(rec: AiJobRecord, settings: Settings) -> dict[str, objec
         },
         "guardrail_verdict": rec.metadata.get("guardrail_verdict", "allow"),
         "guardrail_flags": rec.metadata.get("guardrail_flags", []),
-        "nsfw_mode": rec.metadata.get("nsfw_mode", "block"),
+        "nsfw_mode": _nsfw_mode_for(rec),
         "project": {
             "fps_num": 24,
             "fps_den": 1,
