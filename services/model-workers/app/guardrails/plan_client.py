@@ -64,13 +64,25 @@ def check_plan(job_id: str, shot_list) -> list[dict[str, Any]]:
         ],
     }
 
+    timeout = _timeout()
     try:
-        resp = _post(f"{_base_url()}{_PATH}", body, _timeout())
+        resp = _post(f"{_base_url()}{_PATH}", body, timeout)
     except urllib.error.HTTPError as e:
         detail = e.read().decode(errors="replace")[:200]
         raise PlanBlocked(f"plan gate returned HTTP {e.code} (fail-closed): {detail}") from e
+    except TimeoutError as e:
+        raise PlanBlocked(f"plan gate timed out after {timeout}s (fail-closed)") from e
+    except urllib.error.URLError as e:
+        raise PlanBlocked(f"plan gate unreachable (fail-closed): {e.reason}") from e
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise PlanBlocked(f"plan gate returned a malformed response (fail-closed): {e}") from e
     except Exception as e:
-        raise PlanBlocked(f"plan gate unreachable (fail-closed): {e}") from e
+        # The traceback dies here otherwise: redis_worker logs PlanBlocked by its
+        # message alone, so an unanticipated failure would leave nothing to debug.
+        logger.exception("job %s: plan gate check failed unexpectedly", job_id)
+        raise PlanBlocked(
+            f"plan gate check failed (fail-closed): {type(e).__name__}: {e}"
+        ) from e
 
     verdict = resp.get("verdict")
     if verdict == "block":
