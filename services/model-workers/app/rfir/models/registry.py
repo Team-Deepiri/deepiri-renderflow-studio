@@ -99,6 +99,14 @@ REGISTRY: dict[str, ModelManifest] = {
         license="apache-2.0",
         extras={"component": "vae"},
     ),
+    "nsfw-image-detection": ModelManifest(
+        id="nsfw-image-detection",
+        role="nsfw_classify",
+        repo="Falconsai/nsfw_image_detection",
+        quantization="fp16",
+        vram_mb=512,
+        license="apache-2.0",
+    ),
 }
 
 

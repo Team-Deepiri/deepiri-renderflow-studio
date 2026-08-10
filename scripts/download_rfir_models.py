@@ -68,4 +68,7 @@ download("facebook/sam2-hiera-tiny", "sam2-hiera-tiny")
 # Sparse T2V + VAE (shared checkpoint)
 download("THUDM/CogVideoX-2b", "cogvideox-2b")
 
+# Keyframe safety classifier (~330 MB)
+download("Falconsai/nsfw_image_detection", "nsfw-image-detection")
+
 print("\nDone.")
