@@ -127,6 +127,17 @@ export function trimClip(
 }
 
 /**
+ * What the clip reads as on the timeline: the asset's display name (AI
+ * clips carry their prompt there), else the file name. Splits on both
+ * separators — asset URIs are absolute paths, backslashed on Windows.
+ */
+function clipLabel(asset: Asset): string {
+  const name = asset.meta_jsonb?.name;
+  if (name) return name;
+  return asset.uri.split(/[\\/]/).pop() || asset.id;
+}
+
+/**
  * Inserts a new clip at the end of the active track.
  * Duration = round(asset.duration_ms / 1000 * fps), fallback 160 ticks.
  * No-op if no active track is set.
@@ -154,9 +165,14 @@ export function insertClipFromAsset(
 
   const newClip: UiClip = {
     id: state.nextClipId++,
+<<<<<<< HEAD
     clipId: newClipId(),
     assetId: asset.id,
     label: asset.uri.split("/").pop() ?? asset.id,
+=======
+    serverId: asset.id,
+    label: clipLabel(asset),
+>>>>>>> 9ba541a (fix(timeline): label clips by asset name, and split Windows paths correctly)
     inTick,
     outTick: inTick + durationTicks,
     color: CLIP_COLORS[state.nextClipId % CLIP_COLORS.length],

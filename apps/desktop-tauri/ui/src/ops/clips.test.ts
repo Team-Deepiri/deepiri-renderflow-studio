@@ -247,6 +247,28 @@ describe("insertClipFromAsset", () => {
     insertClipFromAsset(state, makeAsset(), history);
     expect(state.nextClipId).toBe(before + 1);
   });
+
+  it("labels the clip with the asset's name when it has one", () => {
+    state.ui.activeTrackId = 1;
+    insertClipFromAsset(
+      state,
+      makeAsset({ meta_jsonb: { name: "AI · a calm lake at sunrise" } }),
+      history,
+    );
+    const clips = state.timeline.tracks[0].clips;
+    expect(clips[clips.length - 1].label).toBe("AI · a calm lake at sunrise");
+  });
+
+  it("falls back to the file name, not the whole Windows path", () => {
+    state.ui.activeTrackId = 1;
+    insertClipFromAsset(
+      state,
+      makeAsset({ uri: "C:\\data\\render_outputs\\job-1\\output.mp4", meta_jsonb: {} }),
+      history,
+    );
+    const clips = state.timeline.tracks[0].clips;
+    expect(clips[clips.length - 1].label).toBe("output.mp4");
+  });
 });
 
 // ── insertAssetIntoVideoTrack ────────────────────────────────────────────────
