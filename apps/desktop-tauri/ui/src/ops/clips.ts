@@ -164,3 +164,35 @@ export function insertClipFromAsset(
   track.clips.push(newClip);
   return state;
 }
+
+/**
+ * Drops an asset onto the first video track — the shared path for imports,
+ * drag-and-drop, and accepted AI clips.
+ *
+ * Clears the starter placeholder clips (the ones with no linked asset) the
+ * first time real media arrives, appends the asset, and grows the timeline
+ * so the new clip is reachable. Returns the inserted clip, or null when
+ * there is no video track to insert into.
+ */
+export function insertAssetIntoVideoTrack(
+  state: StudioState,
+  asset: Asset,
+  history: HistoryStack
+): UiClip | null {
+  const track = state.timeline.tracks.find((t) => t.kind === "Video");
+  if (!track) return null;
+
+  // Keyed on assetId, not serverId: a clip inserted since the last save has no
+  // serverId yet, and dropping those here would discard the user's unsaved work.
+  track.clips = track.clips.filter((c) => c.assetId);
+  state.ui.activeTrackId = track.id;
+  insertClipFromAsset(state, asset, history);
+
+  const inserted = track.clips[track.clips.length - 1] ?? null;
+
+  const maxOut = track.clips.reduce((m, c) => Math.max(m, c.outTick), 0);
+  const tail = maxOut + state.timeline.fps * 2;
+  if (tail > state.timeline.durationTicks) state.timeline.durationTicks = tail;
+
+  return inserted;
+}
