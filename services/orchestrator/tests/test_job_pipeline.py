@@ -221,13 +221,6 @@ def test_accept_creates_video_asset(tmp_path, monkeypatch):
     store.update_status(job.id, JobStatus.REVIEW, stages=["preparing", "storyboard", "review"])
     store.merge_meta(job.id, "output_path", str(output))
 
-    class _NoThread:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def start(self):
-            return None
-
     monkeypatch.setattr("app.api.routers.ai_jobs.store", store)
 
     result = accept_ai_job(job.id)
@@ -239,14 +232,6 @@ def test_accept_creates_video_asset(tmp_path, monkeypatch):
     assert assets[0]["kind"] == "video"
     assert assets[0]["meta_jsonb"].get("source") == "ai"
     assert assets[0]["meta_jsonb"].get("proxy_status") == "ready"
-
-
-class _NoThread:
-    def __init__(self, *args, **kwargs):
-        pass
-
-    def start(self):
-        return None
 
 
 def test_accept_asset_uses_real_path_and_hash(tmp_path, monkeypatch):
@@ -266,7 +251,6 @@ def test_accept_asset_uses_real_path_and_hash(tmp_path, monkeypatch):
     store.merge_meta(job.id, "output_path", str(output))
 
     monkeypatch.setattr("app.api.routers.ai_jobs.store", store)
-    monkeypatch.setattr("app.api.routers.ai_jobs.threading.Thread", _NoThread)
 
     result = accept_ai_job(job.id)
     assert result.status == JobStatus.COMMITTED

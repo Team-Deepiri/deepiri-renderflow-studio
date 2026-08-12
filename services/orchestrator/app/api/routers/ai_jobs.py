@@ -16,7 +16,6 @@ from app.services import studio
 
 from pathlib import Path
 import hashlib
-import threading
 
 router = APIRouter()
 
@@ -172,28 +171,42 @@ def accept_ai_job(job_id: UUID) -> AiJobOut:
         out_file = Path(output_path)
         output_path = str(out_file.resolve())
 
+        fmt = ffmpeg_util.detect_format(output_path)
+        duration_ms = (
+            int(float(fmt["duration_seconds"]) * 1000)
+            if fmt.get("ok") and fmt.get("duration_seconds")
+            else None
+        )
+
         label = rec.prompt[:60] if rec.prompt else "AI Generated"
+        meta: dict[str, object] = {
+            "name": f"AI · {label}",
+            "source": "ai",
+            # The generated MP4 is already small and web-playable, so it is
+            # its own proxy — nothing to transcode.
+            "proxy_status": "ready",
+            "proxy_path": output_path,
+        }
+        if fmt.get("ok"):
+            meta["size_bytes"] = fmt.get("size_bytes", 0)
+            if fmt.get("video"):
+                meta["width"] = fmt["video"].get("width")
+                meta["height"] = fmt["video"].get("height")
+                meta["fps"] = fmt["video"].get("fps")
+                meta["codec"] = fmt["video"].get("codec")
+        else:
+            meta["probe_error"] = fmt.get("error", "ffprobe failed")
+
         arow = memory_store.asset_create(
             rec.project_id, "video", output_path,
             sha256=_sha256_file(out_file),
-            duration_ms=10_000,
-            meta={
-                "name": f"AI · {label}",
-                "source": "ai",
-                "proxy_status": "ready",
-                "proxy_path": output_path,
-                "width": 1920,
-                "height": 1080,
-            },
+            duration_ms=duration_ms,
+            meta=meta,
         )
         db_repos.insert_asset(arow)
         aid = str(arow["id"])
         store.merge_meta(job_id, "asset_id", aid)
         db_repos.insert_ai_job_artifact(str(job_id), aid, "ai_bundle", None)
-
-        def _start_proxy(asset_id: str, path: str) -> None:
-            pass  # placeholder for future proxy transcoding
-        threading.Thread(target=_start_proxy, args=(aid, output_path), daemon=True).start()
 
     store.update_status(job_id, JobStatus.COMMITTED, stages=rec.stages + ["committed"])
     current = store.get(job_id)
