@@ -262,6 +262,19 @@ def insert_track(row: dict[str, Any]) -> None:
         logger.warning("insert_track: %s", e)
 
 
+def delete_project(project_id: UUID) -> None:
+    # Sequences, assets, tracks and clips all cascade from projects(id).
+    if not db.pool_ready():
+        return
+    try:
+        with db.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("delete from projects where id = %s::uuid", (str(project_id),))
+            conn.commit()
+    except Exception as e:
+        logger.warning("delete_project: %s", e)
+
+
 def delete_track(track_id: UUID) -> None:
     if not db.pool_ready():
         return

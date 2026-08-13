@@ -210,6 +210,9 @@ export async function orchestratorGetProject(projectId: string): Promise<Project
 
 export async function orchestratorDeleteProject(projectId: string): Promise<{ status: string }> {
   const res = await fetch(`${BASE}/v1/projects/${projectId}`, { method: "DELETE" });
+  // Without this the caller can't tell a failed delete from a real one, and
+  // the error body isn't always JSON — parsing it first hides the reason.
+  if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 

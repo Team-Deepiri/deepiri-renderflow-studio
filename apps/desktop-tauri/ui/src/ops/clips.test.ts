@@ -10,6 +10,9 @@ import {
   trimClip,
   insertClipFromAsset,
   insertAssetIntoVideoTrack,
+  rippleDeleteClip,
+  duplicateClip,
+  snapTick,
 } from "./clips";
 
 let state: StudioState;
@@ -316,5 +319,125 @@ describe("insertAssetIntoVideoTrack", () => {
     state.timeline.tracks = state.timeline.tracks.filter((t) => t.kind !== "Video");
 
     expect(insertAssetIntoVideoTrack(state, makeAsset(), history)).toBeNull();
+  });
+});
+
+// ── rippleDeleteClip ─────────────────────────────────────────────────────────
+
+describe("rippleDeleteClip", () => {
+  it("removes the clip and closes the gap it left", () => {
+    state.ui.selectedClipId = 101; // V1 Main [0..480], followed by 102 [480..960]
+
+    rippleDeleteClip(state, history);
+
+    const v1 = state.timeline.tracks[0];
+    expect(v1.clips.map((c) => c.id)).toEqual([102]);
+    expect(v1.clips[0]).toMatchObject({ inTick: 0, outTick: 480 });
+  });
+
+  it("leaves clips on other tracks where they were", () => {
+    state.ui.selectedClipId = 101;
+
+    rippleDeleteClip(state, history);
+
+    expect(state.timeline.tracks[1].clips[0]).toMatchObject({ inTick: 240 });
+    expect(state.timeline.tracks[2].clips[0]).toMatchObject({ inTick: 0 });
+  });
+
+  it("only pulls back clips that came after the deleted one", () => {
+    state.ui.selectedClipId = 102; // the last clip on V1
+
+    rippleDeleteClip(state, history);
+
+    expect(state.timeline.tracks[0].clips.map((c) => c.id)).toEqual([101]);
+    expect(state.timeline.tracks[0].clips[0]).toMatchObject({ inTick: 0, outTick: 480 });
+  });
+
+  it("is undoable", () => {
+    state.ui.selectedClipId = 101;
+
+    rippleDeleteClip(state, history);
+
+    expect(history.past).toHaveLength(1);
+  });
+
+  it("does nothing when no clip is selected", () => {
+    state.ui.selectedClipId = null;
+
+    rippleDeleteClip(state, history);
+
+    expect(state.timeline.tracks[0].clips).toHaveLength(2);
+    expect(history.past).toHaveLength(0);
+  });
+});
+
+// ── duplicateClip ────────────────────────────────────────────────────────────
+
+describe("duplicateClip", () => {
+  it("drops a copy straight after the original", () => {
+    state.ui.selectedClipId = 101; // [0..480]
+
+    const copy = duplicateClip(state, history);
+
+    expect(copy).not.toBeNull();
+    expect(copy!.inTick).toBe(480);
+    expect(copy!.outTick).toBe(960);
+    expect(copy!.label).toBe("Clip A");
+  });
+
+  it("selects the copy so the next action lands on it", () => {
+    state.ui.selectedClipId = 101;
+
+    const copy = duplicateClip(state, history);
+
+    expect(state.ui.selectedClipId).toBe(copy!.id);
+  });
+
+  it("gives the copy its own clip row but keeps the same media", () => {
+    state.ui.selectedClipId = 101;
+    const original = getClipById(state, 101)!.clip;
+
+    const copy = duplicateClip(state, history);
+
+    expect(copy!.id).not.toBe(101);
+    // A distinct row on the server...
+    expect(copy!.clipId).not.toBe(original.clipId);
+    // ...but the same asset, or the copy would neither preview nor persist.
+    expect(copy!.assetId).toBe(original.assetId);
+  });
+
+  it("returns null when nothing is selected", () => {
+    state.ui.selectedClipId = null;
+
+    expect(duplicateClip(state, history)).toBeNull();
+  });
+});
+
+// ── snapTick ─────────────────────────────────────────────────────────────────
+
+describe("snapTick", () => {
+  it("pulls a near miss onto the neighbouring clip edge", () => {
+    // V1 Main clip 102 starts at 480; dragging clip 101 to 476 should snap.
+    expect(snapTick(state, 476, 101, 8)).toBe(480);
+  });
+
+  it("leaves a deliberate offset alone", () => {
+    expect(snapTick(state, 440, 101, 8)).toBe(440);
+  });
+
+  it("snaps to the playhead", () => {
+    expect(snapTick(state, 290, 101, 8)).toBe(288);
+  });
+
+  it("snaps to the start of the timeline", () => {
+    expect(snapTick(state, 3, 101, 8)).toBe(0);
+  });
+
+  it("ignores the edges of the clip being dragged", () => {
+    // Clip 101 spans [0..480]; its own 480 edge must not hold it in place.
+    const v1 = state.timeline.tracks[0];
+    v1.clips = [v1.clips[0]];
+
+    expect(snapTick(state, 476, 101, 8)).toBe(476);
   });
 });
