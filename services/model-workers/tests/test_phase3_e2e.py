@@ -79,7 +79,7 @@ def test_full_compile_pipeline():
     print(f"  Peak VRAM: {mp.peak_vram_mb:.0f} MB at step {mp.peak_step}")
     print(f"  Over budget (7.5 GB): {mp.over_budget}")
     print(f"  Downgrade hints: {mp.downgrade_hints}")
-    assert mp.over_budget is True  # Tier C sparse_t2v_window is 10 GB
+    assert mp.over_budget is True  # Tier C sparse_t2v_window is ~8 GB
 
     # Budget governor
     gov = BudgetGovernor(InferenceBudget(max_gpu_seconds=8.0), vram_hints=mp.downgrade_hints)

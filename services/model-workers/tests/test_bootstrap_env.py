@@ -27,7 +27,8 @@ EXPECTED_DIRS = {
     "depth-anything-v2-small":  "depth-anything-v2-small (depth estimation)",
     "qwen2.5-3b-instruct-gguf": "qwen2.5-3b-instruct-gguf (shot planner)",
     "sam2-hiera-tiny":          "sam2-hiera-tiny (segmentation)",
-    "cogvideox-2b":             "cogvideox-2b (sparse T2V + VAE)",
+    "wan2.1-t2v-1.3b":          "wan2.1-t2v-1.3b (primary sparse T2V + VAE)",
+    "cogvideox-2b":             "cogvideox-2b (sparse T2V fallback)",
 }
 
 
@@ -70,5 +71,18 @@ def test_registry_covers_all_expected_dirs():
     assert "depth-anything-v2-small" in registry_ids
     assert "qwen2.5-3b-instruct-gguf" in registry_ids
     assert "sam2-hiera-tiny" in registry_ids
+    assert "wan2.1-t2v-1.3b" in registry_ids
+    assert "wan2.1-t2v-1.3b-vae" in registry_ids
     assert "cogvideox-2b" in registry_ids
     assert "cogvideox-2b-vae" in registry_ids
+
+
+def test_wan_is_default_sparse_t2v_and_vae():
+    from app.rfir.models.registry import default_model_for_role
+    from app.rfir.ops.sparse_t2v_window import DEFAULT_MODEL as T2V_DEFAULT
+    from app.rfir.ops.vae import DEFAULT_MODEL as VAE_DEFAULT
+
+    assert default_model_for_role("sparse_t2v").id == "wan2.1-t2v-1.3b"
+    assert default_model_for_role("vae").id == "wan2.1-t2v-1.3b-vae"
+    assert T2V_DEFAULT == "wan2.1-t2v-1.3b"
+    assert VAE_DEFAULT == "wan2.1-t2v-1.3b-vae"

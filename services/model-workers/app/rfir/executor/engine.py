@@ -25,6 +25,26 @@ from app.rfir.ops import t2i_keyframe, depth_estimate, rife_interpolate, segment
 
 logger = logging.getLogger(__name__)
 
+# Keep standalone VAEs and T2V transformers from being co-resident on GPU.
+_T2V_PIPELINE_IDS = (
+    "wan2.1-t2v-1.3b",
+    "cogvideox-2b",
+)
+_STANDALONE_VAE_IDS = (
+    "wan2.1-t2v-1.3b-vae",
+    "cogvideox-2b-vae",
+)
+_PRE_T2V_UNLOAD_IDS = (
+    "sdxl-turbo-fp16",
+    "flux-schnell-fp16",
+    "qwen2.5-3b-instruct-gguf",
+    "depth-anything-v2-small",
+    "sam2-hiera-tiny",
+    "rife-4.6",
+    "nsfw-image-detection",
+    *_STANDALONE_VAE_IDS,
+)
+
 _OP_HANDLERS: dict[str, Any] = {}
 
 
@@ -376,6 +396,10 @@ def _run_vae_encode(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, o
         logger.warning("vae_encode: input is not a PIL Image, skipping")
         return
 
+    # Standalone VAE must not share the GPU with the T2V transformer.
+    for model_id in _T2V_PIPELINE_IDS:
+        unload_model(model_id)
+
     latent = vae.encode(image)
 
     for tensor_name in node.outputs.values():
@@ -392,6 +416,9 @@ def _run_vae_decode(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, o
     if not isinstance(latent, torch.Tensor):
         logger.warning("vae_decode: input is not a tensor, skipping")
         return
+
+    for model_id in _T2V_PIPELINE_IDS:
+        unload_model(model_id)
 
     image = vae.decode(latent)
 
@@ -435,16 +462,7 @@ def _run_sparse_t2v_window(node: RfirNode, arena: TensorArena, ctx: ExecutionCon
     shot_id = node.id.split("_")[0] if "_" in node.id else node.id
     ltc = getattr(ctx, "_ltc", None)
 
-    for model in (
-        "sdxl-turbo-fp16",
-        "flux-schnell-fp16",
-        "qwen2.5-3b-instruct-gguf",
-        "depth-anything-v2-small",
-        "sam2-hiera-tiny",
-        "rife-4.6",
-        "nsfw-image-detection",
-        "cogvideox-2b-vae"
-    ):
+    for model in _PRE_T2V_UNLOAD_IDS:
         unload_model(model)
 
     frames = sparse_t2v_window.run(

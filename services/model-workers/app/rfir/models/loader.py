@@ -263,59 +263,121 @@ def _load_sam2(manifest: ModelManifest, device: str) -> Any:
     return {"predictor": predictor, "device": device}
 
 
-def _load_t2v_pipeline(manifest: ModelManifest, device: str, precision: PrecisionConfig) -> Any:
-    from diffusers import CogVideoXPipeline
+def _resolve_local_repo(manifest: ModelManifest) -> str:
+    """Prefer $RENDERFLOW_MODELS_DIR/<local_dir> when present."""
+    models_dir = os.environ.get("RENDERFLOW_MODELS_DIR")
+    local_name = manifest.extras.get("local_dir") or manifest.id
+    if models_dir and os.path.isdir(os.path.join(models_dir, local_name)):
+        return os.path.join(models_dir, local_name)
+    return manifest.repo
+
+
+def _cast_mps_float64_buffers(module_or_pipe: Any) -> None:
+    """MPS rejects float64 buffers, so downcast."""
     import torch
 
-    torch_dtype = _get_torch_dtype(precision.torch_dtype)
-    models_dir = os.environ.get("RENDERFLOW_MODELS_DIR")
+    roots: list[Any]
+    if hasattr(module_or_pipe, "components"):
+        roots = [c for c in module_or_pipe.components.values() if c is not None]
+    else:
+        roots = [module_or_pipe]
 
-    repo = manifest.repo
-    if models_dir and os.path.isdir(os.path.join(models_dir, "cogvideox-2b")):
-        repo = os.path.join(models_dir, "cogvideox-2b")
+    for root in roots:
+        if not hasattr(root, "modules"):
+            continue
+        for module in root.modules():
+            for name, buf in list(module._buffers.items()):
+                if buf is not None and buf.dtype == torch.float64:
+                    module._buffers[name] = buf.float()
 
-    pipe = CogVideoXPipeline.from_pretrained(repo, torch_dtype=torch_dtype)
+
+def _enable_t2v_memory_opts(pipe: Any, device: str) -> None:
+    """
+    Sequential CPU offload so transformer and VAE are never co-resident on GPU.
+    Diffusers moves one submodule onto the accelerator at a time. Combined with
+    VAE tiling/slicing this is the main OOM defense on low unified memory.
+    Set RENDERFLOW_RFIR_T2V_NO_OFFLOAD=1 to force a full .to(device).
+    """
+    if hasattr(pipe, "vae") and pipe.vae is not None:
+        if hasattr(pipe.vae, "enable_tiling"):
+            pipe.vae.enable_tiling()
+        if hasattr(pipe.vae, "enable_slicing"):
+            pipe.vae.enable_slicing()
+
+    if device == "cpu":
+        pipe.to("cpu")
+        return
+
+    if os.environ.get("RENDERFLOW_RFIR_T2V_NO_OFFLOAD", "0") == "1":
+        logger.info("T2V offload disabled via RENDERFLOW_RFIR_T2V_NO_OFFLOAD")
+        pipe.to(device)
+        return
+
+    logger.info("Enabling sequential CPU offload for T2V on %s", device)
+    pipe.enable_sequential_cpu_offload(device=device)
+
+
+def _load_t2v_pipeline(manifest: ModelManifest, device: str, precision: PrecisionConfig) -> Any:
+    import torch
+
+    repo = _resolve_local_repo(manifest)
+    pipeline_kind = manifest.extras.get("pipeline", "cogvideox")
+
+    if pipeline_kind == "wan":
+        from diffusers import AutoencoderKLWan, WanPipeline
+
+        vae = AutoencoderKLWan.from_pretrained(repo, subfolder="vae", torch_dtype=torch.float32)
+        pipe_dtype = torch.bfloat16 if device == "cuda" else _get_torch_dtype(precision.torch_dtype)
+        pipe = WanPipeline.from_pretrained(repo, vae=vae, torch_dtype=pipe_dtype)
+    else:
+        from diffusers import CogVideoXPipeline
+
+        torch_dtype = _get_torch_dtype(precision.torch_dtype)
+        pipe = CogVideoXPipeline.from_pretrained(repo, torch_dtype=torch_dtype)
 
     if device == "mps":
-        for comp in pipe.components.values():
-            if comp is None or not hasattr(comp, "modules"):
-                continue
-            for module in comp.modules():
-                for name, buf in list(module._buffers.items()):
-                    if buf is not None and buf.dtype == torch.float64:
-                        module._buffers[name] = buf.float()
-        pipe = pipe.to("mps")
-    elif device == "cuda":
-        if precision.device_map:
-            pass
-        else:
-            pipe = pipe.to("cuda")
-    else:
-        pipe = pipe.to("cpu")
+        _cast_mps_float64_buffers(pipe)
 
-    return {"pipe": pipe, "device": device}
+    _enable_t2v_memory_opts(pipe, device)
+    return {"pipe": pipe, "device": device, "pipeline": pipeline_kind}
 
 
 def _load_vae(manifest: ModelManifest, device: str, precision: PrecisionConfig) -> Any:
-    # CogVideoX's VAE is a 3D video autoencoder (AutoencoderKLCogVideoX), not
-    # the generic 2D AutoencoderKL — the generic class can't instantiate the
-    # 3D conv block types in this checkpoint's config (CogVideoXDownBlock3D).
-    from diffusers import AutoencoderKLCogVideoX
+    """
+    Load a standalone 3D video VAE for graph vae_encode / vae_decode ops.
+    Wan recommends float32 for its VAE; CogVideoX uses the resolved precision.
+    Callers must unload the T2V transformer pipeline first so VAE and
+    transformer are never co-resident (see engine handlers).
+    """
     import torch
 
-    torch_dtype = _get_torch_dtype(precision.torch_dtype)
-    models_dir = os.environ.get("RENDERFLOW_MODELS_DIR")
+    repo = _resolve_local_repo(manifest)
+    pipeline_kind = manifest.extras.get("pipeline", "cogvideox")
 
-    repo = manifest.repo
-    if models_dir and os.path.isdir(os.path.join(models_dir, "cogvideox-2b")):
-        repo = os.path.join(models_dir, "cogvideox-2b")
+    if pipeline_kind == "wan":
+        from diffusers import AutoencoderKLWan
 
-    vae = AutoencoderKLCogVideoX.from_pretrained(repo, subfolder="vae", torch_dtype=torch_dtype)
+        torch_dtype = torch.float32
+        vae = AutoencoderKLWan.from_pretrained(repo, subfolder="vae", torch_dtype=torch_dtype)
+    else:
+        # CogVideoX's VAE is AutoencoderKLCogVideoX (3D), not generic AutoencoderKL.
+        from diffusers import AutoencoderKLCogVideoX
+
+        torch_dtype = _get_torch_dtype(precision.torch_dtype)
+        vae = AutoencoderKLCogVideoX.from_pretrained(repo, subfolder="vae", torch_dtype=torch_dtype)
+
+    if hasattr(vae, "enable_tiling"):
+        vae.enable_tiling()
+    if hasattr(vae, "enable_slicing"):
+        vae.enable_slicing()
+
+    if device == "mps":
+        _cast_mps_float64_buffers(vae)
 
     if device in ("cuda", "mps"):
         vae = vae.to(device)
 
-    return {"vae": vae, "device": device, "dtype": torch_dtype}
+    return {"vae": vae, "device": device, "dtype": torch_dtype, "pipeline": pipeline_kind}
 
 
 def _load_rife(manifest: ModelManifest, device: str, precision: PrecisionConfig) -> Any:

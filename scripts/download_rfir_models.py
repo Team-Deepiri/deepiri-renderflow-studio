@@ -65,7 +65,8 @@ download(
 # Segmentation
 download("facebook/sam2-hiera-tiny", "sam2-hiera-tiny")
 
-# Sparse T2V + VAE (shared checkpoint)
+# Sparse T2V + VAE (shared checkpoints).
+download("Wan-AI/Wan2.1-T2V-1.3B-Diffusers", "wan2.1-t2v-1.3b")
 download("THUDM/CogVideoX-2b", "cogvideox-2b")
 
 # Keyframe safety classifier (~330 MB)

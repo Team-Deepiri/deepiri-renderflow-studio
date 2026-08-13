@@ -1,15 +1,17 @@
 """Op: vae — shared VAE encode (RGB → latent) and decode (latent → RGB).
 
-Uses CogVideoX's AutoencoderKLCogVideoX from diffusers — a 3D video VAE that
-operates on (B, C, T, H, W) tensors, not plain 2D images. A single frame is
-encoded/decoded as a 1-frame "video" (T=1). The VAE is shared across shots
-to avoid redundant weight loads. Works on CUDA, MPS (fp16), and CPU (fp32).
+Uses Wan's AutoencoderKLWan (default) or CogVideoX's AutoencoderKLCogVideoX —
+3D video VAEs that operate on (B, C, T, H, W) tensors. A single frame is
+encoded/decoded as a 1-frame "video" (T=1). Override with
+$RENDERFLOW_RFIR_VAE_MODEL. The executor unloads T2V transformer weights
+before loading the standalone VAE so they are never co-resident on GPU.
 
 Spec reference: rfir-inference-engine-implementation.md §3.2
 """
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -22,7 +24,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "cogvideox-2b-vae"
+DEFAULT_MODEL = "wan2.1-t2v-1.3b-vae"
 
 
 def encode(
@@ -38,7 +40,7 @@ def encode(
     """
     import torch
 
-    mid = model_id or DEFAULT_MODEL
+    mid = model_id or os.environ.get("RENDERFLOW_RFIR_VAE_MODEL", DEFAULT_MODEL)
     bundle = load_model(mid)
     vae = bundle["vae"]
     device = bundle["device"]
@@ -71,7 +73,7 @@ def decode(
     """
     import torch
 
-    mid = model_id or DEFAULT_MODEL
+    mid = model_id or os.environ.get("RENDERFLOW_RFIR_VAE_MODEL", DEFAULT_MODEL)
     bundle = load_model(mid)
     vae = bundle["vae"]
     device = bundle["device"]

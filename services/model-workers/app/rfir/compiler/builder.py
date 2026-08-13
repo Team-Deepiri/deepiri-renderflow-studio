@@ -214,7 +214,7 @@ def _build_tier_c(graph: RfirGraph, prefix: str, shot: Shot) -> None:
                 "overlap": 2,
                 "num_frames": 9,
             },
-            estimated_gpu_ms=3000, vram_mb=10240,
+            estimated_gpu_ms=3000, vram_mb=8192,
         ),
         RfirNode(
             id=f"{prefix}_vae_dec", op="vae_decode",
@@ -270,7 +270,7 @@ def _build_tier_d(graph: RfirGraph, prefix: str, shot: Shot) -> None:
                 "full_frame": True,
                 "duration_sec": capped_duration,
             },
-            estimated_gpu_ms=5000, vram_mb=10240,
+            estimated_gpu_ms=5000, vram_mb=8192,
         ),
         RfirNode(
             id=f"{prefix}_vae_dec", op="vae_decode",

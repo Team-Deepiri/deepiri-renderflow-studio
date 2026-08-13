@@ -82,6 +82,25 @@ REGISTRY: dict[str, ModelManifest] = {
         vram_mb=1536,
         license="apache-2.0",
     ),
+    # Primary sparse T2V design: prefer Wan2.1-1.3B over CogVideoX-2B
+    "wan2.1-t2v-1.3b": ModelManifest(
+        id="wan2.1-t2v-1.3b",
+        role="sparse_t2v",
+        repo="Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
+        quantization="fp16",
+        vram_mb=8192,
+        license="apache-2.0",
+        extras={"pipeline": "wan", "local_dir": "wan2.1-t2v-1.3b"},
+    ),
+    "wan2.1-t2v-1.3b-vae": ModelManifest(
+        id="wan2.1-t2v-1.3b-vae",
+        role="vae",
+        repo="Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
+        quantization="fp32",
+        vram_mb=2048,
+        license="apache-2.0",
+        extras={"component": "vae", "pipeline": "wan", "local_dir": "wan2.1-t2v-1.3b"},
+    ),
     "cogvideox-2b": ModelManifest(
         id="cogvideox-2b",
         role="sparse_t2v",
@@ -89,6 +108,7 @@ REGISTRY: dict[str, ModelManifest] = {
         quantization="fp16",
         vram_mb=10240,
         license="apache-2.0",
+        extras={"pipeline": "cogvideox", "local_dir": "cogvideox-2b"},
     ),
     "cogvideox-2b-vae": ModelManifest(
         id="cogvideox-2b-vae",
@@ -97,7 +117,7 @@ REGISTRY: dict[str, ModelManifest] = {
         quantization="fp16",
         vram_mb=2048,
         license="apache-2.0",
-        extras={"component": "vae"},
+        extras={"component": "vae", "pipeline": "cogvideox", "local_dir": "cogvideox-2b"},
     ),
     "nsfw-image-detection": ModelManifest(
         id="nsfw-image-detection",

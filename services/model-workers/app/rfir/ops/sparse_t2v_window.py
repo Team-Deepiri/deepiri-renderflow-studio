@@ -3,8 +3,9 @@
 Tier C: runs diffusion on the ROI (subject mask) crop only, then composites.
 Tier D: runs full-frame diffusion (no ROI crop).
 
-Uses CogVideoX-2B via diffusers in fp16 (MPS/CUDA) with sliding windows
-conditioned via the Latent Temporal Cache (LTC).
+Uses Wan2.1-1.3B (default) or CogVideoX-2B via diffusers with sequential CPU
+offload so the transformer and VAE are never co-resident on GPU. Override with
+$RENDERFLOW_RFIR_T2V_MODEL.
 
 Design reference: rfir-inference-engine-design.md §4.3, §4.4, §5.5
 Spec reference: rfir-inference-engine-implementation.md §3.3
@@ -12,6 +13,7 @@ Spec reference: rfir-inference-engine-implementation.md §3.3
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -31,7 +33,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "cogvideox-2b"
+DEFAULT_MODEL = "wan2.1-t2v-1.3b"
 DEFAULT_STEPS = 6
 DEFAULT_WINDOW_SIZE = 9
 DEFAULT_OVERLAP = 2
@@ -118,7 +120,7 @@ def run(
             logger.info("tier_d: capping %d frames to %d (%.1fs at %d fps)",
                         num_frames, max_frames, TIER_D_MAX_DURATION_SEC, fps)
             num_frames = max_frames
-    mid = model_id or DEFAULT_MODEL
+    mid = model_id or os.environ.get("RENDERFLOW_RFIR_T2V_MODEL", DEFAULT_MODEL)
 
     try:
         bundle = load_model(mid)

@@ -2,7 +2,7 @@
 
 Checks exit criteria:
   - Tier C graph compiles with segment, VAE, sparse_t2v, composite nodes
-  - Memory planner flags Tier C as over-budget on 8 GB GPU (sparse_t2v_window = 10 GB)
+  - Memory planner flags Tier C as over-budget on 8 GB GPU (sparse_t2v_window = 8 GB)
   - Budget governor downgrades when VRAM hints are set
   - Tier distribution includes C shots
   - ROI crop/paste logic works with dummy images and masks
@@ -84,7 +84,7 @@ def test_tier_c_over_vram_budget():
     graph = build(sl, budget=InferenceBudget(max_tier=Tier.C))
     mp = plan(graph)
     assert mp.over_budget is True
-    assert mp.peak_vram_mb >= 10240
+    assert mp.peak_vram_mb >= 8192
     t2v_nodes = [n.id for n in graph.nodes if n.op == "sparse_t2v_window"]
     assert any(nid in mp.downgrade_hints for nid in t2v_nodes)
 

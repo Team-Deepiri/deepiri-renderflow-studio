@@ -182,4 +182,4 @@ def test_full_compile_with_tier_d():
     assert dist["D"] == 1
 
     assert mp.peak_vram_mb > 0
-    assert mp.over_budget is True  # Tier D sparse_t2v is 10 GB
+    assert mp.over_budget is True  # Tier D sparse_t2v is ~8 GB
