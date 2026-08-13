@@ -21,6 +21,11 @@ scikit-image = ">=0.22"
 sam2 = ">=1.0"
 torchvision = ">=0.19"
 transformers = ">=4.40"
+diffusers = ">=0.32"
+tiktoken = ">=0.7"
+sentencepiece = "^0.2.2"
+protobuf = "^7.35.1"
+accelerate = "^1.14.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"

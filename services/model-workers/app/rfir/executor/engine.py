@@ -19,7 +19,7 @@ from app.rfir.checkpoint import Checkpoint, checkpoint_uri, save as save_checkpo
 from app.rfir.compiler.scheduler import topological_sort
 from app.rfir.executor.context import ExecutionContext, decide_escalation
 from app.rfir.ir.types import InferenceBudget, RfirGraph, RfirNode
-from app.rfir.models.loader import detect_device, unload_all
+from app.rfir.models.loader import detect_device, unload_all, unload_model
 from app.rfir.ltc import LatentTemporalCache
 from app.rfir.ops import t2i_keyframe, depth_estimate, rife_interpolate, segment_subject, vae, sparse_t2v_window
 
@@ -409,10 +409,11 @@ def _run_sparse_t2v_window(node: RfirNode, arena: TensorArena, ctx: ExecutionCon
     import torch
 
     prompt = node.attrs.get("prompt", "")
-    steps = int(node.attrs.get("steps", 10))
+    steps = int(node.attrs.get("steps", 6))
     full_frame = bool(node.attrs.get("full_frame", False))
-    window_size = int(node.attrs.get("window_size", 16))
-    overlap_val = int(node.attrs.get("overlap", 4))
+    window_size = int(node.attrs.get("window_size", 9))
+    overlap_val = int(node.attrs.get("overlap", 2))
+    num_frames = int(node.attrs.get("num_frames", 17))
 
     latent_tensor = node.inputs.get("latent", "")
     latent = arena.get(latent_tensor) if arena.has(latent_tensor) else None
@@ -434,6 +435,18 @@ def _run_sparse_t2v_window(node: RfirNode, arena: TensorArena, ctx: ExecutionCon
     shot_id = node.id.split("_")[0] if "_" in node.id else node.id
     ltc = getattr(ctx, "_ltc", None)
 
+    for model in (
+        "sdxl-turbo-fp16",
+        "flux-schnell-fp16",
+        "qwen2.5-3b-instruct-gguf",
+        "depth-anything-v2-small",
+        "sam2-hiera-tiny",
+        "rife-4.6",
+        "nsfw-image-detection",
+        "cogvideox-2b-vae"
+    ):
+        unload_model(model)
+
     frames = sparse_t2v_window.run(
         prompt=prompt,
         latent=latent if isinstance(latent, torch.Tensor) else None,
@@ -443,6 +456,7 @@ def _run_sparse_t2v_window(node: RfirNode, arena: TensorArena, ctx: ExecutionCon
         steps=steps,
         window_size=window_size,
         overlap=overlap_val,
+        num_frames=num_frames,
         shot_id=shot_id,
         ltc=ltc,
     )

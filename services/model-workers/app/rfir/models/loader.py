@@ -117,8 +117,12 @@ def unload_model(model_id: str) -> None:
     del pipeline
     try:
         import torch
+        import gc
+        gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+        if torch.backends.mps.is_available():
+            torch.mps.empty_cache()
     except ImportError:
         pass
     logger.info("Unloaded %s", model_id)
@@ -230,17 +234,31 @@ def _load_llm(manifest: ModelManifest, device: str) -> Any:
 
 
 def _load_sam2(manifest: ModelManifest, device: str) -> Any:
+    from sam2.build_sam import build_sam2
     from sam2.sam2_image_predictor import SAM2ImagePredictor
 
     models_dir = os.environ.get("RENDERFLOW_MODELS_DIR")
-    repo = manifest.repo
-    if models_dir and os.path.isdir(os.path.join(models_dir, "sam2-hiera-tiny")):
-        repo = os.path.join(models_dir, "sam2-hiera-tiny")
+    local_dir = (
+        os.path.join(models_dir, "sam2-hiera-tiny") if models_dir else None
+    )
+    ckpt = (
+        os.path.join(local_dir, "sam2_hiera_tiny.pt")
+        if local_dir and os.path.isfile(os.path.join(local_dir, "sam2_hiera_tiny.pt"))
+        else None
+    )
 
-    # build_sam2() defaults to device="cuda" internally — must be passed
-    # explicitly or it crashes with "Torch not compiled with CUDA enabled"
-    # on MPS/CPU machines.
-    predictor = SAM2ImagePredictor.from_pretrained(repo, device=device)
+    # from_pretrained() only accepts HuggingFace repo ids. A local folder path
+    # KeyErrors in HF_MODEL_ID_TO_FILENAMES — load via build_sam2 + .pt instead.
+    # build_sam2() defaults to device="cuda"; pass device explicitly for MPS/CPU.
+    if ckpt:
+        model = build_sam2(
+            config_file="configs/sam2/sam2_hiera_t.yaml",
+            ckpt_path=ckpt,
+            device=device,
+        )
+        predictor = SAM2ImagePredictor(model)
+    else:
+        predictor = SAM2ImagePredictor.from_pretrained(manifest.repo, device=device)
 
     return {"predictor": predictor, "device": device}
 
@@ -259,6 +277,13 @@ def _load_t2v_pipeline(manifest: ModelManifest, device: str, precision: Precisio
     pipe = CogVideoXPipeline.from_pretrained(repo, torch_dtype=torch_dtype)
 
     if device == "mps":
+        for comp in pipe.components.values():
+            if comp is None or not hasattr(comp, "modules"):
+                continue
+            for module in comp.modules():
+                for name, buf in list(module._buffers.items()):
+                    if buf is not None and buf.dtype == torch.float64:
+                        module._buffers[name] = buf.float()
         pipe = pipe.to("mps")
     elif device == "cuda":
         if precision.device_map:

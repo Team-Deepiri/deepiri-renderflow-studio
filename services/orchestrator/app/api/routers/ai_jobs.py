@@ -166,17 +166,35 @@ def accept_ai_job(job_id: UUID) -> AiJobOut:
         output_path = str(out_file.resolve())
 
         label = rec.prompt[:60] if rec.prompt else "AI Generated"
+        fmt = ffmpeg_util.detect_format(output_path)
+        if not fmt.get("ok"):
+            raise HTTPException(409, detail=f"Output probe error: {fmt.get('error', 'unknown')}")
+
+        duration_ms = int(fmt.get("duration_seconds", 0) * 1000.0)
+        if duration_ms <= 0:
+            raise HTTPException(409, detail=f"Output missing duration")
+
+        video = fmt.get("video")
+        if not video:
+            raise HTTPException(409, detail=f"Output missing video")
+
+        width, height = video.get("width"), video.get("height")
+        if not width:
+            raise HTTPException(409, detail=f"Output missing width")
+        if not height:
+            raise HTTPException(409, detail=f"Output missing height")
+
         arow = memory_store.asset_create(
             rec.project_id, "video", output_path,
             sha256=_sha256_file(out_file),
-            duration_ms=10_000,
+            duration_ms=duration_ms,
             meta={
                 "name": f"AI · {label}",
                 "source": "ai",
                 "proxy_status": "ready",
                 "proxy_path": output_path,
-                "width": 1920,
-                "height": 1080,
+                "width": width,
+                "height": height,
             },
         )
         db_repos.insert_asset(arow)

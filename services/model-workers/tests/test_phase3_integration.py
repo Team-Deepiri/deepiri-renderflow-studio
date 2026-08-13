@@ -129,8 +129,8 @@ def test_crop_to_roi_basic():
     assert y1 >= 200
     assert cropped.width == x1 - x0
     assert cropped.height == y1 - y0
-    assert cropped.width % 8 == 0
-    assert cropped.height % 8 == 0
+    assert cropped.width % 16 == 0
+    assert cropped.height % 16 == 0
 
 
 def test_crop_to_roi_empty_mask():

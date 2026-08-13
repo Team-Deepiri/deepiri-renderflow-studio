@@ -38,6 +38,9 @@ services:
       REDIS_URL: redis://redis:6379/0
       RENDERFLOW_HTTP_HOST: 0.0.0.0
       RENDERFLOW_GRPC_HOST: 0.0.0.0
+      RENDERFLOW_RFIR_ENABLED: "true"
+    volumes:
+      - ../../services/orchestrator/data/render_outputs:/app/services/orchestrator/data/render_outputs
     depends_on:
       - postgres
       - redis

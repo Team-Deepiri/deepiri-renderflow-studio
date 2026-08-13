@@ -32,9 +32,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "cogvideox-2b"
-DEFAULT_STEPS = 10
-DEFAULT_WINDOW_SIZE = 16
-DEFAULT_OVERLAP = 4
+DEFAULT_STEPS = 6
+DEFAULT_WINDOW_SIZE = 9
+DEFAULT_OVERLAP = 2
+DEFAULT_NUM_FRAMES = 17
 TIER_D_MAX_DURATION_SEC = 3.0
 TIER_D_DEFAULT_FPS = 24
 
@@ -57,13 +58,13 @@ def _crop_to_roi(
     x1 = min(image.width, int(xs.max()) + pad)
     y1 = min(image.height, int(ys.max()) + pad)
 
-    # Ensure dimensions are divisible by 8 for VAE compatibility.
-    x1 = x0 + ((x1 - x0) // 8) * 8
-    y1 = y0 + ((y1 - y0) // 8) * 8
+    # Ensure dimensions are divisible by 16 for CogVideoX & VAE compatibility.
+    x1 = x0 + ((x1 - x0) // 16) * 16
+    y1 = y0 + ((y1 - y0) // 16) * 16
     if x1 <= x0:
-        x1 = x0 + 8
+        x1 = x0 + 16
     if y1 <= y0:
-        y1 = y0 + 8
+        y1 = y0 + 16
 
     return image.crop((x0, y0, x1, y1)), (x0, y0, x1, y1)
 
@@ -95,7 +96,7 @@ def run(
     steps: int = DEFAULT_STEPS,
     window_size: int = DEFAULT_WINDOW_SIZE,
     overlap: int = DEFAULT_OVERLAP,
-    num_frames: int = 24,
+    num_frames: int = DEFAULT_NUM_FRAMES,
     fps: int = TIER_D_DEFAULT_FPS,
     shot_id: str = "",
     ltc: LatentTemporalCache | None = None,
@@ -144,8 +145,8 @@ def run(
         logger.info("sparse_t2v_window: full frame %dx%d, %d steps", gen_width, gen_height, steps)
 
     # Ensure dimensions are divisible by 8.
-    gen_width = (gen_width // 8) * 8 or 8
-    gen_height = (gen_height // 8) * 8 or 8
+    gen_width = (gen_width // 16) * 16 or 16
+    gen_height = (gen_height // 16) * 16 or 16
 
     # LTC: condition on previous window's last latent if available.
     cache_entry = None

@@ -21,3 +21,15 @@ services/orchestrator/app/data/proxies/
 services/orchestrator/data/store.json
 services/orchestrator/data/proxies/
 services/orchestrator/data/render_outputs/
+
+# Local model weights
+services/model-workers/models/**
+!services/model-workers/models/rife-4.6/
+!services/model-workers/models/rife-4.6/**
+
+# Common weight / HF cache patterns
+*.safetensors
+*.gguf
+*.onnx
+*.onnx_data
+**/.cache/huggingface/

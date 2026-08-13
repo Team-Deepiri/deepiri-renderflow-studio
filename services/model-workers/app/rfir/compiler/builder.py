@@ -207,7 +207,13 @@ def _build_tier_c(graph: RfirGraph, prefix: str, shot: Shot) -> None:
         RfirNode(
             id=f"{prefix}_t2v", op="sparse_t2v_window",
             inputs={"latent": latent_in, "mask": mask}, outputs={"latent_out": latent_out},
-            attrs={"prompt": shot.description, "steps": 10, "window_size": 16, "overlap": 4},
+            attrs={
+                "prompt": shot.description,
+                "steps": 6,
+                "window_size": 9,
+                "overlap": 2,
+                "num_frames": 9,
+            },
             estimated_gpu_ms=3000, vram_mb=10240,
         ),
         RfirNode(
@@ -256,7 +262,12 @@ def _build_tier_d(graph: RfirGraph, prefix: str, shot: Shot) -> None:
             inputs={"latent": latent_in, "mask": f"{prefix}_dummy_mask"},
             outputs={"latent_out": latent_out},
             attrs={
-                "prompt": shot.description, "steps": 10, "full_frame": True,
+                "prompt": shot.description,
+                "steps": 6,
+                "window_size": 9,
+                "overlap": 2,
+                "num_frames": 9,
+                "full_frame": True,
                 "duration_sec": capped_duration,
             },
             estimated_gpu_ms=5000, vram_mb=10240,

@@ -227,6 +227,14 @@ def test_accept_creates_video_asset(tmp_path, monkeypatch):
             return None
 
     monkeypatch.setattr("app.api.routers.ai_jobs.store", store)
+    monkeypatch.setattr(
+        "app.api.routers.ai_jobs.ffmpeg_util.detect_format",
+        lambda _path: {
+            "ok": True,
+            "duration_seconds": 1.0,
+            "video": {"width": 320, "height": 240},
+        },
+    )
 
     result = accept_ai_job(job.id)
 
@@ -264,6 +272,14 @@ def test_accept_asset_uses_real_path_and_hash(tmp_path, monkeypatch):
 
     monkeypatch.setattr("app.api.routers.ai_jobs.store", store)
     monkeypatch.setattr("app.api.routers.ai_jobs.threading.Thread", _NoThread)
+    monkeypatch.setattr(
+        "app.api.routers.ai_jobs.ffmpeg_util.detect_format",
+        lambda _path: {
+            "ok": True,
+            "duration_seconds": 1.0,
+            "video": {"width": 320, "height": 240},
+        },
+    )
 
     result = accept_ai_job(job.id)
     assert result.status == JobStatus.COMMITTED
@@ -309,3 +325,67 @@ def test_accept_rejects_when_output_file_missing(monkeypatch, tmp_path):
     assert exc.value.status_code == 409
     assert store.get(job.id).status == JobStatus.REVIEW
     assert "asset_id" not in store.get(job.id).metadata
+
+
+def test_accept_uses_ffprobe_duration_and_dims(tmp_path, monkeypatch):
+    """Accept must ensure asset has probed duration/dimensions, not hardcoded."""
+    from app.api.routers.ai_jobs import accept_ai_job
+    from app.services import studio
+
+    output = tmp_path / "probed.mp4"
+    output.write_bytes(b"fake-mp4")
+
+    store = _store()
+    pid = uuid4()
+    job = store.create(pid, "scene", "probe me")
+    store.update_status(job.id, JobStatus.REVIEW, stages=["review"])
+    store.merge_meta(job.id, "output_path", str(output))
+
+    monkeypatch.setattr("app.api.routers.ai_jobs.store", store)
+    monkeypatch.setattr("app.api.routers.ai_jobs.threading.Thread", _NoThread)
+    monkeypatch.setattr(
+        "app.api.routers.ai_jobs.ffmpeg_util.detect_format",
+        lambda _path: {
+            "ok": True,
+            "duration_seconds": 3.5,
+            "video": {"width": 1280, "height": 720},
+        },
+    )
+
+    accept_ai_job(job.id)
+
+    asset = studio.list_assets(pid)[0]
+    assert asset["duration_ms"] == 3500
+    assert asset["meta_jsonb"]["width"] == 1280
+    assert asset["meta_jsonb"]["height"] == 720
+
+
+def test_accept_rejects_when_ffprobe_unavailable(tmp_path, monkeypatch):
+    """If ffprobe fails, accept must return error 409."""
+    from fastapi import HTTPException
+    from app.api.routers.ai_jobs import accept_ai_job
+    from app.services import studio
+
+    output = tmp_path / "unprobed.mp4"
+    output.write_bytes(b"fake-mp4")
+
+    store = _store()
+    pid = uuid4()
+    job = store.create(pid, "scene", "no probe")
+    store.update_status(job.id, JobStatus.REVIEW, stages=["review"])
+    store.merge_meta(job.id, "output_path", str(output))
+
+    monkeypatch.setattr("app.api.routers.ai_jobs.store", store)
+    monkeypatch.setattr("app.api.routers.ai_jobs.threading.Thread", _NoThread)
+    monkeypatch.setattr(
+        "app.api.routers.ai_jobs.ffmpeg_util.detect_format",
+        lambda _path: {"ok": False, "error": "ffprobe not found on PATH"},
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        accept_ai_job(job.id)
+
+    assert exc.value.status_code == 409
+    assert store.get(job.id).status == JobStatus.REVIEW
+    assert "asset_id" not in store.get(job.id).metadata
+    assert studio.list_assets(pid) == []
