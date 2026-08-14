@@ -282,7 +282,13 @@ def test_missing_budget_max_tier_uses_cloud_probe_default(monkeypatch):
     monkeypatch.setattr(
         cloud_probe,
         "_cached",
-        CloudDefaults(cloud_reachable=False, max_tier="B", cloud_allowed=False),
+        CloudDefaults(
+            cloud_reachable=False,
+            storage_ok=False,
+            cloud_ready=False,
+            max_tier="B",
+            cloud_allowed=False,
+        ),
     )
 
     captured = {}

@@ -474,36 +474,69 @@ def _run_sparse_t2v_window(node: RfirNode, arena: TensorArena, ctx: ExecutionCon
     for model in _PRE_T2V_UNLOAD_IDS:
         unload_model(model)
 
-    result = sparse_t2v_window.run(
-        prompt=prompt,
-        latent=latent if isinstance(latent, torch.Tensor) else None,
-        mask=mask if isinstance(mask, np.ndarray) else None,
-        image=image,
-        full_frame=full_frame,
-        steps=steps,
-        window_size=window_size,
-        overlap=overlap_val,
-        num_frames=num_frames,
-        shot_id=shot_id,
-        ltc=ltc,
-    )
+    # Prefer remote T2V when startup probe found heartbeat + shared storage.
+    latents = None
+    bbox = None
+    try:
+        from app.t2v_remote_client import remote_t2v_available, run_remote_sparse_t2v
 
-    if result is None:
-        logger.warning("sparse_t2v_window: no latents produced for %s", node.id)
-        return
+        if remote_t2v_available():
+            # Gen resolution from image / defaults (ROI sizing still local later).
+            if image is not None:
+                width, height = image.size
+            else:
+                width, height = 512, 288
+            width = max(16, (width // 16) * 16)
+            height = max(16, (height // 16) * 16)
+            latents = run_remote_sparse_t2v(
+                job_id=getattr(ctx, "job_id", "") or "job",
+                op_id=node.id,
+                prompt=prompt,
+                width=width,
+                height=height,
+                num_frames=num_frames,
+                steps=steps,
+                window_size=window_size,
+                overlap=overlap_val,
+                full_frame=full_frame,
+            )
+            logger.info("sparse_t2v_window: remote latents %s for %s", tuple(latents.shape), node.id)
+    except Exception as e:
+        logger.warning("sparse_t2v_window: remote failed (%s) — falling back to local", e)
+        latents = None
+
+    if latents is None:
+        result = sparse_t2v_window.run(
+            prompt=prompt,
+            latent=latent if isinstance(latent, torch.Tensor) else None,
+            mask=mask if isinstance(mask, np.ndarray) else None,
+            image=image,
+            full_frame=full_frame,
+            steps=steps,
+            window_size=window_size,
+            overlap=overlap_val,
+            num_frames=num_frames,
+            shot_id=shot_id,
+            ltc=ltc,
+        )
+        if result is None:
+            logger.warning("sparse_t2v_window: no latents produced for %s", node.id)
+            return
+        latents = result.latents
+        bbox = result.bbox
 
     for tensor_name in node.outputs.values():
-        arena.put(tensor_name, result.latents)
+        arena.put(tensor_name, latents)
 
     # Stash ROI paste metadata for vulkan_composite (decode still returns ROI RGB).
-    if result.bbox is not None and isinstance(mask, np.ndarray) and image is not None:
+    if bbox is not None and isinstance(mask, np.ndarray) and image is not None:
         roi_meta = getattr(ctx, "_roi_meta", None)
         if roi_meta is None:
             roi_meta = {}
             ctx._roi_meta = roi_meta
         for tensor_name in node.outputs.values():
             roi_meta[tensor_name] = {
-                "bbox": result.bbox,
+                "bbox": bbox,
                 "mask": mask,
                 "background": image,
             }

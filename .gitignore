@@ -15,6 +15,10 @@ storage/cache/
 storage/renders/
 storage/imports/
 .env
+*.pem
+*credentials*.json
+*-sa.json
+google-sa.json
 apps/desktop-tauri/src-tauri/gen/
 services/orchestrator/app/data/store.json
 services/orchestrator/app/data/proxies/

@@ -16,22 +16,27 @@ from renderflow_queue import (
     touch_t2v_heartbeat,
 )
 
+from app.artifact_store import get_artifact_store
+
 logger = logging.getLogger(__name__)
 
 
-def _artifact_dir() -> Path:
-    root = os.environ.get("RENDERFLOW_RFIR_T2V_ARTIFACT_DIR", "/tmp/rfir-t2v")
-    path = Path(root)
+def _scratch_dir() -> Path:
+    """Local scratch before put() into the configured artifact store."""
+    explicit = os.environ.get("RENDERFLOW_RFIR_T2V_ARTIFACT_DIR")
+    if explicit:
+        path = Path(explicit)
+    elif (os.environ.get("RENDERFLOW_ARTIFACT_STORE") or "").strip().lower() == "local":
+        root = os.environ.get("RENDERFLOW_ARTIFACT_ROOT") or "/tmp/rfir-t2v"
+        path = Path(root) / ".scratch"
+    else:
+        path = Path("/tmp/rfir-t2v")
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def _uri_for(path: Path) -> str:
-    return path.resolve().as_uri()
-
-
-def handle_request(req: T2VRemoteRequest, artifact_dir: Path) -> T2VRemoteResult:
-    """Create a fake latent tensor and return an ok result."""
+def handle_request(req: T2VRemoteRequest, scratch_dir: Path) -> T2VRemoteResult:
+    """Create a fake latent tensor, put via ArtifactStore, return ok result."""
     import torch
 
     shape = expected_latent_shape(req.width, req.height, req.num_frames)
@@ -40,19 +45,23 @@ def handle_request(req: T2VRemoteRequest, artifact_dir: Path) -> T2VRemoteResult
         shape, req.op_id, req.prompt[:80],
     )
 
-    # Deterministic-ish noise so re-runs are inspectable.
     gen = torch.Generator().manual_seed(req.seed if req.seed is not None else 0)
     latents = torch.randn(shape, generator=gen, dtype=torch.float16)
 
-    out_dir = artifact_dir / req.job_id
+    out_dir = scratch_dir / req.job_id
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{req.op_id}.pt"
     torch.save(latents, out_path)
 
+    key = f"{req.job_id}/{req.op_id}.pt"
+    store = get_artifact_store()
+    latent_uri = store.put(key, out_path)
+    logger.info("STUB put key=%s → %s", key, latent_uri)
+
     return T2VRemoteResult.ok(
         job_id=req.job_id,
         op_id=req.op_id,
-        latent_uri=_uri_for(out_path),
+        latent_uri=latent_uri,
         latent_shape=shape,
         dtype="float16",
     )
@@ -78,17 +87,23 @@ def main() -> None:
     import redis
 
     r = redis.Redis.from_url(args.redis_url, decode_responses=True)
-    artifact_dir = Path(args.artifact_dir)
-    artifact_dir.mkdir(parents=True, exist_ok=True)
+    if args.artifact_dir:
+        os.environ.setdefault("RENDERFLOW_RFIR_T2V_ARTIFACT_DIR", args.artifact_dir)
+    scratch_dir = _scratch_dir()
+
+    store = get_artifact_store()
+    if not store.healthcheck():
+        logger.warning(
+            "artifact store healthcheck failed — stub will still listen, "
+            "but put() may fail until RENDERFLOW_ARTIFACT_* is set"
+        )
 
     logger.info("T2V STUB listening on %s key=%s", args.redis_url, REDIS_KEY_T2V_OPS)
-    logger.info("artifacts → %s", artifact_dir.resolve())
+    logger.info("scratch → %s", scratch_dir.resolve())
     touch_t2v_heartbeat(r, worker_id="stub")
 
     while True:
         try:
-            # Refresh liveness before blocking so local model-workers can
-            # detect this process even while idle waiting for jobs.
             touch_t2v_heartbeat(r, worker_id="stub")
             item = r.blpop(REDIS_KEY_T2V_OPS, timeout=5)
         except redis.exceptions.TimeoutError:
@@ -115,7 +130,7 @@ def main() -> None:
         )
 
         try:
-            result = handle_request(req, artifact_dir)
+            result = handle_request(req, scratch_dir)
             publish_t2v_result(r, result)
             logger.info(
                 "PUBLISHED ok op_id=%s latent_uri=%s shape=%s",
