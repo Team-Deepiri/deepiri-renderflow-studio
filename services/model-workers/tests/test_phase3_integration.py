@@ -23,7 +23,15 @@ from app.rfir.compiler.builder import build
 from app.rfir.compiler.fusion import fuse
 from app.rfir.compiler.memory_plan import plan, DEFAULT_VRAM_LIMIT_MB
 from app.rfir.budget import BudgetGovernor
-from app.rfir.ops.sparse_t2v_window import _crop_to_roi, _paste_roi
+from app.rfir.ops.sparse_t2v_window import (
+    SparseT2VResult,
+    _crop_to_roi,
+    _latent_overlap_frames,
+    _paste_roi,
+    _to_tchw,
+    _from_tchw,
+    _video_frames_to_latent_frames,
+)
 
 
 def _tier_c_shotlist() -> ShotList:
@@ -152,6 +160,44 @@ def test_paste_roi_roundtrip():
     # Center of the ROI region should be red-ish, not blue.
     px = result.getpixel((200, 100))
     assert px[0] > px[2]  # R > B
+
+
+def test_latent_temporal_helpers():
+    """Video-frame counts map to Wan-style compressed latent lengths."""
+    assert _video_frames_to_latent_frames(21, 4) == 6
+    assert _video_frames_to_latent_frames(17, 4) == 5
+    assert _latent_overlap_frames(4, 4) == 1
+    assert _latent_overlap_frames(0, 4) == 0
+
+
+def test_latent_tchw_roundtrip():
+    import torch
+
+    latents = torch.randn(1, 16, 6, 8, 8)
+    tchw = _to_tchw(latents)
+    assert tchw.shape == (6, 16, 8, 8)
+    back = _from_tchw(tchw)
+    assert torch.allclose(latents, back)
+
+
+def test_sparse_t2v_result_is_latents_not_frames():
+    """Option-2 contract: SparseT2VResult carries a latent tensor."""
+    import torch
+
+    result = SparseT2VResult(latents=torch.zeros(1, 16, 2, 4, 4), bbox=(0, 0, 64, 64))
+    assert isinstance(result.latents, torch.Tensor)
+    assert result.latents.dim() == 5
+    assert result.bbox == (0, 0, 64, 64)
+
+
+def test_tier_c_t2v_wires_image_input():
+    sl = _tier_c_shotlist()
+    graph = build(sl, budget=InferenceBudget(max_tier=Tier.C))
+    t2v = next(n for n in graph.nodes if n.op == "sparse_t2v_window")
+    assert "image" in t2v.inputs
+    assert "latent_out" in t2v.outputs
+    decode = next(n for n in graph.nodes if n.op == "vae_decode")
+    assert decode.inputs["latent"] == t2v.outputs["latent_out"]
 
 
 # ---------------------------------------------------------------------------
