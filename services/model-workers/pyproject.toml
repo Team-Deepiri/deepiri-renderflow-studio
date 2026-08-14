@@ -28,6 +28,7 @@ protobuf = "^7.35.1"
 accelerate = "^1.14.0"
 google-api-python-client = "^2.198.0"
 google-auth = "^2.56.3"
+boto3 = "^1.43.72"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"

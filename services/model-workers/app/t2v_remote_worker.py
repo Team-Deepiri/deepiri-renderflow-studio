@@ -3,9 +3,11 @@
 Run on a CUDA host (e.g. Colab) with shared Redis + artifact store:
 
     REDIS_URL=redis://... \\
-    RENDERFLOW_ARTIFACT_STORE=gdrive \\
-    RENDERFLOW_ARTIFACT_ROOT=<folder-id> \\
-    GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json \\
+    RENDERFLOW_ARTIFACT_STORE=r2 \\
+    RENDERFLOW_ARTIFACT_ROOT=<bucket-name> \\
+    RENDERFLOW_R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com \\
+    RENDERFLOW_R2_ACCESS_KEY_ID=<access-key> \\
+    RENDERFLOW_R2_SECRET_ACCESS_KEY=<secret-key> \\
     poetry run python -m app.t2v_remote_worker
 
 Local model-workers enqueue via ``t2v_remote_client`` when cloud probe succeeds.

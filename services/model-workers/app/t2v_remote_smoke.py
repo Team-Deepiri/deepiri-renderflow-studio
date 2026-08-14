@@ -7,9 +7,11 @@ Requires:
 
     cd services/model-workers
     REDIS_URL=redis://127.0.0.1:6380/0 \\
-    RENDERFLOW_ARTIFACT_STORE=gdrive \\
-    RENDERFLOW_ARTIFACT_ROOT=<folder-id> \\
-    GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json \\
+    RENDERFLOW_ARTIFACT_STORE=r2 \\
+    RENDERFLOW_ARTIFACT_ROOT=<bucket-name> \\
+    RENDERFLOW_R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com \\
+    RENDERFLOW_R2_ACCESS_KEY_ID=<access-key> \\
+    RENDERFLOW_R2_SECRET_ACCESS_KEY=<secret-key> \\
     poetry run python -m app.t2v_remote_smoke --timeout 900
 """
 from __future__ import annotations

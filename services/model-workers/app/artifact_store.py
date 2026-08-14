@@ -2,13 +2,17 @@
 
 No folder IDs, paths, or credentials are hardcoded — set via export:
 
-  RENDERFLOW_ARTIFACT_STORE=local|gdrive
-  RENDERFLOW_ARTIFACT_ROOT=<local path | Google Drive folder id>
+  RENDERFLOW_ARTIFACT_STORE=local|gdrive|r2
+  RENDERFLOW_ARTIFACT_ROOT=<local path | Google Drive folder id | R2 bucket>
   GOOGLE_APPLICATION_CREDENTIALS=<path to service-account JSON>  # gdrive
+  RENDERFLOW_R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+  RENDERFLOW_R2_ACCESS_KEY_ID=<R2 API token access key>
+  RENDERFLOW_R2_SECRET_ACCESS_KEY=<R2 API token secret>
 
 URI schemes returned by put():
   local:<relative-key>   e.g. local:job-1/s1_t2v.pt
   gdrive:<file_id>
+  r2:<relative-key>      e.g. r2:job-1/s1_t2v.pt
 """
 from __future__ import annotations
 
@@ -43,6 +47,8 @@ def get_artifact_store() -> ArtifactStore:
         return LocalArtifactStore(root)
     if kind == "gdrive":
         return GDriveArtifactStore(root)
+    if kind in {"r2", "s3"}:
+        return R2ArtifactStore(root)
     return NullArtifactStore(reason=f"RENDERFLOW_ARTIFACT_STORE={kind!r} unset or unsupported")
 
 
@@ -170,6 +176,66 @@ class GDriveArtifactStore:
             return False
 
 
+class R2ArtifactStore:
+    """Cloudflare R2 object store via its S3-compatible API.
+
+    ``root`` is the R2 bucket name. Both the remote T2V worker and the local
+    executor must use the same bucket and R2 credentials.
+    """
+
+    def __init__(self, bucket: str, client: object | None = None) -> None:
+        self.bucket = bucket
+        self._client = client
+
+    def put(self, key: str, src_path: str | Path) -> str:
+        key = _clean_object_key(key)
+        self._service().upload_file(str(src_path), self.bucket, key)
+        return f"r2:{key}"
+
+    def get(self, uri: str, dest_path: str | Path) -> Path:
+        key = _parse_r2_uri(uri)
+        dest = Path(dest_path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        self._service().download_file(self.bucket, key, str(dest))
+        return dest
+
+    def healthcheck(self) -> bool:
+        if not self.bucket:
+            logger.info("artifact store healthcheck: fail (RENDERFLOW_ARTIFACT_ROOT bucket empty)")
+            return False
+        if not _r2_configured():
+            logger.info("artifact store healthcheck: fail (R2 endpoint or credentials missing)")
+            return False
+        try:
+            self._service().head_bucket(Bucket=self.bucket)
+            logger.info("artifact store healthcheck: ok (r2 bucket=%s)", self.bucket)
+            return True
+        except Exception as e:
+            logger.warning("artifact store healthcheck: fail (r2: %s)", e)
+            return False
+
+    def _service(self):
+        if self._client is not None:
+            return self._client
+        try:
+            import boto3
+        except ImportError as e:
+            raise RuntimeError(
+                "r2 store requires boto3 (install the model-workers dependencies). Original: %s" % e
+            ) from e
+        endpoint = os.environ.get("RENDERFLOW_R2_ENDPOINT", "").strip()
+        access_key = os.environ.get("RENDERFLOW_R2_ACCESS_KEY_ID", "").strip()
+        secret_key = os.environ.get("RENDERFLOW_R2_SECRET_ACCESS_KEY", "").strip()
+        self._client = boto3.client(
+            "s3",
+            endpoint_url=endpoint,
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            region_name=os.environ.get("RENDERFLOW_R2_REGION", "auto").strip() or "auto",
+        )
+        return self._client
+
+
 def _parse_local_uri(uri: str) -> str:
     if uri.startswith("local:"):
         return uri[len("local:") :]
@@ -185,6 +251,30 @@ def _parse_gdrive_uri(uri: str) -> str:
     if uri.startswith("gdrive:"):
         return uri[len("gdrive:") :]
     raise ValueError(f"unsupported gdrive artifact URI: {uri!r}")
+
+
+def _parse_r2_uri(uri: str) -> str:
+    if uri.startswith("r2:"):
+        return _clean_object_key(uri[len("r2:") :])
+    raise ValueError(f"unsupported r2 artifact URI: {uri!r}")
+
+
+def _clean_object_key(key: str) -> str:
+    clean = key.lstrip("/")
+    if not clean or clean.startswith("../") or "/../" in clean:
+        raise ValueError(f"invalid artifact object key: {key!r}")
+    return clean
+
+
+def _r2_configured() -> bool:
+    return all(
+        os.environ.get(name, "").strip()
+        for name in (
+            "RENDERFLOW_R2_ENDPOINT",
+            "RENDERFLOW_R2_ACCESS_KEY_ID",
+            "RENDERFLOW_R2_SECRET_ACCESS_KEY",
+        )
+    )
 
 
 def _gdrive_service():
