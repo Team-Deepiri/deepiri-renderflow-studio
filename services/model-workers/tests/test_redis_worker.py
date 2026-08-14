@@ -271,3 +271,47 @@ def test_apply_tier_adjustments_tolerates_short_response():
     _apply_tier_adjustments(shot_list, [])
 
     assert shot_list.shots[0].tier == Tier.D
+
+
+def test_missing_budget_max_tier_uses_cloud_probe_default(monkeypatch):
+    """When payload omits budget.max_tier, use probed cloud defaults (B offline)."""
+    from app.cloud_probe import CloudDefaults, reset_cloud_defaults_cache
+    import app.cloud_probe as cloud_probe
+
+    reset_cloud_defaults_cache()
+    monkeypatch.setattr(
+        cloud_probe,
+        "_cached",
+        CloudDefaults(cloud_reachable=False, max_tier="B", cloud_allowed=False),
+    )
+
+    captured = {}
+
+    def _plan(prompt, max_tier):
+        captured["max_tier"] = max_tier
+        from app.rfir.ir.types import CameraPath, Shot, ShotList
+
+        return ShotList(prompt=prompt, shots=[
+            Shot(index=0, description=prompt, tier=max_tier, duration_sec=1.0, camera=CameraPath()),
+        ])
+
+    def _build(shot_list, budget=None, routing=None, ai_enabled=True):
+        captured["budget_max_tier"] = budget.max_tier
+        captured["cloud_allowed"] = routing.cloud_allowed
+        captured["local_only"] = routing.local_only
+        raise RuntimeError("stop after compile args captured")
+
+    monkeypatch.setattr("app.redis_worker._plan_shots", _plan)
+    monkeypatch.setattr("app.rfir.compiler.builder.build", _build)
+
+    reporter = FakeReporter()
+    run_rfir_job(
+        "job-default-tier",
+        {"prompt": "a calm lake", "guardrail_verdict": "allow", "budget": {"max_gpu_seconds": 5.0}},
+        reporter,
+    )
+
+    assert captured["max_tier"] == Tier.B
+    assert captured["budget_max_tier"] == Tier.B
+    assert captured["cloud_allowed"] is False
+    assert captured["local_only"] is True

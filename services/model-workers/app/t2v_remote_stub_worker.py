@@ -13,6 +13,7 @@ from renderflow_queue import (
     T2VRemoteResult,
     expected_latent_shape,
     publish_t2v_result,
+    touch_t2v_heartbeat,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,9 +83,13 @@ def main() -> None:
 
     logger.info("T2V STUB listening on %s key=%s", args.redis_url, REDIS_KEY_T2V_OPS)
     logger.info("artifacts → %s", artifact_dir.resolve())
+    touch_t2v_heartbeat(r, worker_id="stub")
 
     while True:
         try:
+            # Refresh liveness before blocking so local model-workers can
+            # detect this process even while idle waiting for jobs.
+            touch_t2v_heartbeat(r, worker_id="stub")
             item = r.blpop(REDIS_KEY_T2V_OPS, timeout=5)
         except redis.exceptions.TimeoutError:
             continue

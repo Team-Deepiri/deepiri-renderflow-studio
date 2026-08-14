@@ -17,8 +17,10 @@ from .job_status import (
     stage_for_op,
 )
 from .t2v_remote import (
+    REDIS_KEY_T2V_HEARTBEAT,
     REDIS_KEY_T2V_OPS,
     REDIS_KEY_T2V_RESULT_PREFIX,
+    T2V_HEARTBEAT_TTL_SEC,
     T2V_RESULT_TTL_SEC,
     T2VRemoteRequest,
     T2VRemoteResult,
@@ -26,7 +28,9 @@ from .t2v_remote import (
     enqueue_t2v_request,
     expected_latent_shape,
     publish_t2v_result,
+    t2v_cloud_reachable,
     t2v_result_key,
+    touch_t2v_heartbeat,
     wait_t2v_result,
 )
 
@@ -45,7 +49,9 @@ __all__ = [
     "stage_for_op",
     "REDIS_KEY_T2V_OPS",
     "REDIS_KEY_T2V_RESULT_PREFIX",
+    "REDIS_KEY_T2V_HEARTBEAT",
     "T2V_RESULT_TTL_SEC",
+    "T2V_HEARTBEAT_TTL_SEC",
     "T2VRemoteRequest",
     "T2VRemoteResult",
     "T2VRemoteStatus",
@@ -54,4 +60,6 @@ __all__ = [
     "enqueue_t2v_request",
     "publish_t2v_result",
     "wait_t2v_result",
+    "touch_t2v_heartbeat",
+    "t2v_cloud_reachable",
 ]

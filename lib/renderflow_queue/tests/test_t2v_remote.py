@@ -85,6 +85,30 @@ def test_redis_key_helpers():
     assert t2v_result_key("s1_t2v") == "renderflow:ops:t2v:result:s1_t2v"
 
 
+def test_heartbeat_touch_and_reachable():
+    class FakeRedis:
+        def __init__(self) -> None:
+            self.kv: dict[str, str] = {}
+
+        def set(self, key: str, value: str, ex: int | None = None) -> None:
+            self.kv[key] = value
+
+        def exists(self, key: str) -> int:
+            return 1 if key in self.kv else 0
+
+    from renderflow_queue import (
+        REDIS_KEY_T2V_HEARTBEAT,
+        t2v_cloud_reachable,
+        touch_t2v_heartbeat,
+    )
+
+    r = FakeRedis()
+    assert t2v_cloud_reachable(r) is False
+    touch_t2v_heartbeat(r, worker_id="stub")
+    assert r.kv[REDIS_KEY_T2V_HEARTBEAT] == "stub"
+    assert t2v_cloud_reachable(r) is True
+
+
 def test_expected_latent_shape_wan_defaults():
     # 21 frames, 336x144 → T=(20//4)+1=6, H=18, W=42
     assert expected_latent_shape(336, 144, 21) == [1, 16, 6, 18, 42]

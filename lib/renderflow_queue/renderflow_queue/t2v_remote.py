@@ -7,9 +7,14 @@ from typing import Any
 
 REDIS_KEY_T2V_OPS = "renderflow:ops:t2v"
 REDIS_KEY_T2V_RESULT_PREFIX = "renderflow:ops:t2v:result:"
+REDIS_KEY_T2V_HEARTBEAT = "renderflow:ops:t2v:heartbeat"
 
 # Default TTL for result keys (seconds). Local client should finish well before.
 T2V_RESULT_TTL_SEC = 60 * 60  # 1 hour
+
+# Cloud worker liveness: refreshed while the remote T2V process is running.
+# Local model-workers treat a missing/expired key as "cloud not connected".
+T2V_HEARTBEAT_TTL_SEC = 30
 
 # Wan2.1 latent geometry (matches Diffusers WanPipeline defaults).
 WAN_LATENT_CHANNELS = 16
@@ -20,6 +25,24 @@ WAN_TEMPORAL_SCALE = 4
 def t2v_result_key(op_id: str) -> str:
     """Redis key where the cloud worker publishes a ``T2VRemoteResult``."""
     return f"{REDIS_KEY_T2V_RESULT_PREFIX}{op_id}"
+
+
+def touch_t2v_heartbeat(
+    redis_client: Any,
+    *,
+    worker_id: str = "t2v",
+    ttl_sec: int = T2V_HEARTBEAT_TTL_SEC,
+) -> None:
+    """Refresh the remote T2V worker liveness key (call periodically from cloud)."""
+    redis_client.set(REDIS_KEY_T2V_HEARTBEAT, worker_id, ex=ttl_sec)
+
+
+def t2v_cloud_reachable(redis_client: Any) -> bool:
+    """True when a remote T2V worker has refreshed its heartbeat recently."""
+    try:
+        return bool(redis_client.exists(REDIS_KEY_T2V_HEARTBEAT))
+    except Exception:
+        return False
 
 
 def expected_latent_shape(

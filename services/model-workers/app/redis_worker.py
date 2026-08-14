@@ -29,6 +29,7 @@ from renderflow_queue import (
     verdict_allows_generation,
 )
 
+from app.cloud_probe import get_cloud_defaults, probe_cloud_defaults
 from app.guardrails.plan_client import PlanBlocked, check_plan
 from app.guardrails.runtime_guard import check_keyframe
 
@@ -110,7 +111,7 @@ def _warmup() -> None:
 
 def run_rfir_job(job_id: str, payload: dict, reporter: JobStatusReporter) -> None:
     """Run the full RFIR pipeline for one job: plan -> compile -> execute."""
-    from app.rfir.ir.types import InferenceBudget, Tier
+    from app.rfir.ir.types import InferenceBudget, RoutingPolicy, Tier
     from app.rfir.compiler.builder import build, CompileError
     from app.rfir.compiler.fusion import fuse
     from app.rfir.compiler.memory_plan import plan as memory_plan
@@ -133,18 +134,35 @@ def run_rfir_job(job_id: str, payload: dict, reporter: JobStatusReporter) -> Non
     if guardrail_flags:
         logger.warning("job %s: proceeding with guardrail_flags=%s", job_id, guardrail_flags)
 
+    defaults = get_cloud_defaults()
     budget_cfg = payload.get("budget") or {}
+    policy_cfg = payload.get("policy") or {}
+
+    raw_max_tier = budget_cfg.get("max_tier")
+    if raw_max_tier is None:
+        raw_max_tier = defaults.max_tier
     try:
-        max_tier = Tier[str(budget_cfg.get("max_tier", "C")).upper()]
+        max_tier = Tier[str(raw_max_tier).upper()]
     except KeyError:
-        max_tier = Tier.C
+        max_tier = Tier.B
+
+    if "cloud_allowed" in policy_cfg:
+        cloud_allowed = bool(policy_cfg["cloud_allowed"])
+    else:
+        cloud_allowed = defaults.cloud_allowed
+    local_only = bool(policy_cfg.get("local_only", not cloud_allowed))
+
+    routing = RoutingPolicy(local_only=local_only, cloud_allowed=cloud_allowed)
     budget = InferenceBudget(
         max_gpu_seconds=float(budget_cfg.get("max_gpu_seconds", 120.0)),
         max_tier=max_tier,
     )
 
     reporter.set_status(RfirJobStatus(job_id=job_id, state=RfirJobState.PREPARING))
-    logger.info("job %s: planning shots for prompt=%r", job_id, prompt[:60])
+    logger.info(
+        "job %s: planning shots for prompt=%r (max_tier=%s cloud_allowed=%s)",
+        job_id, prompt[:60], max_tier.value, cloud_allowed,
+    )
 
     try:
         shot_list = _plan_shots(prompt, max_tier)
@@ -160,7 +178,7 @@ def run_rfir_job(job_id: str, payload: dict, reporter: JobStatusReporter) -> Non
             metadata={"stage_storyboard": {"shot_count": len(shot_list.shots)}},
         ))
 
-        graph = build(shot_list, budget=budget, ai_enabled=True)
+        graph = build(shot_list, budget=budget, routing=routing, ai_enabled=True)
         graph = fuse(graph)
         mp = memory_plan(graph)
         graph.metadata["downgrade_hints"] = mp.downgrade_hints
@@ -220,6 +238,7 @@ def main() -> None:
 
     r = redis.Redis.from_url(args.redis_url, decode_responses=True)
     reporter = JobStatusReporter(r)
+    probe_cloud_defaults(r)
     _warmup()
     logger.info("listening %s on %s", REDIS_KEY_JOBS, args.redis_url)
 
