@@ -3,8 +3,8 @@
 Uses Wan's AutoencoderKLWan (default) or CogVideoX's AutoencoderKLCogVideoX —
 3D video VAEs that operate on (B, C, T, H, W) tensors. A single frame is
 encoded/decoded as a 1-frame "video" (T=1). Override with
-$RENDERFLOW_RFIR_VAE_MODEL. The executor unloads T2V transformer weights
-before loading the standalone VAE so they are never co-resident on GPU.
+$RENDERFLOW_RFIR_VAE_MODEL. The executor calls ``unload_all()`` before
+encode/decode so the standalone VAE is alone on the accelerator (MPS/CUDA).
 
 For Wan, latents from the diffusion pipeline are denormalized with
 ``latents_mean`` / ``latents_std`` before decode (same as WanPipeline).

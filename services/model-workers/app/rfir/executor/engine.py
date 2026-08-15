@@ -25,7 +25,6 @@ from app.rfir.ops import t2i_keyframe, depth_estimate, rife_interpolate, segment
 
 logger = logging.getLogger(__name__)
 
-# Keep standalone VAEs and T2V transformers from being co-resident on GPU.
 _T2V_PIPELINE_IDS = (
     "wan2.1-t2v-1.3b",
     "cogvideox-2b",
@@ -396,9 +395,7 @@ def _run_vae_encode(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, o
         logger.warning("vae_encode: input is not a PIL Image, skipping")
         return
 
-    # Standalone VAE must not share the GPU with the T2V transformer.
-    for model_id in _T2V_PIPELINE_IDS:
-        unload_model(model_id)
+    unload_all()
 
     latent = vae.encode(image)
 
@@ -416,10 +413,7 @@ def _run_vae_decode(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, o
 
     if not isinstance(latent, torch.Tensor):
         logger.warning("vae_decode: input is not a tensor, skipping")
-        return
-
-    for model_id in _T2V_PIPELINE_IDS:
-        unload_model(model_id)
+    unload_all()
 
     decoded = vae.decode(latent, denormalize=True)
 
