@@ -109,28 +109,43 @@ def load_model(model_id: str, device: str | None = None) -> Any:
     return pipeline
 
 
+def reclaim_accelerator_memory() -> None:
+    """Force GC + return unused CUDA/MPS blocks to the driver.
+
+    Safe for arena data: only frees unreferenced tensors/models and cached
+    accelerator blocks. Call after dropping live GPU work (and even when the
+    model registry is already empty — ``unload_all`` used to no-op then).
+    """
+    try:
+        import gc
+        import torch
+
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+    except ImportError:
+        pass
+
+
 def unload_model(model_id: str) -> None:
     """Unload a model and free memory."""
     pipeline = _loaded.pop(model_id, None)
     if pipeline is None:
         return
     del pipeline
-    try:
-        import torch
-        import gc
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        if torch.backends.mps.is_available():
-            torch.mps.empty_cache()
-    except ImportError:
-        pass
+    reclaim_accelerator_memory()
     logger.info("Unloaded %s", model_id)
 
 
 def unload_all() -> None:
+    """Unload every cached model, then always reclaim accelerator cache."""
     for mid in list(_loaded.keys()):
         unload_model(mid)
+    # Always reclaim: when nothing was loaded, prior process cache (e.g. after
+    # an external ``del``) would otherwise leave a large MPS driver reservation.
+    reclaim_accelerator_memory()
 
 
 def _get_torch_dtype(dtype_str: str):

@@ -6,6 +6,11 @@ encoded/decoded as a 1-frame "video" (T=1). Override with
 $RENDERFLOW_RFIR_VAE_MODEL. The executor calls ``unload_all()`` before
 encode/decode so the standalone VAE is alone on the accelerator (MPS/CUDA).
 
+Wan multi-frame decode streams one temporal latent at a time (preserving
+``feat_cache``) and converts each frame to PIL immediately so the full RGB
+video is never accumulated on GPU. After each latent tensor finishes,
+accelerator cache is reclaimed without touching arena PIL/keyframe data.
+
 For Wan, latents from the diffusion pipeline are denormalized with
 ``latents_mean`` / ``latents_std`` before decode (same as WanPipeline).
 
@@ -20,7 +25,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from PIL import Image
 
-from app.rfir.models.loader import load_model
+from app.rfir.models.loader import load_model, reclaim_accelerator_memory
 
 if TYPE_CHECKING:
     import torch
@@ -59,6 +64,9 @@ def encode(
     with torch.no_grad():
         latent = vae.encode(tensor).latent_dist.sample()
 
+    del tensor
+    reclaim_accelerator_memory()
+
     logger.info("vae_encode: %s → latent %s on %s", image.size, list(latent.shape), device)
     return latent
 
@@ -95,6 +103,50 @@ def _tensor_frame_to_pil(frame: "torch.Tensor") -> Image.Image:
     return Image.fromarray(arr)
 
 
+def _unpatchify_wan_frame(frame_5d: "torch.Tensor", patch_size: int | None) -> "torch.Tensor":
+    """Apply Wan ``unpatchify`` when the VAE config uses spatial patches."""
+    if patch_size is None or patch_size == 1:
+        return frame_5d
+    from diffusers.models.autoencoders.autoencoder_kl_wan import unpatchify
+
+    return unpatchify(frame_5d, patch_size=patch_size)
+
+
+def _stream_decode_wan(vae: object, latent: "torch.Tensor") -> list[Image.Image]:
+    """Decode Wan latents one temporal step at a time without GPU RGB concat.
+
+    Mirrors AutoencoderKLWan._decode's feat_cache loop, but converts each
+    frame to PIL immediately so peak memory stays near one-frame decode.
+    """
+    import torch
+
+    clear_cache = getattr(vae, "clear_cache", None)
+    if clear_cache is not None:
+        clear_cache()
+
+    x = vae.post_quant_conv(latent)
+    num_frame = int(x.shape[2])
+    patch_size = getattr(getattr(vae, "config", None), "patch_size", None)
+    frames: list[Image.Image] = []
+
+    with torch.no_grad():
+        for i in range(num_frame):
+            vae._conv_idx = [0]
+            kwargs: dict = {"feat_cache": vae._feat_map, "feat_idx": vae._conv_idx}
+            if i == 0:
+                kwargs["first_chunk"] = True
+            out = vae.decoder(x[:, :, i : i + 1, :, :], **kwargs)
+            out = _unpatchify_wan_frame(out, patch_size)
+            out = torch.clamp(out, min=-1.0, max=1.0)
+            frames.append(_tensor_frame_to_pil(out[0, :, 0]))
+            del out
+
+    if clear_cache is not None:
+        clear_cache()
+    del x
+    return frames
+
+
 def decode(
     latent: torch.Tensor,
     *,
@@ -117,26 +169,40 @@ def decode(
     vae = bundle["vae"]
     device = bundle["device"]
     dtype = bundle["dtype"]
+    pipeline_kind = bundle.get("pipeline", "")
 
     if latent.dim() == 4:
         latent = latent.unsqueeze(2)  # (1, C, H, W) -> (1, C, 1, H, W)
     latent = latent.to(device=device, dtype=dtype)
+    latent_shape = list(latent.shape)
 
     if denormalize is None:
         denormalize = int(latent.shape[2]) > 1
     if denormalize:
         latent = _denormalize_wan_latents(latent, vae)
 
-    with torch.no_grad():
-        decoded = vae.decode(latent).sample
-
-    # decoded: (1, 3, T, H, W)
-    t_count = int(decoded.shape[2])
-    frames = [_tensor_frame_to_pil(decoded[0, :, t]) for t in range(t_count)]
+    frames: list[Image.Image] = []
+    try:
+        if pipeline_kind == "wan" and hasattr(vae, "decoder") and hasattr(vae, "post_quant_conv"):
+            frames = _stream_decode_wan(vae, latent)
+        else:
+            with torch.no_grad():
+                decoded = vae.decode(latent).sample
+            t_count = int(decoded.shape[2])
+            frames = [_tensor_frame_to_pil(decoded[0, :, t]) for t in range(t_count)]
+            del decoded
+    finally:
+        # Drop decode temps / feat_cache spill and return driver cache before
+        # the next latent tensor is processed. Arena PIL outputs are already
+        # on CPU and unaffected.
+        if hasattr(vae, "clear_cache"):
+            vae.clear_cache()
+        del latent
+        reclaim_accelerator_memory()
 
     logger.info(
         "vae_decode: latent %s → %d frame(s) %s",
-        list(latent.shape), len(frames), frames[0].size if frames else None,
+        latent_shape, len(frames), frames[0].size if frames else None,
     )
     if len(frames) == 1:
         return frames[0]

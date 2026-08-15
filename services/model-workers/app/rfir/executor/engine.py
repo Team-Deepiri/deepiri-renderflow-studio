@@ -19,7 +19,7 @@ from app.rfir.checkpoint import Checkpoint, checkpoint_uri, save as save_checkpo
 from app.rfir.compiler.scheduler import topological_sort
 from app.rfir.executor.context import ExecutionContext, decide_escalation
 from app.rfir.ir.types import InferenceBudget, RfirGraph, RfirNode
-from app.rfir.models.loader import detect_device, unload_all, unload_model
+from app.rfir.models.loader import detect_device, reclaim_accelerator_memory, unload_all, unload_model
 from app.rfir.ltc import LatentTemporalCache
 from app.rfir.ops import t2i_keyframe, depth_estimate, rife_interpolate, segment_subject, vae, sparse_t2v_window
 
@@ -395,12 +395,15 @@ def _run_vae_encode(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, o
         logger.warning("vae_encode: input is not a PIL Image, skipping")
         return
 
+    # Unload other models and always empty CUDA/MPS cache before VAE work.
     unload_all()
 
     latent = vae.encode(image)
 
     for tensor_name in node.outputs.values():
         arena.put(tensor_name, latent)
+
+    reclaim_accelerator_memory()
 
 
 def _run_vae_decode(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
@@ -413,6 +416,9 @@ def _run_vae_decode(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, o
 
     if not isinstance(latent, torch.Tensor):
         logger.warning("vae_decode: input is not a tensor, skipping")
+        return
+
+    # Unload other models and always empty CUDA/MPS cache before VAE work.
     unload_all()
 
     decoded = vae.decode(latent, denormalize=True)
@@ -437,6 +443,9 @@ def _run_vae_decode(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, o
         img_path = out_path / f"{node.id}.png"
         decoded.save(img_path)
         ctx.artifacts[node.id] = str(img_path)
+
+    # Arena already holds PIL outputs; reclaim GPU cache for the next op/tensor.
+    reclaim_accelerator_memory()
 
 
 def _run_sparse_t2v_window(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
