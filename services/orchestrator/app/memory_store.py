@@ -295,6 +295,47 @@ def clip_list_for_sequence(sequence_id: UUID) -> list[dict[str, Any]]:
         return [c for c in _clips.values() if c["track_id"] in track_ids]
 
 
+def clip_replace_for_sequence(
+    sequence_id: UUID, rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Make `rows` this sequence's complete clip list, under one lock + save.
+
+    Clips carrying an id already present are updated in place (created_at is
+    preserved); clips in the sequence but absent from `rows` are dropped. Rows
+    pointing at a track outside this sequence are ignored.
+    """
+    with _lock:
+        track_ids = {t["id"] for t in _tracks.values() if t["sequence_id"] == sequence_id}
+        keep = {r["id"] for r in rows}
+        for cid in [
+            c["id"]
+            for c in _clips.values()
+            if c["track_id"] in track_ids and c["id"] not in keep
+        ]:
+            _clips.pop(cid, None)
+
+        created: list[dict[str, Any]] = []
+        for r in rows:
+            if r["track_id"] not in track_ids:
+                continue
+            existing = _clips.get(r["id"])
+            row = {
+                "id": r["id"],
+                "track_id": r["track_id"],
+                "asset_id": r["asset_id"],
+                "in_tick": r["in_tick"],
+                "out_tick": r["out_tick"],
+                "src_in_tick": r.get("src_in_tick", 0),
+                "speed_ratio": r.get("speed_ratio", 1.0),
+                "transform_jsonb": dict(r.get("transform") or {}),
+                "created_at": existing["created_at"] if existing else _now(),
+            }
+            _clips[r["id"]] = row
+            created.append(row)
+    _save()
+    return created
+
+
 def clip_effect_create(clip_id: UUID, effect_type: str, order_idx: int, params: dict[str, Any]) -> dict[str, Any]:
     eid = uuid4()
     row = {

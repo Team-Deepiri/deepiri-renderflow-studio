@@ -312,6 +312,60 @@ def insert_clip(row: dict[str, Any]) -> None:
         logger.warning("insert_clip: %s", e)
 
 
+def replace_clips_for_sequence(sequence_id: UUID, rows: list[dict[str, Any]]) -> None:
+    """Make `rows` the sequence's complete clip list in ONE transaction.
+
+    Clips absent from `rows` are deleted; the rest are upserted by id so their
+    clip_effects survive (a delete-then-insert would cascade them away). The
+    single commit at the end means a failure anywhere leaves the previous
+    clip list intact rather than a half-written one.
+    """
+    if not db.pool_ready():
+        return
+    try:
+        keep = [str(r["id"]) for r in rows]
+        with db.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    delete from clips
+                    where track_id in (select id from tracks where sequence_id = %s::uuid)
+                      and id <> all(%s::uuid[])
+                    """,
+                    (str(sequence_id), keep),
+                )
+                for r in rows:
+                    cur.execute(
+                        """
+                        insert into clips (id, track_id, asset_id, in_tick, out_tick,
+                                           src_in_tick, speed_ratio, transform_jsonb, updated_at)
+                        values (%s::uuid, %s::uuid, %s::uuid, %s, %s, %s, %s, %s::jsonb, now())
+                        on conflict (id) do update set
+                          track_id = excluded.track_id,
+                          asset_id = excluded.asset_id,
+                          in_tick = excluded.in_tick,
+                          out_tick = excluded.out_tick,
+                          src_in_tick = excluded.src_in_tick,
+                          speed_ratio = excluded.speed_ratio,
+                          transform_jsonb = excluded.transform_jsonb,
+                          updated_at = now()
+                        """,
+                        (
+                            str(r["id"]),
+                            str(r["track_id"]),
+                            str(r["asset_id"]),
+                            r["in_tick"],
+                            r["out_tick"],
+                            r.get("src_in_tick", 0),
+                            float(r.get("speed_ratio", 1.0)),
+                            __import__("json").dumps(r.get("transform_jsonb") or {}),
+                        ),
+                    )
+            conn.commit()
+    except Exception as e:
+        logger.warning("replace_clips_for_sequence: %s", e)
+
+
 def insert_clip_effect(row: dict[str, Any]) -> None:
     if not db.pool_ready():
         return

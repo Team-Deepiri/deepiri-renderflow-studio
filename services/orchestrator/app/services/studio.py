@@ -128,6 +128,14 @@ def list_clips_for_sequence(sequence_id: UUID) -> list[dict[str, Any]]:
     return db_repos.list_clips_for_sequence(sequence_id)
 
 
+def replace_clips_for_sequence(
+    sequence_id: UUID, rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    created = memory_store.clip_replace_for_sequence(sequence_id, rows)
+    db_repos.replace_clips_for_sequence(sequence_id, created)
+    return created
+
+
 def add_clip_effect(
     clip_id: UUID, effect_type: str, order_idx: int, params: dict[str, Any]
 ) -> dict[str, Any]:
