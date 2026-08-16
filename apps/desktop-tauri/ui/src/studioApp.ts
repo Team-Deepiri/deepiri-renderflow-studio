@@ -5,7 +5,11 @@
 // ============================================================
 
 import type { StudioState, HistoryStack } from "./state";
-import { createInitialState, createHistoryStack } from "./state";
+import {
+  createInitialState,
+  createHistoryStack,
+  resetProjectState,
+} from "./state";
 import type { ProjectTemplate } from "./types";
 import { PROJECT_TEMPLATES } from "./types";
 import {
@@ -55,6 +59,7 @@ import {
   orchestratorCreateSequence,
   orchestratorDeleteProject,
   orchestratorCreateTrack,
+  orchestratorListTracks,
   submitAiJob,
   getAiJob,
   acceptAiJob,
@@ -513,11 +518,37 @@ export function bootstrapStudioApp(): void {
       studioView.style.display = "none";
       state.activeProjectId = null;
       state.activeSequenceId = null;
+      resetProjectView();
       refreshHomeProjects();
     } else {
       homeView.style.display = "none";
       studioView.style.display = "";
     }
+  }
+
+  /**
+   * Puts the app back to "no project open". resetProjectState() clears the
+   * plain data; everything below it releases a resource that state can't
+   * clear on its own — running timers, the monitor element, the AI panel.
+   */
+  function resetProjectView(): void {
+    resetProjectState(state, history);
+
+    pause(state);
+    stopProxyPolling(state);
+    stopJobPolling();
+    setReviewButtons(false);
+    jobStatusEl.textContent = "";
+    const playBtn = $("#btn-play");
+    if (playBtn) playBtn.textContent = "Play";
+
+    previewVideo.pause();
+    previewVideo.removeAttribute("src");
+    previewVideo.load();
+    previewVideo.style.display = "none";
+    previewFrame.removeAttribute("src");
+    previewFrame.style.display = "none";
+    previewEmpty.style.display = "";
   }
 
   // ── Home project list ──
@@ -556,35 +587,58 @@ export function bootstrapStudioApp(): void {
 
   // ── Open a project → create default sequence if needed ──
   async function openProject(project: Project): Promise<void> {
-    state.activeProjectId = project.id;
+    const pid = project.id;
+    resetProjectView();
+    state.activeProjectId = pid;
     state.timeline.fps = project.fps_num / project.fps_den;
     fpsInput.value = String(state.timeline.fps);
     try {
-      const seqs = await orchestratorListSequences(project.id);
+      const seqs = await orchestratorListSequences(pid);
       if (seqs.length > 0) {
         state.activeSequenceId = seqs[0].id;
       } else {
-        const seq = await orchestratorCreateSequence(
-          project.id,
-          "Main Sequence",
-        );
+        const seq = await orchestratorCreateSequence(pid, "Main Sequence");
         state.activeSequenceId = seq.id;
       }
     } catch {
-      const seq = await orchestratorCreateSequence(project.id, "Main Sequence");
+      const seq = await orchestratorCreateSequence(pid, "Main Sequence");
       state.activeSequenceId = seq.id;
     }
+    if (state.activeProjectId !== pid || !state.activeSequenceId) return;
+
+    // Load this project's tracks. The timeline is empty after the reset, so a
+    // failure here leaves it empty rather than showing the last project's.
+    try {
+      const rows = await orchestratorListTracks(state.activeSequenceId);
+      if (state.activeProjectId !== pid) return;
+      const tracks = rows
+        .slice()
+        .sort((a, b) => a.lane_index - b.lane_index)
+        .map((t, i): import("./types").UiTrack => ({
+          id: i + 1,
+          serverId: t.id,
+          name: t.name,
+          kind: t.track_type === "audio" ? "Audio" : "Video",
+          lane_index: t.lane_index,
+          clips: [],
+        }));
+      state.timeline.tracks = tracks;
+      state.ui.activeTrackId = tracks[0]?.id ?? null;
+    } catch (e) {
+      devLog(`Load tracks error: ${String(e)}`);
+    }
+
     // Load assets
     try {
-      const assets = await listProjectAssets(project.id);
-      state.assets = [];
+      const assets = await listProjectAssets(pid);
+      if (state.activeProjectId !== pid) return;
       for (const a of assets) registerAsset(state, a);
       startProxyPolling(state, getAsset, (updated) => {
         updateAsset(state, updated.id, updated);
         renderAssets();
       });
     } catch {
-      /* no assets yet */
+      /* no assets yet — the bin stays empty from the reset */
     }
     navigateTo("studio");
     renderTimelineFull();
@@ -694,9 +748,12 @@ export function bootstrapStudioApp(): void {
   }
 
   async function refreshAssets(): Promise<void> {
-    if (!state.activeProjectId) return;
+    const pid = state.activeProjectId;
+    if (!pid) return;
     try {
-      const assets = await listProjectAssets(state.activeProjectId);
+      const assets = await listProjectAssets(pid);
+      // The user may have switched projects while this was in flight.
+      if (state.activeProjectId !== pid) return;
       state.assets = [];
       for (const a of assets) registerAsset(state, a);
       renderAssets();
@@ -775,6 +832,7 @@ export function bootstrapStudioApp(): void {
   }
 
   async function fetchFrameForPlayhead(): Promise<void> {
+    const pid = state.activeProjectId;
     const found = clipAtPlayhead();
     if (!found) {
       previewFrame.style.display = "none";
@@ -794,6 +852,8 @@ export function bootstrapStudioApp(): void {
     previewEmpty.style.display = "none";
     try {
       const b64 = await fetchFrame(proxyPath, offsetSecs);
+      // Don't paint a frame the user has already navigated away from.
+      if (state.activeProjectId !== pid) return;
       previewFrame.src = `data:image/jpeg;base64,${b64}`;
       previewFrame.style.display = "block";
     } catch {

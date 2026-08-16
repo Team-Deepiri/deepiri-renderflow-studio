@@ -91,3 +91,19 @@ export function createHistoryStack(): HistoryStack {
     suppressHistory: false,
   };
 }
+
+/** Clears everything that belongs to a single project. */
+export function resetProjectState(
+  state: StudioState,
+  history: HistoryStack
+): StudioState {
+  const fresh = createInitialState();
+  state.timeline = { ...fresh.timeline, tracks: [], playheadTick: 0 };
+  state.ui = fresh.ui;
+  state.assets = [];
+  state.nextClipId = fresh.nextClipId;
+  state.lastJobId = "";
+  history.past = [];
+  history.future = [];
+  return state;
+}
