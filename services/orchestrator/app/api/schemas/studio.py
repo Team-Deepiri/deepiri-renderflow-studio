@@ -119,6 +119,10 @@ class ClipCreate(BaseModel):
     transform: dict[str, Any] = Field(default_factory=dict)
 
 
+class ClipUpsert(ClipCreate):
+    id: UUID
+
+
 class ClipEffectCreate(BaseModel):
     effect_type: str
     order_idx: int = 0
