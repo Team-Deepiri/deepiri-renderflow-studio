@@ -60,6 +60,8 @@ import {
   orchestratorDeleteProject,
   orchestratorCreateTrack,
   orchestratorListTracks,
+  orchestratorListClips,
+  orchestratorReplaceClips,
   submitAiJob,
   getAiJob,
   acceptAiJob,
@@ -510,12 +512,38 @@ export function bootstrapStudioApp(): void {
     devtoolsOut.scrollTop = devtoolsOut.scrollHeight;
   }
 
+  // -- Timeline Persistence --
+  async function persistTimeline(): Promise<void> {
+    const sid = state.activeSequenceId;
+    if (!sid) return;
+    const clips = state.timeline.tracks.flatMap((t) =>
+      t.serverId
+        ? t.clips
+            .filter((c) => c.assetId)
+            .map((c) => ({
+              id: c.clipId,
+              track_id: t.serverId!,
+              asset_id: c.assetId!,
+              in_tick: c.inTick,
+              out_tick: c.outTick,
+            }))
+        : [],
+    );
+    try {
+      await orchestratorReplaceClips(sid, clips);
+      devLog(`Saved ${clips.length} clip(s)`);
+    } catch (e) {
+      devLog(`Save timeline error: ${String(e)}`);
+    }
+  }
+
   // ── Navigation ──
   function navigateTo(view: "home" | "studio"): void {
     state.currentView = view;
     if (view === "home") {
       homeView.style.display = "";
       studioView.style.display = "none";
+      void persistTimeline(); // must run before the ids below are cleared
       state.activeProjectId = null;
       state.activeSequenceId = null;
       resetProjectView();
@@ -588,6 +616,7 @@ export function bootstrapStudioApp(): void {
   // ── Open a project → create default sequence if needed ──
   async function openProject(project: Project): Promise<void> {
     const pid = project.id;
+    void persistTimeline();
     resetProjectView();
     state.activeProjectId = pid;
     state.timeline.fps = project.fps_num / project.fps_den;
@@ -606,8 +635,22 @@ export function bootstrapStudioApp(): void {
     }
     if (state.activeProjectId !== pid || !state.activeSequenceId) return;
 
-    // Load this project's tracks. The timeline is empty after the reset, so a
-    // failure here leaves it empty rather than showing the last project's.
+    // Load assets first — the clips below take their labels from the bin.
+    try {
+      const assets = await listProjectAssets(pid);
+      if (state.activeProjectId !== pid) return;
+      for (const a of assets) registerAsset(state, a);
+      startProxyPolling(state, getAsset, (updated) => {
+        updateAsset(state, updated.id, updated);
+        renderAssets();
+      });
+    } catch {
+      /* no assets yet — the bin stays empty from the reset */
+    }
+
+    // Load this project's tracks and clips. The timeline is empty after the
+    // reset, so a failure here leaves it empty rather than showing the last
+    // project's.
     try {
       const rows = await orchestratorListTracks(state.activeSequenceId);
       if (state.activeProjectId !== pid) return;
@@ -622,23 +665,33 @@ export function bootstrapStudioApp(): void {
           lane_index: t.lane_index,
           clips: [],
         }));
+
+      const clipRows = await orchestratorListClips(state.activeSequenceId);
+      if (state.activeProjectId !== pid) return;
+      const byTrack = new Map(tracks.map((t) => [t.serverId, t]));
+      for (const c of clipRows) {
+        const track = byTrack.get(c.track_id);
+        if (!track) continue;
+        const asset = state.assets.find((a) => a.id === c.asset_id);
+        track.clips.push({
+          id: state.nextClipId++,
+          clipId: c.id,
+          assetId: c.asset_id,
+          label: asset?.uri.split("/").pop() ?? c.asset_id,
+          inTick: c.in_tick,
+          outTick: c.out_tick,
+          color: "#4d7dff",
+        });
+      }
+
       state.timeline.tracks = tracks;
       state.ui.activeTrackId = tracks[0]?.id ?? null;
+      const maxOut = Math.max(0, ...tracks.flatMap((t) => t.clips.map((c) => c.outTick)));
+      if (maxOut + state.timeline.fps * 2 > state.timeline.durationTicks) {
+        state.timeline.durationTicks = maxOut + state.timeline.fps * 2;
+      }
     } catch (e) {
-      devLog(`Load tracks error: ${String(e)}`);
-    }
-
-    // Load assets
-    try {
-      const assets = await listProjectAssets(pid);
-      if (state.activeProjectId !== pid) return;
-      for (const a of assets) registerAsset(state, a);
-      startProxyPolling(state, getAsset, (updated) => {
-        updateAsset(state, updated.id, updated);
-        renderAssets();
-      });
-    } catch {
-      /* no assets yet — the bin stays empty from the reset */
+      devLog(`Load timeline error: ${String(e)}`);
     }
     navigateTo("studio");
     renderTimelineFull();
@@ -822,8 +875,8 @@ export function bootstrapStudioApp(): void {
     for (const track of state.timeline.tracks) {
       if (track.kind !== "Video") continue;
       for (const clip of track.clips) {
-        if (clip.inTick <= ph && ph < clip.outTick && clip.serverId) {
-          const asset = state.assets.find((a) => a.id === clip.serverId) ?? null;
+        if (clip.inTick <= ph && ph < clip.outTick && clip.assetId) {
+          const asset = state.assets.find((a) => a.id === clip.assetId) ?? null;
           if (asset) return { clip, asset };
         }
       }
@@ -1245,7 +1298,7 @@ export function bootstrapStudioApp(): void {
       const videoTrack = state.timeline.tracks.find((t) => t.kind === "Video");
       if (videoTrack) {
         // Clear demo clips (clips without a linked asset)
-        videoTrack.clips = videoTrack.clips.filter((c) => c.serverId);
+        videoTrack.clips = videoTrack.clips.filter((c) => c.assetId);
         state.ui.activeTrackId = videoTrack.id;
         insertClipFromAsset(state, asset, history);
         // Extend timeline if clip exceeds duration
@@ -1293,7 +1346,7 @@ export function bootstrapStudioApp(): void {
         registerAsset(state, asset);
         const videoTrack = state.timeline.tracks.find((t) => t.kind === "Video");
         if (videoTrack) {
-          videoTrack.clips = videoTrack.clips.filter((c) => c.serverId);
+          videoTrack.clips = videoTrack.clips.filter((c) => c.assetId);
           state.ui.activeTrackId = videoTrack.id;
           insertClipFromAsset(state, asset, history);
           const maxOut = videoTrack.clips.reduce((m, c) => Math.max(m, c.outTick), 0);
@@ -1349,6 +1402,7 @@ export function bootstrapStudioApp(): void {
     commitHistory(state, history, "save");
     const projectName = ($("#project-name") as HTMLInputElement).value || "Untitled";
     saveProject(projectName, snapshotState(state));
+    void persistTimeline();
     devLog(`Project "${projectName}" saved.`);
   });
   $("#btn-export").addEventListener("click", () =>
