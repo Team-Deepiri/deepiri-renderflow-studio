@@ -72,12 +72,7 @@ def create_clip(sequence_id: UUID, body: ClipCreate) -> dict[str, Any]:
 
 @router.put("/v1/sequences/{sequence_id}/clips", tags=["timeline"])
 def replace_clips(sequence_id: UUID, body: list[ClipUpsert]) -> list[dict[str, Any]]:
-    """Atomic replace: `body` becomes the sequence's complete clip list.
-
-    Rows are matched by the client-minted clip id, so a save updates existing
-    clips instead of recreating them and any clip_effects survive. Clips
-    naming a track outside this sequence are dropped.
-    """
+    """Replace: `body` becomes the sequence's complete clip list. """
     if not studio.get_sequence(sequence_id):
         raise HTTPException(404, "sequence not found")
     return studio.replace_clips_for_sequence(
