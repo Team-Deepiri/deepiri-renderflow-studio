@@ -100,8 +100,11 @@ def load_model(model_id: str, device: str | None = None) -> Any:
         pipeline = _load_vae(manifest, device, precision)
     elif manifest.role == "rife_interpolate":
         pipeline = _load_rife(manifest, device, precision)
+<<<<<<< HEAD
     elif manifest.role == "nsfw_classify":
         pipeline = _load_nsfw_classifier(manifest, device, precision)
+=======
+>>>>>>> origin/main
     else:
         raise ValueError(f"No loader for role: {manifest.role!r}")
 
