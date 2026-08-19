@@ -12,7 +12,6 @@ REDIS_KEY_JOBS_HIGH = "renderflow:ai_jobs:high"
 REDIS_KEY_JOBS_DLQ = "renderflow:ai_jobs:dlq"
 REDIS_KEY_JOBS_RETRY = "renderflow:ai_jobs:retry"
 
-
 class JobPriority(IntEnum):
     LOW = 0
     NORMAL = 1
@@ -82,3 +81,24 @@ class RedisJobQueue:
             return None
         _, raw = result
         return json.loads(raw)
+    
+# Guardrail contract for the job payload
+VERDICT_ALLOW = "allow"
+VERDICT_MISSING = "missing"
+
+def verdict_allows_generation(verdict: Any) -> bool:
+    """True only for an explicit allow — a block, an unknown string, an empty
+    string, None, or an omitted key all refuse."""
+    return verdict == VERDICT_ALLOW
+
+
+def resolve_verdict(verdict: Any) -> str:
+    """Normalise a stamped verdict for the wire.
+
+    Never invents an allow: a record with no verdict becomes VERDICT_MISSING,
+    which refuses under verdict_allows_generation() and names the real cause
+    ("nobody stamped this") in the failure the user ends up seeing.
+    """
+    if not isinstance(verdict, str) or not verdict:
+        return VERDICT_MISSING
+    return verdict

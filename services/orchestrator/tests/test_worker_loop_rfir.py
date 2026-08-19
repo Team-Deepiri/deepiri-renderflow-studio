@@ -14,7 +14,13 @@ import pytest
 import app.main  # noqa: F401 -- resolves the app.api <-> app.worker_loop import cycle first
 from app.config import Settings
 from app.job_store import JobStatus, store
-from app.worker_loop import _apply_rfir_status, _build_rfir_payload, enqueue_job, _rfir_inflight
+from app.worker_loop import (
+    _apply_rfir_status,
+    _build_rfir_payload,
+    _process_scene_job_rfir,
+    _rfir_inflight,
+    enqueue_job,
+)
 from renderflow_queue import RfirJobState, RfirJobStatus
 
 
@@ -65,6 +71,113 @@ def test_build_rfir_payload_carries_guardrail_flags():
                         metadata={"guardrail_verdict": "allow", "guardrail_flags": ["PII_REDACTED"]})
     payload = _build_rfir_payload(rec, Settings())
     assert payload["guardrail_flags"] == ["PII_REDACTED"]
+
+
+# ---------------------------------------------------------------------------
+# guardrail_verdict — must fail closed the same way redis_worker does
+# (model-workers/tests/test_redis_worker.py::test_missing_guardrail_verdict_refuses)
+# ---------------------------------------------------------------------------
+
+def test_build_rfir_payload_missing_verdict_is_not_an_allow():
+    """A record whose metadata never got stamped must not be handed to the
+    worker as an implicit allow — that would run ungated GPU work."""
+    rec = store.create(uuid4(), "scene", "prompt", metadata={})
+
+    assert _build_rfir_payload(rec, Settings())["guardrail_verdict"] != "allow"
+
+
+def test_build_rfir_payload_empty_verdict_is_not_an_allow():
+    rec = store.create(uuid4(), "scene", "prompt", metadata={"guardrail_verdict": ""})
+
+    assert _build_rfir_payload(rec, Settings())["guardrail_verdict"] != "allow"
+
+
+def test_build_rfir_payload_passes_a_real_verdict_through():
+    """Non-allow verdicts reach the worker verbatim rather than being
+    normalised, so its refusal message names the actual decision."""
+    rec = store.create(uuid4(), "scene", "prompt", metadata={"guardrail_verdict": "block"})
+
+    assert _build_rfir_payload(rec, Settings())["guardrail_verdict"] == "block"
+
+
+def test_in_process_rfir_path_refuses_a_missing_verdict(monkeypatch, tmp_path):
+    """The in-process fallback generates real frames too, so it has to refuse
+    an unstamped job instead of running it just because Redis was down."""
+    called = False
+
+    def _should_not_run(*a, **kw):
+        nonlocal called
+        called = True
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        "app.media.cfsv_pipeline.compile_and_run_tier_a", _should_not_run,
+    )
+    rec = store.create(uuid4(), "scene", "prompt", metadata={})
+
+    _process_scene_job_rfir(rec.id, rec, Settings())
+
+    updated = store.get(rec.id)
+    assert updated.status == JobStatus.FAILED
+    assert "guardrail_verdict" in updated.metadata["error"]
+    assert not called, "generation ran despite an unstamped guardrail_verdict"
+
+
+# ---------------------------------------------------------------------------
+# nsfw_mode — the worker's Layer 3 strictness comes from the project policy
+# (_no_db above stubs pool_ready False, so fetch_project returns None and the
+# preset + env are what resolve the mode).
+# ---------------------------------------------------------------------------
+
+def test_build_rfir_payload_nsfw_mode_follows_dev_preset(monkeypatch):
+    monkeypatch.setenv("READINESS_MODE", "dev")
+    monkeypatch.delenv("RENDERFLOW_GUARDRAIL_NSFW_MODE", raising=False)
+    rec = store.create(uuid4(), "scene", "prompt")
+
+    assert _build_rfir_payload(rec, Settings())["nsfw_mode"] == "off"
+
+
+def test_build_rfir_payload_nsfw_mode_blocks_outside_dev(monkeypatch):
+    monkeypatch.setenv("READINESS_MODE", "prod")
+    monkeypatch.setenv("RENDERFLOW_GUARDRAIL_PRESET", "us_default")
+    monkeypatch.delenv("RENDERFLOW_GUARDRAIL_NSFW_MODE", raising=False)
+    rec = store.create(uuid4(), "scene", "prompt")
+
+    assert _build_rfir_payload(rec, Settings())["nsfw_mode"] == "block"
+
+
+def test_build_rfir_payload_nsfw_mode_carries_restricted(monkeypatch):
+    """The case the hardcoded default made unreachable: a policy that is
+    neither fully off nor fully blocking has to survive the trip to the
+    worker, or check_keyframe silently uses the stricter threshold."""
+    monkeypatch.setenv("READINESS_MODE", "prod")
+    monkeypatch.setenv("RENDERFLOW_GUARDRAIL_NSFW_MODE", "restricted")
+    rec = store.create(uuid4(), "scene", "prompt")
+
+    assert _build_rfir_payload(rec, Settings())["nsfw_mode"] == "restricted"
+
+
+def test_build_rfir_payload_nsfw_mode_ignores_caller_metadata(monkeypatch):
+    """Job metadata is client-supplied, so it must not be able to relax the
+    generation guard."""
+    monkeypatch.setenv("READINESS_MODE", "prod")
+    monkeypatch.setenv("RENDERFLOW_GUARDRAIL_PRESET", "us_default")
+    monkeypatch.delenv("RENDERFLOW_GUARDRAIL_NSFW_MODE", raising=False)
+    rec = store.create(uuid4(), "scene", "prompt", metadata={"nsfw_mode": "off"})
+
+    assert _build_rfir_payload(rec, Settings())["nsfw_mode"] == "block"
+
+
+def test_build_rfir_payload_nsfw_mode_fails_closed(monkeypatch):
+    monkeypatch.setenv("READINESS_MODE", "dev")  # would otherwise resolve to "off"
+
+    def _boom(*a, **kw):
+        raise RuntimeError("policy lookup exploded")
+
+    monkeypatch.setattr("app.worker_loop.policy_for_project", _boom)
+    rec = store.create(uuid4(), "scene", "prompt")
+
+    assert _build_rfir_payload(rec, Settings())["nsfw_mode"] == "block"
 
 
 def test_enqueue_job_rfir_mode_pushes_full_payload(monkeypatch):

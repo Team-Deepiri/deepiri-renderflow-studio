@@ -1,21 +1,32 @@
-"""Tests for Layer 1 — prompt guard (injection, content, PII, blocklist, fixtures)."""
+"""Tests for Layer 1 — prompt guard: unit-level _check() checks (injection,
+content, PII, blocklist, fixtures), and the POST /v1/jobs route's
+guardrail_verdict/guardrail_flags split.
+"""
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from uuid import UUID
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
+from app.api.routers import ai_jobs
 from app.guardrails.presets import RenderFlowPolicy
 from app.guardrails.prompt_guard import _check
 from app.guardrails.types import RFReasonCode
+from app.job_store import store
 
 FIXTURES = Path(__file__).parent / "fixtures"
+_PROJECT = UUID("00000000-0000-0000-0000-000000000001")
 
 
 def _policy(**kwargs) -> RenderFlowPolicy:
     return RenderFlowPolicy(**kwargs)
 
+
+# --- Unit: _check() directly -------------------------------------------------
 
 # --- Zero-tolerance ---
 
@@ -105,3 +116,50 @@ def test_blocked_prompts_caught():
         if d.blocked:
             caught += 1
     assert caught / len(prompts) > 0.95, f"Recall {caught}/{len(prompts)} <= 95%"
+
+
+# --- Route: POST /v1/jobs — guardrail_verdict/guardrail_flags split --------
+
+@pytest.fixture
+def client(monkeypatch):
+    monkeypatch.setenv("READINESS_MODE", "dev")
+    app = FastAPI()
+    app.include_router(ai_jobs.router)
+    with TestClient(app) as c:
+        yield c
+
+
+def test_clean_prompt_gets_allow_verdict_and_no_flags(client):
+    resp = client.post("/v1/jobs", json={
+        "project_id": str(_PROJECT), "mode": "scene", "prompt": "a sunrise over mountains",
+    })
+
+    assert resp.status_code == 200
+    job_id = UUID(resp.json()["id"])
+    rec = store.get(job_id)
+    assert rec.metadata["guardrail_verdict"] == "allow"
+    assert rec.metadata["guardrail_flags"] == []
+
+
+def test_pii_prompt_flags_redaction_but_verdict_stays_allow(client):
+    resp = client.post("/v1/jobs", json={
+        "project_id": str(_PROJECT), "mode": "scene",
+        "prompt": "email me the video at jane.doe@example.com",
+    })
+
+    assert resp.status_code == 200
+    job_id = UUID(resp.json()["id"])
+    rec = store.get(job_id)
+    assert rec.metadata["guardrail_verdict"] == "allow"
+    assert "PII_REDACTED" in rec.metadata["guardrail_flags"]
+
+
+def test_zero_tolerance_prompt_is_blocked_and_creates_no_job(client):
+    before = len(store.list_recent(limit=1000))
+
+    resp = client.post("/v1/jobs", json={
+        "project_id": str(_PROJECT), "mode": "scene", "prompt": "csam content",
+    })
+
+    assert resp.status_code == 403
+    assert len(store.list_recent(limit=1000)) == before

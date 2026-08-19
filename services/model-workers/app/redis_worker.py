@@ -21,7 +21,16 @@ import time
 import traceback
 from pathlib import Path
 
-from renderflow_queue import JobStatusReporter, REDIS_KEY_JOBS, RfirJobState, RfirJobStatus
+from renderflow_queue import (
+    JobStatusReporter,
+    REDIS_KEY_JOBS,
+    RfirJobState,
+    RfirJobStatus,
+    verdict_allows_generation,
+)
+
+from app.guardrails.plan_client import PlanBlocked, check_plan
+from app.guardrails.runtime_guard import check_keyframe
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +56,8 @@ def _plan_shots(prompt: str, max_tier):
 
     try:
         return planner.plan(prompt, guardrail=lambda p: True, max_tier=max_tier)
+    except planner.PlannerBlocked: 
+        raise
     except Exception as e:
         logger.warning("planner unavailable (%s) — falling back to a single Tier-A shot", e)
         return ShotList(prompt=prompt, shots=[
@@ -87,15 +98,21 @@ def run_rfir_job(job_id: str, payload: dict, reporter: JobStatusReporter) -> Non
     from app.rfir.executor.engine import run_graph
 
     prompt = payload.get("prompt", "")
-    guardrail_verdict = payload.get("guardrail_verdict", "allow")
+    guardrail_verdict = payload.get("guardrail_verdict")
+    guardrail_flags = payload.get("guardrail_flags") or []
+    nsfw_mode = payload.get("nsfw_mode", "block")
 
-    if guardrail_verdict != "allow":
-        logger.warning("job %s: refusing — guardrail_verdict=%r (not 'allow')", job_id, guardrail_verdict)
+    if not verdict_allows_generation(guardrail_verdict):
+        logger.warning("job %s: refusing — guardrail_verdict=%r", job_id, guardrail_verdict)
         reporter.set_status(RfirJobStatus(
             job_id=job_id, state=RfirJobState.FAILED,
             error=f"guardrail_verdict={guardrail_verdict!r}, refusing to run GPU work",
         ))
         return
+
+    # only logged, no action taken
+    if guardrail_flags:
+        logger.warning("job %s: proceeding with guardrail_flags=%s", job_id, guardrail_flags)
 
     budget_cfg = payload.get("budget") or {}
     try:
@@ -113,6 +130,12 @@ def run_rfir_job(job_id: str, payload: dict, reporter: JobStatusReporter) -> Non
     try:
         shot_list = _plan_shots(prompt, max_tier)
 
+        # Layer 2 (§6) — the planner's shot descriptions become the per-node
+        # generation prompts, so they get their own pass before compile.
+        # Runs before the storyboard status so a blocked plan never surfaces
+        # a shot count to the review UI.
+        _apply_tier_adjustments(shot_list, check_plan(job_id, shot_list))
+
         reporter.set_status(RfirJobStatus(
             job_id=job_id, state=RfirJobState.RUNNING, stage="storyboard",
             metadata={"stage_storyboard": {"shot_count": len(shot_list.shots)}},
@@ -122,6 +145,7 @@ def run_rfir_job(job_id: str, payload: dict, reporter: JobStatusReporter) -> Non
         graph = fuse(graph)
         mp = memory_plan(graph)
         graph.metadata["downgrade_hints"] = mp.downgrade_hints
+        graph.metadata["nsfw_mode"] = nsfw_mode
 
         reporter.set_status(RfirJobStatus(
             job_id=job_id, state=RfirJobState.RUNNING, stage="asset_generation",
@@ -130,8 +154,11 @@ def run_rfir_job(job_id: str, payload: dict, reporter: JobStatusReporter) -> Non
         ))
 
         out_dir = _output_dir(job_id)
+        # Layer 3 (§7) — check_keyframe is injected rather than imported by
+        # the executor; see app/guardrails/runtime_guard.py for why.
         ctx = run_graph(graph, job_id=job_id, output_dir=str(out_dir),
-                         budget=budget, checkpoint_dir=_checkpoint_dir())
+                         budget=budget, checkpoint_dir=_checkpoint_dir(),
+                         keyframe_check=check_keyframe)
 
         metrics = ctx.to_metrics_dict()
         artifacts = {k: v for k, v in ctx.artifacts.items() if k == "output_mp4" or v.endswith(".mp4")}
@@ -150,6 +177,12 @@ def run_rfir_job(job_id: str, payload: dict, reporter: JobStatusReporter) -> Non
                     job_id, len(metrics.get("nodes", [])), metrics.get("total_gpu_ms", 0) / 1000.0,
                     metrics.get("cost_estimate_usd", 0.0))
 
+    except PlanBlocked as e:
+        logger.warning("job %s: plan guard blocked: %s", job_id, e)
+        reporter.set_status(RfirJobStatus(
+            job_id=job_id, state=RfirJobState.FAILED,
+            error=f"plan rejected by guardrail: {e}",
+        ))
     except CompileError as e:
         logger.warning("job %s: compile failed: %s", job_id, e)
         reporter.set_status(RfirJobStatus(job_id=job_id, state=RfirJobState.FAILED, error=str(e)))

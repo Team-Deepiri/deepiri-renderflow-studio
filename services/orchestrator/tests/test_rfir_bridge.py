@@ -55,3 +55,46 @@ def test_executor_engine_imports_without_ml_runtimes():
         "importing app.rfir.executor.engine pulled in torch at module level; "
         "keep torch imports lazy inside the RFIR ops"
     )
+
+
+
+WORKER_GUARDRAILS_DIR = ORCHESTRATOR_ROOT.parents[0] / "model-workers" / "app" / "guardrails"
+
+def test_guardrails_bridge_resolves_runtime_guard_to_model_workers():
+    from app.guardrails import runtime_guard
+
+    assert Path(runtime_guard.__file__).resolve() == (
+        WORKER_GUARDRAILS_DIR / "runtime_guard.py"
+    ).resolve()
+
+
+def test_guardrails_bridge_does_not_shadow_orchestrator_modules():
+    """The orchestrator's own directory stays first in __path__, so its
+    modules win if a worker-side file ever takes one of their names."""
+    import app.guardrails as pkg
+    from app.guardrails import config
+
+    assert Path(config.__file__).resolve().parent == (ORCHESTRATOR_ROOT / "app" / "guardrails")
+    assert pkg.__path__[0] == str(ORCHESTRATOR_ROOT / "app" / "guardrails")
+
+
+def test_runtime_guard_imports_without_ml_runtimes():
+    """Layer 3 is imported mid-render on the in-process path, so its
+    torch/transformers use has to stay lazy inside _nsfw_score.
+    """
+    import subprocess
+    import sys
+
+    probe = (
+        "import sys; "
+        "from app.guardrails import runtime_guard; "
+        "sys.exit(1 if 'torch' in sys.modules else 0)"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", probe], cwd=ORCHESTRATOR_ROOT, capture_output=True, text=True,
+    )
+
+    assert proc.returncode == 0, (
+        "importing app.guardrails.runtime_guard pulled in torch at module level "
+        f"(rc={proc.returncode}) {proc.stderr[-300:]}"
+    )

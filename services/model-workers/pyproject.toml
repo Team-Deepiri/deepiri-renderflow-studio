@@ -20,6 +20,7 @@ llama-cpp-python = ">=0.3.0"
 scikit-image = ">=0.22"
 sam2 = ">=1.0"
 torchvision = ">=0.19"
+transformers = ">=4.40"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
