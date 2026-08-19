@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { createInitialState, createHistoryStack } from "../state";
 import type { StudioState, HistoryStack } from "../state";
 import type { AIJob, Asset, Clip, Track } from "../backendApi";
-import { insertAcceptedClip, type AcceptApi } from "./aiAccept";
+import { insertAcceptedClip, ServerSyncError, type AcceptApi } from "./aiAccept";
 
 let state: StudioState;
 let history: HistoryStack;
@@ -147,7 +147,25 @@ describe("insertAcceptedClip", () => {
       createClip: async () => { throw new Error("500 sequence not found"); },
     });
 
-    await expect(insertAcceptedClip(state, history, JOB, api)).rejects.toThrow();
+    const err = await insertAcceptedClip(state, history, JOB, api).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ServerSyncError);
     expect(state.timeline.tracks[0].clips).toHaveLength(1);
+  });
+
+  it("ServerSyncError carries the clip so the UI can report what Export will miss", async () => {
+    // devLog is hidden in production; the status readout must be able to name
+    // the clip whose server-side copy is missing.
+    const { api } = fakeApi({
+      createClip: async () => { throw new Error("500 sequence not found"); },
+    });
+
+    const err = await insertAcceptedClip(state, history, JOB, api).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ServerSyncError);
+    const sync = err as ServerSyncError;
+    expect(sync.clip.label).toBe("AI · a calm lake");
+    expect(sync.message).toContain("AI · a calm lake");
+    expect(sync.message).toContain("500 sequence not found");
   });
 });

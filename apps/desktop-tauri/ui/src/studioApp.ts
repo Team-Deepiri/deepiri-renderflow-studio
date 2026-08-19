@@ -36,7 +36,7 @@ import {
   trimClip,
   insertAssetIntoVideoTrack,
 } from "./ops/clips";
-import { insertAcceptedClip } from "./ops/aiAccept";
+import { insertAcceptedClip, ServerSyncError } from "./ops/aiAccept";
 import { runExport } from "./ops/export";
 import { addMarker, jumpToNextMarker } from "./ops/markers";
 import {
@@ -1243,11 +1243,20 @@ export function bootstrapStudioApp(): void {
         if (clip) {
           jobStatusEl.textContent = `Status: ${job.status}\nAdded "${clip.label}" to the timeline.`;
           devLog(`Inserted accepted clip ${clip.label} at tick ${clip.inTick}`);
+        } else {
+          jobStatusEl.textContent = `Status: ${job.status}\nNo clip added — the job produced no asset.`;
+          devLog(`Accepted job ${state.lastJobId} carried no asset`);
         }
       } catch (e) {
-        // The clip is on the local timeline either way; only the server copy
-        // is missing, so say so instead of failing the whole accept.
-        devLog(`Clip saved locally but not on the server: ${String(e)}`);
+        // ServerSyncError means the clip is on the local timeline but its
+        // server-side copy is missing — devLog alone would hide that in
+        // production, and Export renders from the server's clip list, so
+        // the exported file would silently skip the clip. Say it in the UI.
+        const synced = e instanceof ServerSyncError ? e.clip : null;
+        jobStatusEl.textContent = synced
+          ? `Status: ${job.status}\nAdded "${synced.label}" to the timeline, but it wasn't saved on the server — Export will skip it. (${String(e)})`
+          : `Status: ${job.status}\nCouldn't add the clip to the timeline: ${String(e)}`;
+        devLog(`Clip insert problem: ${String(e)}`);
       }
       renderTimelineFull();
       updateInspector(state, inspectorEl);

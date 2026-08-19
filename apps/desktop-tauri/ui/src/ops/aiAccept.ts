@@ -23,10 +23,33 @@ export type AcceptApi = {
 };
 
 /**
+ * The clip reached the local timeline but its server-side copy could not be
+ * saved. Carries the clip so callers can tell the user exactly what Export
+ * will miss — render jobs render `list_clips_for_sequence`, not the editor's
+ * in-memory timeline, so an unsaved clip never reaches the exported file.
+ */
+export class ServerSyncError extends Error {
+  readonly cause: unknown;
+
+  constructor(
+    readonly clip: UiClip,
+    cause: unknown,
+  ) {
+    super(`Saved "${clip.label}" to the timeline but not the server: ${String(cause)}`);
+    this.name = "ServerSyncError";
+    this.cause = cause;
+  }
+}
+
+/**
  * Drops the clip an accepted AI job produced onto the timeline.
  *
  * Returns the inserted clip, or null when the job carries no asset (accept
  * failed to create one) or the project has no video track to hold it.
+ *
+ * Throws ServerSyncError when the local insert succeeds but persisting the
+ * clip on the sequence's video track fails — the clip stays on the timeline,
+ * but the caller must tell the user the server copy is missing.
  */
 export async function insertAcceptedClip(
   state: StudioState,
@@ -42,13 +65,17 @@ export async function insertAcceptedClip(
   if (!clip || !state.activeSequenceId) return clip;
 
   const trackId = await resolveVideoTrackId(state, api);
-  await api.createClip(
-    state.activeSequenceId,
-    trackId,
-    asset.id,
-    clip.inTick,
-    clip.outTick,
-  );
+  try {
+    await api.createClip(
+      state.activeSequenceId,
+      trackId,
+      asset.id,
+      clip.inTick,
+      clip.outTick,
+    );
+  } catch (e) {
+    throw new ServerSyncError(clip, e);
+  }
 
   return clip;
 }
