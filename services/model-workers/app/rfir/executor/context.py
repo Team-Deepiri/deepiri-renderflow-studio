@@ -5,6 +5,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from app.rfir.executor.shot_clips import ShotClip
+
 @dataclass
 class NodeMetric:
     node_id: str
@@ -43,6 +45,7 @@ class ExecutionContext:
     start_time: float = field(default_factory=time.monotonic)
     node_metrics: list[NodeMetric] = field(default_factory=list)
     artifacts: dict[str, str] = field(default_factory=dict)
+    shot_clips: dict[int, ShotClip] = field(default_factory=dict)
     escalations: list[dict[str, Any]] = field(default_factory=list)
     tier_distribution: dict[str, int] = field(default_factory=dict)
     downgrades: list[dict[str, Any]] = field(default_factory=list)
@@ -83,6 +86,17 @@ class ExecutionContext:
                 for m in self.node_metrics
             ],
             "artifacts": self.artifacts,
+            "shot_clips": {
+                str(k): {
+                    "shot_index": v.shot_index,
+                    "duration_sec": v.duration_sec,
+                    "fps": v.fps,
+                    "kind": v.kind,
+                    "paths": list(v.paths),
+                    "source_node": v.source_node,
+                }
+                for k, v in sorted(self.shot_clips.items())
+            },
             "escalations": self.escalations,
             "tier_distribution": self.tier_distribution,
             "downgrades": self.downgrades,

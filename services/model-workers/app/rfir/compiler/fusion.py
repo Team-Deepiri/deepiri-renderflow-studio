@@ -4,6 +4,7 @@ Spec reference: rfir-inference-engine-implementation.md §2.1
 """
 from __future__ import annotations
 
+from app.rfir.executor.shot_clips import shot_index_from_node_id
 from app.rfir.ir.types import RfirGraph, RfirNode
 
 T2I_OP = "t2i_keyframe"
@@ -65,12 +66,15 @@ def fuse(graph: RfirGraph) -> RfirGraph:
 
         prompts: list[str] = []
         outputs: dict[str, str] = {}
+        batch_shot_indices: list[int] = []
         for i, member in enumerate(members):
             tensor = _single_output_tensor(member)
             if tensor is None:
                 continue
             prompts.append(str(member.attrs.get("prompt", "")))
             outputs[f"image_{i}"] = tensor
+            idx = shot_index_from_node_id(member.id)
+            batch_shot_indices.append(idx if idx is not None else i)
 
         # Cost model: weights are shared across the batch, so VRAM tracks the
         # heaviest member; compute time grows sublinearly with batch size.
@@ -83,6 +87,7 @@ def fuse(graph: RfirGraph) -> RfirGraph:
             attrs={
                 "batch": True,
                 "batch_size": len(prompts),
+                "batch_shot_indices": batch_shot_indices,
                 "prompts": prompts,
                 "steps": steps,
                 "width": width,

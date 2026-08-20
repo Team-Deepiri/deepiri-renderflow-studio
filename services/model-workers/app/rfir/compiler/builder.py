@@ -57,14 +57,21 @@ def build(
     })
 
     tier_distribution: dict[str, int] = {}
+    shots_meta: list[dict] = []
     for shot in shot_list.shots:
         effective_tier = _cap_tier(shot.tier, budget.max_tier)
         effective_tier = routing.effective_max_tier(effective_tier)
         tier_distribution[effective_tier.value] = tier_distribution.get(effective_tier.value, 0) + 1
+        shots_meta.append({
+            "index": shot.index,
+            "duration_sec": shot.duration_sec,
+            "tier": effective_tier.value,
+        })
         _build_shot_subgraph(graph, shot, effective_tier)
 
     # Record the *effective* (post-cap) tier mix for job metrics (§12).
     graph.metadata["tier_distribution"] = tier_distribution
+    graph.metadata["shots"] = shots_meta
 
     graph.nodes.append(RfirNode(
         id="mux",
@@ -102,6 +109,12 @@ def _add_tensor(graph: RfirGraph, name: str, dtype: TensorDtype, lifetime: Tenso
     return name
 
 
+def _stamp_shot(node: RfirNode, shot: Shot) -> RfirNode:
+    node.attrs.setdefault("shot_index", shot.index)
+    node.attrs.setdefault("duration_sec", shot.duration_sec)
+    return node
+
+
 def _build_tier_a(graph: RfirGraph, prefix: str, shot: Shot) -> None:
     img = _add_tensor(graph, f"{prefix}_keyframe", TensorDtype.RGB_U8)
     depth = _add_tensor(graph, f"{prefix}_depth", TensorDtype.DEPTH_F32)
@@ -109,26 +122,26 @@ def _build_tier_a(graph: RfirGraph, prefix: str, shot: Shot) -> None:
     out = _add_tensor(graph, f"{prefix}_upscaled", TensorDtype.RGB_U8)
 
     graph.nodes.extend([
-        RfirNode(
+        _stamp_shot(RfirNode(
             id=f"{prefix}_t2i", op="t2i_keyframe",
             outputs={"image": img},
             attrs={"prompt": shot.description, "steps": 2},
             estimated_gpu_ms=800, vram_mb=6144,
-        ),
-        RfirNode(
+        ), shot),
+        _stamp_shot(RfirNode(
             id=f"{prefix}_depth", op="depth_estimate",
             inputs={"image": img}, outputs={"depth": depth},
             estimated_gpu_ms=50, vram_mb=1024,
-        ),
-        RfirNode(
+        ), shot),
+        _stamp_shot(RfirNode(
             id=f"{prefix}_parallax", op="vulkan_parallax",
             inputs={"image": img, "depth": depth}, outputs={"frames": frames},
             attrs={"camera": shot.camera.motion.value, "duration_sec": shot.duration_sec},
-        ),
-        RfirNode(
+        ), shot),
+        _stamp_shot(RfirNode(
             id=f"{prefix}_upscale", op="vulkan_upscale",
             inputs={"image": frames}, outputs={"image_out": out},
-        ),
+        ), shot),
     ])
 
 
@@ -139,28 +152,28 @@ def _build_tier_b(graph: RfirGraph, prefix: str, shot: Shot) -> None:
     out = _add_tensor(graph, f"{prefix}_upscaled", TensorDtype.RGB_U8)
 
     graph.nodes.extend([
-        RfirNode(
+        _stamp_shot(RfirNode(
             id=f"{prefix}_t2i_start", op="t2i_keyframe",
             outputs={"image": img_start},
             attrs={"prompt": shot.description, "steps": 2, "keyframe": "start"},
             estimated_gpu_ms=800, vram_mb=6144,
-        ),
-        RfirNode(
+        ), shot),
+        _stamp_shot(RfirNode(
             id=f"{prefix}_t2i_end", op="t2i_keyframe",
             outputs={"image": img_end},
             attrs={"prompt": shot.description, "steps": 2, "keyframe": "end"},
             estimated_gpu_ms=800, vram_mb=6144,
-        ),
-        RfirNode(
+        ), shot),
+        _stamp_shot(RfirNode(
             id=f"{prefix}_rife", op="rife_interpolate",
             inputs={"frame_start": img_start, "frame_end": img_end},
             outputs={"frames": interp},
             estimated_gpu_ms=200, vram_mb=2048,
-        ),
-        RfirNode(
+        ), shot),
+        _stamp_shot(RfirNode(
             id=f"{prefix}_upscale", op="vulkan_upscale",
             inputs={"image": interp}, outputs={"image_out": out},
-        ),
+        ), shot),
     ])
 
 
@@ -177,34 +190,34 @@ def _build_tier_c(graph: RfirGraph, prefix: str, shot: Shot) -> None:
 
     graph.nodes.extend([
         # Background plate (Tier A)
-        RfirNode(
+        _stamp_shot(RfirNode(
             id=f"{prefix}_bg_t2i", op="t2i_keyframe",
             outputs={"image": bg_img},
             attrs={"prompt": shot.description, "steps": 2},
             estimated_gpu_ms=800, vram_mb=6144,
-        ),
-        RfirNode(
+        ), shot),
+        _stamp_shot(RfirNode(
             id=f"{prefix}_bg_depth", op="depth_estimate",
             inputs={"image": bg_img}, outputs={"depth": bg_depth},
             estimated_gpu_ms=50, vram_mb=1024,
-        ),
-        RfirNode(
+        ), shot),
+        _stamp_shot(RfirNode(
             id=f"{prefix}_bg_parallax", op="vulkan_parallax",
             inputs={"image": bg_img, "depth": bg_depth}, outputs={"frames": bg_frames},
             attrs={"camera": shot.camera.motion.value, "duration_sec": shot.duration_sec},
-        ),
+        ), shot),
         # Subject ROI
-        RfirNode(
+        _stamp_shot(RfirNode(
             id=f"{prefix}_segment", op="segment_subject",
             inputs={"image": bg_img}, outputs={"mask": mask},
             estimated_gpu_ms=100, vram_mb=2048,
-        ),
-        RfirNode(
+        ), shot),
+        _stamp_shot(RfirNode(
             id=f"{prefix}_vae_enc", op="vae_encode",
             inputs={"image": bg_img}, outputs={"latent": latent_in},
             estimated_gpu_ms=30, vram_mb=1024,
-        ),
-        RfirNode(
+        ), shot),
+        _stamp_shot(RfirNode(
             id=f"{prefix}_t2v", op="sparse_t2v_window",
             inputs={"latent": latent_in, "mask": mask, "image": bg_img},
             outputs={"latent_out": latent_out},
@@ -216,22 +229,23 @@ def _build_tier_c(graph: RfirGraph, prefix: str, shot: Shot) -> None:
                 "num_frames": 21,
             },
             estimated_gpu_ms=3000, vram_mb=8192,
-        ),
-        RfirNode(
+        ), shot),
+        _stamp_shot(RfirNode(
             id=f"{prefix}_vae_dec", op="vae_decode",
             inputs={"latent": latent_out}, outputs={"image": fg_frames},
+            attrs={"register_clip": False},
             estimated_gpu_ms=30, vram_mb=1024,
-        ),
+        ), shot),
         # Composite
-        RfirNode(
+        _stamp_shot(RfirNode(
             id=f"{prefix}_comp", op="vulkan_composite",
             inputs={"foreground": fg_frames, "background": bg_frames, "mask": mask},
             outputs={"image": composite},
-        ),
-        RfirNode(
+        ), shot),
+        _stamp_shot(RfirNode(
             id=f"{prefix}_upscale", op="vulkan_upscale",
             inputs={"image": composite}, outputs={"image_out": out},
-        ),
+        ), shot),
     ])
 
 
@@ -247,18 +261,18 @@ def _build_tier_d(graph: RfirGraph, prefix: str, shot: Shot) -> None:
     out = _add_tensor(graph, f"{prefix}_upscaled", TensorDtype.RGB_U8)
 
     graph.nodes.extend([
-        RfirNode(
+        _stamp_shot(RfirNode(
             id=f"{prefix}_t2i", op="t2i_keyframe",
             outputs={"image": img},
             attrs={"prompt": shot.description, "steps": 2},
             estimated_gpu_ms=800, vram_mb=6144,
-        ),
-        RfirNode(
+        ), shot),
+        _stamp_shot(RfirNode(
             id=f"{prefix}_vae_enc", op="vae_encode",
             inputs={"image": img}, outputs={"latent": latent_in},
             estimated_gpu_ms=30, vram_mb=1024,
-        ),
-        RfirNode(
+        ), shot),
+        _stamp_shot(RfirNode(
             id=f"{prefix}_t2v", op="sparse_t2v_window",
             inputs={"latent": latent_in, "mask": f"{prefix}_dummy_mask", "image": img},
             outputs={"latent_out": latent_out},
@@ -272,16 +286,16 @@ def _build_tier_d(graph: RfirGraph, prefix: str, shot: Shot) -> None:
                 "duration_sec": capped_duration,
             },
             estimated_gpu_ms=5000, vram_mb=8192,
-        ),
-        RfirNode(
+        ), shot),
+        _stamp_shot(RfirNode(
             id=f"{prefix}_vae_dec", op="vae_decode",
             inputs={"latent": latent_out}, outputs={"image": frames},
             estimated_gpu_ms=30, vram_mb=1024,
-        ),
-        RfirNode(
+        ), shot),
+        _stamp_shot(RfirNode(
             id=f"{prefix}_upscale", op="vulkan_upscale",
             inputs={"image": frames}, outputs={"image_out": out},
-        ),
+        ), shot),
     ])
     # Tier D needs a full-frame mask placeholder
     _add_tensor(graph, f"{prefix}_dummy_mask", TensorDtype.MASK_U8)

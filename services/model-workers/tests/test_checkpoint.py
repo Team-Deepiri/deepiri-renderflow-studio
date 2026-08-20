@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from app.rfir.checkpoint import Checkpoint, save, load, delete, checkpoint_uri
+from app.rfir.executor.shot_clips import ShotClip
 
 
 def _sample_checkpoint() -> Checkpoint:
@@ -15,6 +16,12 @@ def _sample_checkpoint() -> Checkpoint:
         spent_gpu_seconds=14.5,
         node_cursor=8,
         artifacts={"s0_t2i": "/out/s0_t2i.png", "s1_rife_0": "/out/s1_rife_0.png"},
+        shot_clips={
+            0: ShotClip(
+                shot_index=0, duration_sec=5.0, fps=24, kind="still",
+                paths=["/out/s0_t2i.png"], source_node="s0_t2i",
+            ),
+        },
         tier_distribution={"A": 2, "B": 1},
         downgrades=[{"node_id": "s1_t2i", "op": "t2i_keyframe", "trigger": "gpu_time",
                      "reason": "downgraded_to_fit", "before_ms": 800, "after_ms": 400}],
@@ -34,6 +41,8 @@ def test_to_dict_and_from_dict():
     assert restored.spent_gpu_seconds == cp.spent_gpu_seconds
     assert restored.node_cursor == cp.node_cursor
     assert restored.artifacts == cp.artifacts
+    assert restored.shot_clips[0].paths == cp.shot_clips[0].paths
+    assert restored.shot_clips[0].source_node == "s0_t2i"
     assert restored.tier_distribution == cp.tier_distribution
     assert restored.downgrades == cp.downgrades
 

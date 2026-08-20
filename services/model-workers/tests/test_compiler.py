@@ -180,3 +180,17 @@ def test_schedule_barrier_between_cuda_and_vulkan():
     graph = build(_3_shot_list())
     schedule = schedule_with_barriers(graph)
     assert any("cuda→vulkan" in b for b in schedule)
+
+
+def test_tier_c_vae_decode_does_not_register_clip():
+    graph = build(_single_tier_c())
+    dec = next(n for n in graph.nodes if n.op == "vae_decode")
+    assert dec.attrs.get("register_clip") is False
+
+
+def test_tier_d_vae_decode_registers_clip_by_default():
+    graph = build(_single_tier_d(), budget=InferenceBudget(max_tier=Tier.D))
+    dec = next(n for n in graph.nodes if n.op == "vae_decode")
+    assert dec.attrs.get("register_clip", True) is True
+    assert "register_clip" not in dec.attrs
+

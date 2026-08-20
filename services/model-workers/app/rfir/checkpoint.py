@@ -24,7 +24,29 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from app.rfir.executor.shot_clips import ShotClip
+
 logger = logging.getLogger(__name__)
+
+
+def _shot_clips_from_data(raw: Any) -> dict[int, ShotClip]:
+    clips: dict[int, ShotClip] = {}
+    if not isinstance(raw, dict):
+        return clips
+    for key, value in raw.items():
+        idx = int(key)
+        if isinstance(value, ShotClip):
+            clips[idx] = value
+        elif isinstance(value, dict):
+            clips[idx] = ShotClip(
+                shot_index=int(value.get("shot_index", idx)),
+                duration_sec=float(value.get("duration_sec", 5.0)),
+                fps=int(value.get("fps", 24)),
+                kind=str(value.get("kind", "frames")),
+                paths=list(value.get("paths", [])),
+                source_node=str(value.get("source_node", "")),
+            )
+    return clips
 
 
 @dataclass
@@ -34,6 +56,7 @@ class Checkpoint:
     spent_gpu_seconds: float
     node_cursor: int
     artifacts: dict[str, str] = field(default_factory=dict)
+    shot_clips: dict = field(default_factory=dict)
     tier_distribution: dict[str, int] = field(default_factory=dict)
     downgrades: list[dict[str, Any]] = field(default_factory=list)
 
@@ -48,6 +71,7 @@ class Checkpoint:
             spent_gpu_seconds=data["spent_gpu_seconds"],
             node_cursor=data["node_cursor"],
             artifacts=data.get("artifacts", {}),
+            shot_clips=_shot_clips_from_data(data.get("shot_clips", {})),
             tier_distribution=data.get("tier_distribution", {}),
             downgrades=data.get("downgrades", []),
         )

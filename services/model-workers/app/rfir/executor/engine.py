@@ -18,6 +18,8 @@ from app.rfir.budget import BudgetGovernor
 from app.rfir.checkpoint import Checkpoint, checkpoint_uri, save as save_checkpoint, load as load_checkpoint, delete as delete_checkpoint
 from app.rfir.compiler.scheduler import topological_sort
 from app.rfir.executor.context import ExecutionContext, decide_escalation
+from app.rfir.executor.ffmpeg_mux import assemble_output_mp4
+from app.rfir.executor.shot_clips import register_shot_clip, shot_index_for_node, shot_index_from_node_id
 from app.rfir.ir.types import InferenceBudget, RfirGraph, RfirNode
 from app.rfir.models.loader import detect_device, reclaim_accelerator_memory, unload_all, unload_model
 from app.rfir.ltc import LatentTemporalCache
@@ -90,6 +92,7 @@ def run_graph(
     ctx.tier_distribution = dict(graph.metadata.get("tier_distribution", {}))
     ctx.nsfw_mode = graph.metadata.get("nsfw_mode", "block")
     ctx.keyframe_check = keyframe_check
+    ctx._shots_meta = graph.metadata.get("shots")
     arena = TensorArena()
     ltc = LatentTemporalCache()
     ctx._ltc = ltc
@@ -111,6 +114,8 @@ def run_graph(
             start_cursor = cp.node_cursor
             ctx.artifacts.update(cp.artifacts)
             ctx.downgrades = cp.downgrades
+            if cp.shot_clips:
+                ctx.shot_clips.update(cp.shot_clips)
             if budget is not None:
                 budget.spent_gpu_seconds = cp.spent_gpu_seconds
             logger.info("Resuming job %s from node %d/%d (%.1fs GPU spent)",
@@ -149,7 +154,7 @@ def run_graph(
 
             # Checkpoint at shot boundaries (upscale is the last node per shot).
             if cp_uri and node.op in ("vulkan_upscale", "ffmpeg_mux"):
-                shot_idx = _shot_index_from_node_id(node_id)
+                shot_idx = shot_index_from_node_id(node_id) or -1
                 spent = budget.spent_gpu_seconds if budget else 0.0
                 cp = Checkpoint(
                     job_id=job_id,
@@ -157,6 +162,7 @@ def run_graph(
                     spent_gpu_seconds=spent,
                     node_cursor=cursor + 1,
                     artifacts=dict(ctx.artifacts),
+                    shot_clips=dict(ctx.shot_clips),
                     tier_distribution=ctx.tier_distribution,
                     downgrades=governor.metrics()["downgrades"] if governor else [],
                 )
@@ -216,6 +222,9 @@ def _run_t2i_keyframe(node: RfirNode, arena: TensorArena, ctx: ExecutionContext,
             img_path = out_path / f"{node.id}_{i}.png"
             image.save(img_path)
             ctx.artifacts[f"{node.id}_{i}"] = str(img_path)
+            shot_idx = shot_index_for_node(node, batch_index=i)
+            if shot_idx is not None:
+                register_shot_clip(ctx, shot_idx, [str(img_path)], node, kind="still")
         return
 
     prompt = node.attrs.get("prompt", "")
@@ -232,6 +241,9 @@ def _run_t2i_keyframe(node: RfirNode, arena: TensorArena, ctx: ExecutionContext,
     img_path = out_path / f"{node.id}.png"
     image.save(img_path)
     ctx.artifacts[node.id] = str(img_path)
+    shot_idx = shot_index_for_node(node)
+    if shot_idx is not None:
+        register_shot_clip(ctx, shot_idx, [str(img_path)], node, kind="still")
 
 
 def _run_depth_estimate(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
@@ -283,6 +295,11 @@ def _run_rife_interpolate(node: RfirNode, arena: TensorArena, ctx: ExecutionCont
         frame.save(frame_path)
         ctx.artifacts[f"{node.id}_{i}"] = str(frame_path)
 
+    shot_idx = shot_index_for_node(node)
+    if shot_idx is not None:
+        paths = [str(out_path / f"{node.id}_{i}.png") for i in range(len(frames))]
+        register_shot_clip(ctx, shot_idx, paths, node, kind="frames")
+
     # SSIM quality gate (§2.6)
     verify_t = node.attrs.get("verify_keyframe")
     if verify_t and arena.has(verify_t) and len(frames) >= 3:
@@ -323,43 +340,10 @@ def _run_vulkan_upscale_stub(node: RfirNode, arena: TensorArena, ctx: ExecutionC
 
 
 def _run_ffmpeg_mux(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
-    """Create an MP4 from keyframe images using FFmpeg zoompan (Ken Burns effect)."""
-    keyframe_pngs = [v for k, v in sorted(ctx.artifacts.items()) if v.endswith(".png") and "depth" not in k]
-
-    if not keyframe_pngs:
-        logger.warning("ffmpeg_mux: no keyframe PNGs found")
-        return
-
-    output_mp4 = out_path / "output.mp4"
-
-    import subprocess
-    import shutil
-
-    if not shutil.which("ffmpeg"):
-        logger.error("ffmpeg not found in PATH")
-        return
-
-    first_png = keyframe_pngs[0]
-    duration = 5
-    fps = 24
-
-    cmd = [
-        "ffmpeg", "-y",
-        "-loop", "1", "-i", first_png,
-        "-vf", f"zoompan=z='min(zoom+0.001,1.2)':d={duration * fps}:s=1920x1080:fps={fps}",
-        "-t", str(duration),
-        "-c:v", "libx264", "-pix_fmt", "yuv420p",
-        str(output_mp4),
-    ]
-
-    try:
-        subprocess.run(cmd, capture_output=True, check=True, timeout=60)
-        ctx.artifacts["output_mp4"] = str(output_mp4)
-        logger.info("ffmpeg_mux: created %s", output_mp4)
-    except subprocess.CalledProcessError as e:
-        logger.error("ffmpeg_mux failed: %s", e.stderr.decode()[:200] if e.stderr else str(e))
-    except FileNotFoundError:
-        logger.error("ffmpeg not found")
+    """Stitch ``ctx.shot_clips`` in shot-index order into ``output.mp4``."""
+    _ = (node, arena)
+    ctx.artifacts["output_mp4"] = str(assemble_output_mp4(ctx.shot_clips, out_path))
+    logger.info("ffmpeg_mux: created %s from %d shot(s)", ctx.artifacts["output_mp4"], len(ctx.shot_clips))
 
 
 def _run_segment_subject(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
@@ -432,17 +416,28 @@ def _run_vae_decode(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, o
             roi_meta[tensor_name] = src_meta
 
     if isinstance(decoded, list):
+        frame_paths: list[str] = []
         for i, frame in enumerate(decoded):
             if isinstance(frame, Image.Image):
                 frame_path = out_path / f"{node.id}_{i}.png"
                 frame.save(frame_path)
                 ctx.artifacts[f"{node.id}_{i}"] = str(frame_path)
+                frame_paths.append(str(frame_path))
         if decoded and isinstance(decoded[0], Image.Image):
             ctx.artifacts[node.id] = ctx.artifacts.get(f"{node.id}_0", "")
+        # Tier C: register_clip=False — mux must wait for a successful composite.
+        if node.attrs.get("register_clip", True):
+            shot_idx = shot_index_for_node(node)
+            if shot_idx is not None and frame_paths:
+                register_shot_clip(ctx, shot_idx, frame_paths, node, kind="frames")
     elif isinstance(decoded, Image.Image):
         img_path = out_path / f"{node.id}.png"
         decoded.save(img_path)
         ctx.artifacts[node.id] = str(img_path)
+        if node.attrs.get("register_clip", True):
+            shot_idx = shot_index_for_node(node)
+            if shot_idx is not None:
+                register_shot_clip(ctx, shot_idx, [str(img_path)], node, kind="still")
 
     # Arena already holds PIL outputs; reclaim GPU cache for the next op/tensor.
     reclaim_accelerator_memory()
@@ -547,6 +542,88 @@ def _run_sparse_t2v_window(node: RfirNode, arena: TensorArena, ctx: ExecutionCon
             roi_meta[node.id] = roi_meta[tensor_name]
 
 
+def _pil_frames(value: Any) -> list[Any] | None:
+    """Normalize a single PIL image or a list into a list. None if unusable."""
+    from PIL import Image
+
+    if isinstance(value, Image.Image):
+        return [value]
+    if isinstance(value, list) and value:
+        return value
+    return None
+
+
+def _bg_plate_at(bg_frames: list[Any], index: int):
+    from PIL import Image
+
+    if index < len(bg_frames) and isinstance(bg_frames[index], Image.Image):
+        return bg_frames[index]
+    first = bg_frames[0]
+    return first if isinstance(first, Image.Image) else None
+
+
+def _expected_composite_size(node: RfirNode, plate) -> tuple[int, int]:
+    """Plate size, optionally overridden by node width/height attrs."""
+    width = node.attrs.get("width")
+    height = node.attrs.get("height")
+    if width is not None and height is not None:
+        return (int(width), int(height))
+    return plate.size
+
+
+def _persist_composite_shot(
+    node: RfirNode,
+    ctx: ExecutionContext,
+    out_path: Path,
+    frames: list[Any],
+    expected_size: tuple[int, int],
+) -> None:
+    """Write every composited frame. On any failure, delete partial files and
+    do not record artifacts — a failed composite must not look like a shot.
+    """
+    from PIL import Image
+
+    written: list[Path] = []
+    artifact_keys: list[str] = []
+    try:
+        for i, frame in enumerate(frames):
+            if not isinstance(frame, Image.Image) or frame.size != expected_size:
+                raise ValueError(
+                    f"frame {i} size {getattr(frame, 'size', None)} != {expected_size}"
+                )
+            dest = out_path / f"{node.id}_{i}.png"
+            frame.save(dest)
+            if not dest.is_file() or dest.stat().st_size <= 0:
+                raise OSError(f"composite PNG missing or empty: {dest}")
+            written.append(dest)
+            key = f"{node.id}_{i}"
+            ctx.artifacts[key] = str(dest)
+            artifact_keys.append(key)
+        ctx.artifacts[node.id] = str(written[0])
+        shot_idx = shot_index_for_node(node)
+        if shot_idx is not None:
+            register_shot_clip(
+                ctx,
+                shot_idx,
+                [str(p) for p in written],
+                node,
+                kind="frames" if len(written) > 1 else "still",
+            )
+    except Exception as e:
+        logger.error("vulkan_composite: persist failed for %s (%s) — dropping shot files", node.id, e)
+        for key in artifact_keys:
+            ctx.artifacts.pop(key, None)
+        ctx.artifacts.pop(node.id, None)
+        for path in written:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("vulkan_composite: could not remove partial file %s", path)
+        raise RuntimeError(
+            f"vulkan_composite: {node.id}: decoded frames could not be composited: persist failed ({e})"
+        ) from e
+
+
 def _run_vulkan_composite(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
     """Tier C: composite foreground over background using mask (PIL fallback).
 
@@ -554,6 +631,10 @@ def _run_vulkan_composite(node: RfirNode, arena: TensorArena, ctx: ExecutionCont
 
     When FG frames are ROI-sized (post ``vae_decode`` of sparse T2V latents),
     paste via ``_paste_roi`` using bbox from the T2V step (or re-derived mask).
+
+    Persists every composited frame as ``{node.id}_{i}.png``. Missing inputs,
+    empty sequences, or plate-size mismatches raise: decoded frames that cannot
+    be composited are a failed Tier C shot, not a silent still.
     """
     from PIL import Image
 
@@ -565,12 +646,18 @@ def _run_vulkan_composite(node: RfirNode, arena: TensorArena, ctx: ExecutionCont
     bg = arena.get(bg_tensor) if arena.has(bg_tensor) else None
     mask = arena.get(mask_tensor) if arena.has(mask_tensor) else None
 
-    if fg is None or bg is None:
-        logger.warning("vulkan_composite: missing foreground or background, passing through")
+    def _fail(reason: str) -> None:
         result = fg or bg
         for tensor_name in node.outputs.values():
             arena.put(tensor_name, result)
-        return
+        raise RuntimeError(
+            f"vulkan_composite: {node.id}: decoded frames could not be composited: {reason}"
+        )
+
+    fg_frames = _pil_frames(fg)
+    bg_frames = _pil_frames(bg)
+    if fg_frames is None or bg_frames is None:
+        _fail("missing foreground or background")
 
     roi_meta = getattr(ctx, "_roi_meta", {}) or {}
     # Decode output tensor may be keyed; also try shot prefix from node id.
@@ -580,8 +667,6 @@ def _run_vulkan_composite(node: RfirNode, arena: TensorArena, ctx: ExecutionCont
         meta = roi_meta.get(f"{shot_prefix}_t2v") or roi_meta.get(f"{shot_prefix}_latent_out")
 
     def _composite_one(frame: Image.Image, bg_img: Image.Image) -> Image.Image:
-        if not isinstance(frame, Image.Image):
-            return frame
         if isinstance(mask, np.ndarray) and frame.size != bg_img.size:
             bbox = meta["bbox"] if meta and "bbox" in meta else None
             if bbox is None:
@@ -593,36 +678,25 @@ def _run_vulkan_composite(node: RfirNode, arena: TensorArena, ctx: ExecutionCont
             return Image.composite(frame_resized, bg_img, mask_pil)
         return frame.resize(bg_img.size) if frame.size != bg_img.size else frame
 
-    # fg may be a list of frames (from vae_decode) or a single image.
-    if isinstance(fg, list):
-        bg_img = bg if isinstance(bg, Image.Image) else bg
-        composited = [_composite_one(frame, bg_img) for frame in fg]
+    plate0 = _bg_plate_at(bg_frames, 0)
+    if plate0 is None:
+        _fail("background is not a PIL image")
 
-        for tensor_name in node.outputs.values():
-            arena.put(tensor_name, composited)
-        if composited and isinstance(composited[0], Image.Image):
-            comp_path = out_path / f"{node.id}_0.png"
-            composited[0].save(comp_path)
-            ctx.artifacts[node.id] = str(comp_path)
-    elif isinstance(fg, Image.Image):
-        bg_img = bg if isinstance(bg, Image.Image) else fg
-        result = _composite_one(fg, bg_img)
-        for tensor_name in node.outputs.values():
-            arena.put(tensor_name, result)
-        comp_path = out_path / f"{node.id}.png"
-        result.save(comp_path)
-        ctx.artifacts[node.id] = str(comp_path)
-    else:
-        for tensor_name in node.outputs.values():
-            arena.put(tensor_name, fg)
+    expected_size = _expected_composite_size(node, plate0)
+    composited: list[Any] = []
+    for i, frame in enumerate(fg_frames):
+        bg_img = _bg_plate_at(bg_frames, i)
+        if not isinstance(frame, Image.Image) or bg_img is None:
+            _fail(f"invalid frame {i}")
+        out = _composite_one(frame, bg_img)
+        if not isinstance(out, Image.Image) or out.size != expected_size:
+            _fail(f"frame {i} size {getattr(out, 'size', None)} != expected {expected_size}")
+        composited.append(out)
 
-
-def _shot_index_from_node_id(node_id: str) -> int:
-    """Extract the shot index from a node ID like 's2_upscale' → 2."""
-    prefix = node_id.split("_")[0]
-    if prefix.startswith("s") and prefix[1:].isdigit():
-        return int(prefix[1:])
-    return -1
+    result: Any = composited[0] if len(composited) == 1 else composited
+    for tensor_name in node.outputs.values():
+        arena.put(tensor_name, result)
+    _persist_composite_shot(node, ctx, out_path, composited, expected_size)
 
 
 def _noop(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
