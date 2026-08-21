@@ -161,9 +161,22 @@ def catalog_bytes_fp16(include_t2i_fallback: bool = True) -> int:
 def fetch_priority(missing: list[FetchItem]) -> list[FetchItem]:
     """Demand-priority pop: current-job misses first, then largest first.
 
-    Random pop (the 'popcorn' metaphor applied to weights) is strictly worse
-    for the job that is blocked on disk. Prefetch of roles *not* in the current
-    job may be random or planner-conditioned; that is a separate queue.
+    This is RFIR's popcorn queue, applied to *roles on disk*, not denoising
+    timesteps. A popcorn queue is a to-do list that pops the most urgent item,
+    with optional weighted-random exploration for work that is *not* blocking
+    the current job:
+
+      Priority(role) = I(in current graph) * size + residual_miss_pressure
+      P(pop r) ∝ exp(Priority(r) / T)   # T→0 is greedy; T>0 explores prefetch
+
+    After a fetch, if the dir is still incomplete you re-push it with higher
+    pressure (the counter-loop). Kernels that are already "cooked" (dir present
+    and non-empty) leave the queue.
+
+    Do not permute diffusion timesteps this way. The probability-flow ODE is
+    dx/dt = f(x, t): time-inhomogeneous, so order is the integral, not a
+    suggestion. Adaptive *step size* (DPM-Solver++) is legitimate; random
+    *step order* is not. Popcorn lives here, in fetch_priority.
     """
     return sorted(
         missing,
