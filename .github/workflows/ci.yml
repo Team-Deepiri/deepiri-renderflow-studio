@@ -3,8 +3,11 @@ name: CI Workflow
 on:
   pull_request:
     branches: [main, dev]
-  push:
-    branches: [main, dev]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '.gitignore'
+      - 'LICENSE*'
   workflow_dispatch:
 
 permissions:
@@ -16,6 +19,7 @@ concurrency:
 
 jobs:
   rust-core:
+    timeout-minutes: 20
     name: Rust core
     runs-on: ubuntu-latest
 
@@ -41,6 +45,7 @@ jobs:
         run: cargo test --workspace --all-features
 
   desktop-tauri:
+    timeout-minutes: 20
     name: Desktop Tauri
     runs-on: ubuntu-latest
 
@@ -98,6 +103,7 @@ jobs:
         run: cargo test --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml --all-targets
 
   python:
+    timeout-minutes: 20
     name: Python services
     runs-on: ubuntu-latest
 
@@ -133,6 +139,7 @@ jobs:
         working-directory: lib/renderflow_queue
 
   docker:
+    timeout-minutes: 20
     name: Docker build
     runs-on: ubuntu-latest
 
