@@ -11,6 +11,17 @@ This is your **single entry point**. Read this first, then the three deep specs:
 | [rfir-inference-engine-design.md](./rfir-inference-engine-design.md) | **What** we are building and **why** (CFSV + RFIR) |
 | [rfir-inference-engine-implementation.md](./rfir-inference-engine-implementation.md) | **How** to build RFIR — phases, files, checkboxes |
 | [guardrails-implementation.md](./guardrails-implementation.md) | **How** to build safety/ethics/legal gates |
+| [2026-08-21-rfir-role-residency-design.md](../superpowers/specs/2026-08-21-rfir-role-residency-design.md) | **Disk:** stop prepaid 30 GB installs (working-set math) |
+| [2026-08-21-rfir-role-residency.md](../superpowers/plans/2026-08-21-rfir-role-residency.md) | **How** to implement role residency |
+
+**Start here for the 30 GB problem:** run the math tests **before** writing fetch/LRU/quantization:
+
+```bash
+cd services/model-workers
+poetry run pytest tests/test_residency_math.py -v
+```
+
+13 tests, no GPU. Green suite is the gate for the implementation plan. Do not implement chimera-merges or random diffusion timestep order — those guesses are refuted in the spec.
 
 ---
 
