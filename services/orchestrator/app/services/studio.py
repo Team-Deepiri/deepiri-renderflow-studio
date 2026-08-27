@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+import shutil
 from typing import Any
 from uuid import UUID
 
 from app import db_repos, memory_store
+from app.paths import data_subdir, resolve_within_data_dir
+
+logger = logging.getLogger(__name__)
 
 
 def bootstrap() -> None:
@@ -191,7 +196,47 @@ def update_project(
     return row
 
 
+_TERMINAL_JOB_STATUSES = frozenset(
+    {"cancelled", "failed", "rejected", "accepted", "committed"}
+)
+
+
+def _cancel_project_jobs(project_id: UUID) -> list[UUID]:
+    """Stop this project's AI jobs and return every job id it owns."""
+    from app.job_store import JobStatus, store
+    from app.worker_loop import cancel_job
+
+    job_ids: list[UUID] = []
+    try:
+        for rec in store.list_by_project(project_id):
+            job_ids.append(rec.id)
+            if rec.status.value in _TERMINAL_JOB_STATUSES:
+                continue
+            cancel_job(str(rec.id))
+            store.update_status(rec.id, JobStatus.CANCELLED, stages=["cancelled"])
+    except Exception as e:
+        logger.warning("_cancel_project_jobs: %s", e)
+    return job_ids
+
+
+def _purge_project_files(project_id: UUID, job_ids: list[UUID]) -> None:
+    """Delete the project's generated media from disk."""
+    for asset in memory_store.asset_list(project_id):
+        meta = asset.get("meta_jsonb") or {}
+        for path in (asset.get("uri"), meta.get("proxy_path")):
+            if not path:
+                continue
+            try:
+                resolve_within_data_dir(str(path)).unlink(missing_ok=True)
+            except (ValueError, OSError):
+                pass  # outside the data dir, or already gone — leave it alone
+    for job_id in job_ids:
+        shutil.rmtree(data_subdir("render_outputs") / str(job_id), ignore_errors=True)
+
+
 def delete_project(project_id: UUID) -> None:
+    job_ids = _cancel_project_jobs(project_id)
+    _purge_project_files(project_id, job_ids)
     db_repos.delete_project(project_id)
     memory_store.project_delete(project_id)
 
