@@ -224,6 +224,18 @@ pre{background:#0f131b;border:1px solid var(--border);border-radius:8px;padding:
 .modal-close{background:none;border:none;color:var(--text-dim);font-size:20px;cursor:pointer;padding:0 4px;line-height:1}
 .modal-close:hover{color:var(--text)}
 .modal-sub{color:var(--text-dim);font-size:12px;margin:0 0 16px}
+.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+.modal-error{background:#0f131b;border:1px solid var(--border);border-radius:8px;padding:10px;
+  font-family:ui-monospace,monospace;font-size:11px;color:var(--text-dim);
+  max-height:120px;overflow:auto;word-break:break-word;white-space:pre-wrap}
+/* toasts — stacked bottom-right, below the modal layer */
+#toast-host{position:fixed;right:16px;bottom:16px;z-index:900;display:flex;
+  flex-direction:column;gap:8px;align-items:flex-end;pointer-events:none}
+.toast{pointer-events:auto;cursor:pointer;max-width:380px;padding:10px 14px;border-radius:8px;
+  font-size:12px;border:1px solid var(--border);background:#181c24;color:var(--text);
+  box-shadow:0 10px 30px rgba(0,0,0,0.5);word-break:break-word}
+.toast-ok{border-color:#18b487}
+.toast-error{border-color:#ff6b6b}
 .template-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
 .template-card{background:#0f131b;border:1px solid var(--border);border-radius:10px;padding:14px;cursor:pointer;transition:border-color 0.15s,background 0.15s}
 .template-card:hover{border-color:var(--accent);background:rgba(77,125,255,0.07)}
@@ -424,6 +436,24 @@ function buildDom(root: HTMLElement): void {
     <div class="template-grid" id="template-grid"></div>
   </div>
 </div>
+
+<!-- SAVE FAILURE (hidden by default). Deliberately has no × and no backdrop
+     dismiss: leaving has to be an explicit choice between the two buttons. -->
+<div id="save-error-overlay" class="modal-overlay" style="display:none">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Couldn't save your timeline</h2>
+    </div>
+    <p class="modal-sub" id="save-error-stake"></p>
+    <div class="modal-error" id="save-error-detail"></div>
+    <div class="modal-actions">
+      <button class="btn subtle" id="btn-leave-anyway" type="button">Leave anyway</button>
+      <button class="btn" id="btn-return-to-project" type="button">Return to project</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast-host"></div>
 `;
   renderTemplateGrid();
 }
@@ -513,10 +543,26 @@ export function bootstrapStudioApp(): void {
     devtoolsOut.scrollTop = devtoolsOut.scrollHeight;
   }
 
+  // ── Toasts ──
+  const toastHost = $("#toast-host");
+
+  /** Transient message, bottom-right. Click to dismiss early. */
+  function toast(message: string, kind: "ok" | "error" = "ok"): void {
+    const el = document.createElement("div");
+    el.className = `toast toast-${kind}`;
+    el.textContent = message;
+    const remove = () => el.remove();
+    el.addEventListener("click", remove);
+    toastHost.appendChild(el);
+    // Errors linger: they usually need reading, and often acting on.
+    window.setTimeout(remove, kind === "error" ? 8000 : 3000);
+  }
+
   // -- Timeline Persistence --
-  async function persistTimeline(): Promise<void> {
+  /** Returns null on success, or the error text so callers can surface it. */
+  async function persistTimeline(): Promise<string | null> {
     const sid = state.activeSequenceId;
-    if (!sid) return;
+    if (!sid) return null;
     const clips = state.timeline.tracks.flatMap((t) =>
       t.serverId
         ? t.clips
@@ -533,9 +579,37 @@ export function bootstrapStudioApp(): void {
     try {
       await orchestratorReplaceClips(sid, clips);
       devLog(`Saved ${clips.length} clip(s)`);
+      return null;
     } catch (e) {
       devLog(`Save timeline error: ${String(e)}`);
+      return String(e);
     }
+  }
+
+  /** How many clips a failed save would take with it — the stake, stated. */
+  function unsavedClipCount(): number {
+    return state.timeline.tracks.reduce(
+      (n, t) => n + (t.serverId ? t.clips.filter((c) => c.assetId).length : 0),
+      0,
+    );
+  }
+
+  function showSaveFailedModal(error: string, onLeave: () => void): void {
+    const overlay = $("#save-error-overlay");
+    const n = unsavedClipCount();
+    $("#save-error-stake").textContent =
+      `${n} clip${n === 1 ? "" : "s"} ${n === 1 ? "has" : "have"} not been saved. ` +
+      `Leaving now discards ${n === 1 ? "it" : "them"}.`;
+    $("#save-error-detail").textContent = error;
+
+    const close = () => (overlay.style.display = "none");
+    ($("#btn-return-to-project") as HTMLButtonElement).onclick = close;
+    ($("#btn-leave-anyway") as HTMLButtonElement).onclick = () => {
+      devLog(`Left project with ${n} unsaved clip(s) discarded`);
+      close();
+      onLeave();
+    };
+    overlay.style.display = "";
   }
 
   // ── Navigation ──
@@ -544,7 +618,6 @@ export function bootstrapStudioApp(): void {
     if (view === "home") {
       homeView.style.display = "";
       studioView.style.display = "none";
-      void persistTimeline(); // must run before the ids below are cleared
       state.activeProjectId = null;
       state.activeSequenceId = null;
       resetProjectView();
@@ -553,6 +626,18 @@ export function bootstrapStudioApp(): void {
       homeView.style.display = "none";
       studioView.style.display = "";
     }
+  }
+
+  /**
+   * Saving has to finish before navigateTo runs
+   */
+  async function goHome(): Promise<void> {
+    const err = await persistTimeline();
+    if (err) {
+      showSaveFailedModal(err, () => navigateTo("home"));
+      return;
+    }
+    navigateTo("home");
   }
 
   /**
@@ -617,7 +702,6 @@ export function bootstrapStudioApp(): void {
   // ── Open a project → create default sequence if needed ──
   async function openProject(project: Project): Promise<void> {
     const pid = project.id;
-    void persistTimeline();
     resetProjectView();
     state.activeProjectId = pid;
     state.timeline.fps = project.fps_num / project.fps_den;
@@ -1043,7 +1127,7 @@ export function bootstrapStudioApp(): void {
     }
   }
   async function doListProjects() {
-    navigateTo("home");
+    await goHome();
   }
   // ── AI job progress (Task 12): poll status, show stages, gate review buttons ──
   let jobPollTimer: number | null = null;
@@ -1200,8 +1284,8 @@ export function bootstrapStudioApp(): void {
   // ═══════════════════════════════════════════
 
   // Navigation
-  $("#brand-studio").addEventListener("click", () => navigateTo("home"));
-  $("#btn-home-nav").addEventListener("click", () => navigateTo("home"));
+  $("#brand-studio").addEventListener("click", () => void goHome());
+  $("#btn-home-nav").addEventListener("click", () => void goHome());
   $("#btn-list-projects").addEventListener("click", doListProjects);
 
   // Dev mode
@@ -1426,12 +1510,17 @@ export function bootstrapStudioApp(): void {
   $("#btn-add-audio-track").addEventListener("click", () => void addTrack("Audio"));
 
   // Save / Export (placeholder)
-  $("#btn-save-project").addEventListener("click", () => {
+  $("#btn-save-project").addEventListener("click", async () => {
     commitHistory(state, history, "save");
     const projectName = ($("#project-name") as HTMLInputElement).value || "Untitled";
     saveProject(projectName, snapshotState(state));
-    void persistTimeline();
+    const err = await persistTimeline();
+    if (err) {
+      toast(`Couldn't save timeline: ${err}`, "error");
+      return;
+    }
     devLog(`Project "${projectName}" saved.`);
+    toast(`Project "${projectName}" saved`, "ok");
   });
   $("#btn-export").addEventListener("click", () =>
     devLog("Export: not yet wired."),
