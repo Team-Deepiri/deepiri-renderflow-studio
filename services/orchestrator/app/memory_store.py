@@ -257,6 +257,14 @@ def track_list(sequence_id: UUID) -> list[dict[str, Any]]:
 def track_delete(track_id: UUID) -> bool:
     with _lock:
         existed = _tracks.pop(track_id, None)
+        if existed:
+            clip_ids = [c["id"] for c in _clips.values() if c["track_id"] == track_id]
+            for cid in clip_ids:
+                _clips.pop(cid, None)
+                for eid in [
+                    e["id"] for e in _clip_effects.values() if e["clip_id"] == cid
+                ]:
+                    _clip_effects.pop(eid, None)
     if existed:
         _save()
     return existed is not None
