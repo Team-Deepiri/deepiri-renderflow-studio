@@ -98,6 +98,15 @@ def test_delete_project_leaves_other_projects_intact(project):
     assert studio.get_sequence(other_seq["id"]) is not None
 
 
+def test_delete_track_cascades_to_its_clips(project):
+    clip_id = project["clip"]["id"]
+
+    assert studio.delete_track(project["track"]["id"]) is True
+
+    assert clip_id not in memory_store._clips
+    assert studio.list_clips_for_sequence(project["sequence"]["id"]) == []
+
+
 # ── 3. empty is not the same as absent ──
 
 
