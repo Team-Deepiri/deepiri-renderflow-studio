@@ -107,7 +107,87 @@ def test_delete_track_cascades_to_its_clips(project):
     assert studio.list_clips_for_sequence(project["sequence"]["id"]) == []
 
 
-# ── 3. empty is not the same as absent ──
+# ── 3. delete stops the project's AI jobs and reclaims its files ──
+
+
+def test_delete_project_cancels_its_jobs(project):
+    from app.job_store import JobStatus, store
+
+    job = store.create(project["project"]["id"], "scene", "sunset beach")
+    assert job.status is JobStatus.QUEUED
+
+    studio.delete_project(project["project"]["id"])
+
+    assert store.get(job.id).status is JobStatus.CANCELLED
+
+
+def test_accept_refuses_a_job_whose_project_is_gone(project, tmp_path):
+    """The one guard that has to hold: no orphan asset, ever."""
+    from fastapi import HTTPException
+
+    from app.api.routers.ai_jobs import accept_ai_job
+    from app.job_store import JobStatus, store
+
+    output = tmp_path / "scene.mp4"
+    output.write_bytes(b"\x00")
+    pid = project["project"]["id"]
+    job = store.create(pid, "scene", "sunset beach")
+    store.update_status(job.id, JobStatus.REVIEW, stages=["review"])
+    store.merge_meta(job.id, "output_path", str(output))
+
+    studio.delete_project(pid)
+
+    with pytest.raises(HTTPException) as excinfo:
+        accept_ai_job(job.id)
+    assert excinfo.value.status_code == 409
+    assert studio.list_assets(pid) == []
+
+
+def test_delete_project_removes_generated_files(project, tmp_path, monkeypatch):
+    from app.job_store import store
+
+    monkeypatch.setenv("RENDERFLOW_DATA_DIR", str(tmp_path))
+    pid = project["project"]["id"]
+
+    job = store.create(pid, "scene", "sunset beach")
+    out_dir = tmp_path / "render_outputs" / str(job.id)
+    out_dir.mkdir(parents=True)
+    generated = out_dir / "scene.mp4"
+    generated.write_bytes(b"\x00")
+
+    proxy = tmp_path / "proxies" / "clip_proxy.mp4"
+    proxy.parent.mkdir(parents=True)
+    proxy.write_bytes(b"\x00")
+    studio.create_asset(
+        pid, "video", str(generated), meta={"proxy_path": str(proxy)}
+    )
+
+    studio.delete_project(pid)
+
+    assert not generated.exists()
+    assert not out_dir.exists()
+    assert not proxy.exists()
+
+
+def test_delete_project_never_touches_imported_source_media(
+    project, tmp_path, monkeypatch
+):
+    """Imported assets point at the user's own footage, outside the data dir.
+    Deleting a project must not delete the file they imported from."""
+    monkeypatch.setenv("RENDERFLOW_DATA_DIR", str(tmp_path / "data"))
+
+    source = tmp_path / "Movies" / "holiday.mp4"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"\x00")
+    pid = project["project"]["id"]
+    studio.create_asset(pid, "video", str(source))
+
+    studio.delete_project(pid)
+
+    assert source.exists()
+
+
+# ── 4. empty is not the same as absent ──
 
 
 @pytest.fixture
