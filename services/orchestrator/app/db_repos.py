@@ -38,6 +38,37 @@ def insert_project(row: dict[str, Any]) -> None:
         logger.warning("insert_project: %s", e)
 
 
+def update_project(row: dict[str, Any]) -> None:
+    if not db.pool_ready():
+        return
+    try:
+        with db.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    update projects
+                       set name = %s, fps_num = %s, fps_den = %s, updated_at = now()
+                     where id = %s::uuid
+                    """,
+                    (row["name"], row["fps_num"], row["fps_den"], str(row["id"])),
+                )
+            conn.commit()
+    except Exception as e:
+        logger.warning("update_project: %s", e)
+
+
+def delete_project(project_id: UUID) -> None:
+    if not db.pool_ready():
+        return
+    try:
+        with db.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("delete from projects where id = %s::uuid", (str(project_id),))
+            conn.commit()
+    except Exception as e:
+        logger.warning("delete_project: %s", e)
+
+
 def fetch_project(project_id: UUID) -> dict[str, Any] | None:
     if not db.pool_ready():
         return None
