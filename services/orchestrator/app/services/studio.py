@@ -54,8 +54,12 @@ def create_asset(
 
 
 def list_assets(project_id: UUID) -> list[dict[str, Any]]:
+    # Falling through on an empty list conflates "no assets" with "not stored
+    # here", so a known-but-empty project would serve back rows the store has
+    # already dropped. Consult the mirror only when memory holds neither the
+    # parent nor any rows for it.
     mem = memory_store.asset_list(project_id)
-    if mem:
+    if mem or memory_store.project_get(project_id):
         return mem
     return db_repos.list_assets(project_id)
 
@@ -74,7 +78,7 @@ def create_sequence(
 
 def list_sequences(project_id: UUID) -> list[dict[str, Any]]:
     mem = memory_store.sequence_list(project_id)
-    if mem:
+    if mem or memory_store.project_get(project_id):
         return mem
     return db_repos.list_sequences(project_id)
 
@@ -94,7 +98,7 @@ def create_track(sequence_id: UUID, track_type: str, lane_index: int, name: str)
 
 def list_tracks(sequence_id: UUID) -> list[dict[str, Any]]:
     mem = memory_store.track_list(sequence_id)
-    if mem:
+    if mem or memory_store.sequence_get(sequence_id):
         return mem
     return db_repos.list_tracks(sequence_id)
 
@@ -122,8 +126,9 @@ def create_clip(
 
 
 def list_clips_for_sequence(sequence_id: UUID) -> list[dict[str, Any]]:
+    # An emptied timeline must read back as empty, not resurrect from the mirror.
     mem = memory_store.clip_list_for_sequence(sequence_id)
-    if mem:
+    if mem or memory_store.sequence_get(sequence_id):
         return mem
     return db_repos.list_clips_for_sequence(sequence_id)
 
@@ -187,8 +192,8 @@ def update_project(
 
 
 def delete_project(project_id: UUID) -> None:
-    memory_store.project_delete(project_id)
     db_repos.delete_project(project_id)
+    memory_store.project_delete(project_id)
 
 
 def get_asset(asset_id: UUID) -> dict[str, Any] | None:
