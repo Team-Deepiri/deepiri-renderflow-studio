@@ -59,6 +59,7 @@ import {
   orchestratorCreateSequence,
   orchestratorDeleteProject,
   orchestratorCreateTrack,
+  orchestratorDeleteTrack,
   orchestratorListTracks,
   orchestratorListClips,
   orchestratorReplaceClips,
@@ -739,6 +740,13 @@ export function bootstrapStudioApp(): void {
         if (!window.confirm(`Delete "${track.name}"? This will also remove ${track.clips.length} clip(s).`)) return;
       }
       state.timeline.tracks.splice(idx, 1);
+      // Tracks are server-backed now, so a local-only splice would come back on
+      // the next open. The clips cascade with it server-side.
+      if (track.serverId && state.activeSequenceId) {
+        void orchestratorDeleteTrack(state.activeSequenceId, track.serverId).catch(
+          (e) => devLog(`Delete track error: ${String(e)}`),
+        );
+      }
       if (state.ui.activeTrackId === trackId) {
         state.ui.activeTrackId = state.timeline.tracks[0]?.id ?? null;
       }
@@ -1370,32 +1378,52 @@ export function bootstrapStudioApp(): void {
     void fetchFrameForPlayhead();
   });
 
-  // Add tracks
-  let nextLaneIdx = 10;
-  $("#btn-add-video-track").addEventListener("click", () => {
-    const t: import("./types").UiTrack = {
-      id: state.nextClipId + 1000,
-      name: `V${state.timeline.tracks.filter((t) => t.kind === "Video").length + 1}`,
-      kind: "Video",
-      lane_index: nextLaneIdx++,
-      clips: [],
-    };
-    state.timeline.tracks.push(t);
-    commitHistory(state, history, "add video track");
-    renderTimelineFull();
-  });
-  $("#btn-add-audio-track").addEventListener("click", () => {
-    const t: import("./types").UiTrack = {
-      id: state.nextClipId + 2000,
-      name: `A${state.timeline.tracks.filter((t) => t.kind === "Audio").length + 1}`,
-      kind: "Audio",
-      lane_index: nextLaneIdx++,
-      clips: [],
-    };
-    state.timeline.tracks.push(t);
-    commitHistory(state, history, "add audio track");
-    renderTimelineFull();
-  });
+  // ── Add tracks ──
+  //
+  // Creates the track on the server first, exactly like Import Media creates
+  // the asset first, then mirrors the returned row into the timeline. A track
+  // without a serverId is invisible to persistTimeline() — it filters those
+  // out — so a local-only track silently swallowed every clip placed on it.
+  async function addTrack(kind: "Video" | "Audio"): Promise<void> {
+    const sid = state.activeSequenceId;
+    if (!sid) {
+      devLog("Add track: open a project first.");
+      return;
+    }
+    const prefix = kind === "Video" ? "V" : "A";
+    const name = `${prefix}${
+      state.timeline.tracks.filter((t) => t.kind === kind).length + 1
+    }`;
+    // Derive both indices from what's on screen. A module-level counter drifts
+    // once you switch projects, since the timeline is rebuilt from the server.
+    const laneIndex =
+      state.timeline.tracks.reduce((m, t) => Math.max(m, t.lane_index), -1) + 1;
+    const localId =
+      state.timeline.tracks.reduce((m, t) => Math.max(m, t.id), 0) + 1;
+
+    try {
+      const row = await orchestratorCreateTrack(sid, kind.toLowerCase(), laneIndex, name);
+      // The user may have switched projects while the request was in flight.
+      if (state.activeSequenceId !== sid) return;
+      state.timeline.tracks.push({
+        id: localId,
+        serverId: row.id,
+        name: row.name,
+        kind,
+        lane_index: row.lane_index,
+        clips: [],
+      });
+      state.ui.activeTrackId = localId;
+      commitHistory(state, history, `add ${kind.toLowerCase()} track`);
+      renderTimelineFull();
+      devLog(`Track created: ${row.name} (${row.id})`);
+    } catch (e) {
+      devLog(`Add track error: ${String(e)}`);
+    }
+  }
+
+  $("#btn-add-video-track").addEventListener("click", () => void addTrack("Video"));
+  $("#btn-add-audio-track").addEventListener("click", () => void addTrack("Audio"));
 
   // Save / Export (placeholder)
   $("#btn-save-project").addEventListener("click", () => {
