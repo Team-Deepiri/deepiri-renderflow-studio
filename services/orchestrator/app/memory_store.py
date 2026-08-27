@@ -489,7 +489,35 @@ def project_update(
 
 
 def project_delete(project_id: UUID) -> None:
+    """Drop the project and everything hanging off it, under one lock + save."""
     with _lock:
+        seq_ids = {s["id"] for s in sequence_list(project_id)}
+        track_ids = {t["id"] for sid in seq_ids for t in track_list(sid)}
+        clip_ids = {c["id"] for c in _clips.values() if c["track_id"] in track_ids}
+        effect_ids = {
+            e["id"] for e in _clip_effects.values() if e["clip_id"] in clip_ids
+        }
+        scene_ids = {s["id"] for s in _scenes.values() if s["project_id"] == project_id}
+        node_ids = {
+            n["id"] for n in _scene_nodes.values() if n["scene_id"] in scene_ids
+        }
+        asset_ids = {a["id"] for a in asset_list(project_id)}
+        job_ids = {
+            j["id"] for j in _render_jobs.values() if j["project_id"] == project_id
+        }
+
+        for store, keys in (
+            (_clip_effects, effect_ids),
+            (_clips, clip_ids),
+            (_tracks, track_ids),
+            (_sequences, seq_ids),
+            (_scene_nodes, node_ids),
+            (_scenes, scene_ids),
+            (_assets, asset_ids),
+            (_render_jobs, job_ids),
+        ):
+            for key in keys:
+                store.pop(key, None)
         _projects.pop(project_id, None)
     _save()
 
