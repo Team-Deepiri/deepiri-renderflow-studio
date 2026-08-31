@@ -41,7 +41,7 @@ import {
 } from "./ops/clips";
 import { insertAcceptedClip, ServerSyncError } from "./ops/aiAccept";
 import { launchAiProject } from "./ops/aiLaunch";
-import { runExport } from "./ops/export";
+import { runExport, saveThenExport } from "./ops/export";
 import { addMarker, jumpToNextMarker } from "./ops/markers";
 import {
   registerAsset,
@@ -1607,22 +1607,43 @@ export function bootstrapStudioApp(): void {
       exportStatusEl.textContent = "Open a project first";
       return;
     }
+    // Pinned now: the save is awaited first, and going Home mid-export would
+    // null these out from under the render.
+    const projectId = state.activeProjectId;
+    const sequenceId = state.activeSequenceId;
     exportBtn.disabled = true;
-    exportStatusEl.textContent = "Exporting…";
     try {
-      const job = await runExport(
-        state.activeProjectId,
-        state.activeSequenceId,
-        { submitRenderJob, getRenderJob },
-        {
-          onProgress: (j) => {
-            exportStatusEl.textContent =
-              j.status === "rendering"
-                ? `Exporting… ${Math.round(j.progress * 100)}%`
-                : `Export ${j.status}`;
+      // The render reads the server's clips, so the timeline has to get there
+      // first — otherwise Export quietly ships the last-saved cut.
+      exportStatusEl.textContent = "Saving timeline…";
+      const result = await saveThenExport(persistTimeline, () => {
+        exportStatusEl.textContent = "Exporting…";
+        return runExport(
+          projectId,
+          sequenceId,
+          { submitRenderJob, getRenderJob },
+          {
+            onProgress: (j) => {
+              exportStatusEl.textContent =
+                j.status === "rendering"
+                  ? `Exporting… ${Math.round(j.progress * 100)}%`
+                  : `Export ${j.status}`;
+            },
           },
-        },
-      );
+        );
+      });
+
+      if (!result.ok) {
+        exportStatusEl.textContent = "Export cancelled — couldn't save timeline";
+        toast(
+          `Couldn't export: saving your timeline failed, so nothing was rendered. ${result.saveError}`,
+          "error",
+        );
+        devLog(`Export aborted — save failed: ${result.saveError}`);
+        return;
+      }
+
+      const job = result.job;
       if (job.status === "completed" && job.output_uri) {
         exportStatusEl.textContent = `Exported → ${job.output_uri}`;
         devLog(`Export completed: ${job.output_uri}`);
