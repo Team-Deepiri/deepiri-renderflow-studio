@@ -157,6 +157,13 @@ def accept_ai_job(job_id: UUID) -> AiJobOut:
     if rec.status not in (JobStatus.REVIEW, JobStatus.COMMITTED):
         raise HTTPException(status_code=409, detail="accept only allowed from review or committed")
 
+    # The only place an AI output becomes an asset, so it's the one guard that
+    # has to hold: a job outliving its project (deleted mid-flight, or popped
+    # from the durable Redis queue after a restart) must not mint an asset for
+    # a project that no longer exists.
+    if not studio.get_project(rec.project_id):
+        raise HTTPException(status_code=409, detail="project no longer exists")
+
     # Create video asset from the job output if not already created
     if not rec.metadata.get("asset_id"):
         output_path = rec.metadata.get("output_path")

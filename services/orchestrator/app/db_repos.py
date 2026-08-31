@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 from uuid import UUID
@@ -30,12 +31,43 @@ def insert_project(row: dict[str, Any]) -> None:
                         row["fps_den"],
                         row["sample_rate"],
                         row.get("ai_enabled", True),
-                        __import__("json").dumps(row.get("settings_jsonb") or {}),
+                        json.dumps(row.get("settings_jsonb") or {}),
                     ),
                 )
             conn.commit()
     except Exception as e:
         logger.warning("insert_project: %s", e)
+
+
+def update_project(row: dict[str, Any]) -> None:
+    if not db.pool_ready():
+        return
+    try:
+        with db.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    update projects
+                       set name = %s, fps_num = %s, fps_den = %s, updated_at = now()
+                     where id = %s::uuid
+                    """,
+                    (row["name"], row["fps_num"], row["fps_den"], str(row["id"])),
+                )
+            conn.commit()
+    except Exception as e:
+        logger.warning("update_project: %s", e)
+
+
+def delete_project(project_id: UUID) -> None:
+    if not db.pool_ready():
+        return
+    try:
+        with db.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("delete from projects where id = %s::uuid", (str(project_id),))
+            conn.commit()
+    except Exception as e:
+        logger.warning("delete_project: %s", e)
 
 
 def fetch_project(project_id: UUID) -> dict[str, Any] | None:
@@ -107,7 +139,7 @@ def insert_asset(row: dict[str, Any]) -> None:
                         row["uri"],
                         row["sha256"],
                         row.get("duration_ms"),
-                        __import__("json").dumps(row.get("meta_jsonb") or {}),
+                        json.dumps(row.get("meta_jsonb") or {}),
                     ),
                 )
             conn.commit()
@@ -304,12 +336,66 @@ def insert_clip(row: dict[str, Any]) -> None:
                         row["out_tick"],
                         row.get("src_in_tick", 0),
                         float(row.get("speed_ratio", 1.0)),
-                        __import__("json").dumps(row.get("transform_jsonb") or {}),
+                        json.dumps(row.get("transform_jsonb") or {}),
                     ),
                 )
             conn.commit()
     except Exception as e:
         logger.warning("insert_clip: %s", e)
+
+
+def replace_clips_for_sequence(sequence_id: UUID, rows: list[dict[str, Any]]) -> None:
+    """Make `rows` the sequence's complete clip list in ONE transaction.
+
+    Clips absent from `rows` are deleted; the rest are upserted by id so their
+    clip_effects survive (a delete-then-insert would cascade them away). The
+    single commit at the end means a failure anywhere leaves the previous
+    clip list intact rather than a half-written one.
+    """
+    if not db.pool_ready():
+        return
+    try:
+        keep = [str(r["id"]) for r in rows]
+        with db.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    delete from clips
+                    where track_id in (select id from tracks where sequence_id = %s::uuid)
+                      and id <> all(%s::uuid[])
+                    """,
+                    (str(sequence_id), keep),
+                )
+                for r in rows:
+                    cur.execute(
+                        """
+                        insert into clips (id, track_id, asset_id, in_tick, out_tick,
+                                           src_in_tick, speed_ratio, transform_jsonb, updated_at)
+                        values (%s::uuid, %s::uuid, %s::uuid, %s, %s, %s, %s, %s::jsonb, now())
+                        on conflict (id) do update set
+                          track_id = excluded.track_id,
+                          asset_id = excluded.asset_id,
+                          in_tick = excluded.in_tick,
+                          out_tick = excluded.out_tick,
+                          src_in_tick = excluded.src_in_tick,
+                          speed_ratio = excluded.speed_ratio,
+                          transform_jsonb = excluded.transform_jsonb,
+                          updated_at = now()
+                        """,
+                        (
+                            str(r["id"]),
+                            str(r["track_id"]),
+                            str(r["asset_id"]),
+                            r["in_tick"],
+                            r["out_tick"],
+                            r.get("src_in_tick", 0),
+                            float(r.get("speed_ratio", 1.0)),
+                            json.dumps(r.get("transform_jsonb") or {}),
+                        ),
+                    )
+            conn.commit()
+    except Exception as e:
+        logger.warning("replace_clips_for_sequence: %s", e)
 
 
 def insert_clip_effect(row: dict[str, Any]) -> None:
@@ -328,7 +414,7 @@ def insert_clip_effect(row: dict[str, Any]) -> None:
                         str(row["clip_id"]),
                         row["effect_type"],
                         row["order_idx"],
-                        __import__("json").dumps(row.get("params_jsonb") or {}),
+                        json.dumps(row.get("params_jsonb") or {}),
                     ),
                 )
             conn.commit()
@@ -376,8 +462,8 @@ def insert_scene_node(row: dict[str, Any]) -> None:
                         str(row["scene_id"]),
                         str(row["parent_id"]) if row.get("parent_id") else None,
                         row["node_type"],
-                        __import__("json").dumps(row.get("transform_jsonb") or {}),
-                        __import__("json").dumps(row.get("payload_jsonb") or {}),
+                        json.dumps(row.get("transform_jsonb") or {}),
+                        json.dumps(row.get("payload_jsonb") or {}),
                     ),
                 )
             conn.commit()
@@ -403,7 +489,7 @@ def insert_render_job(row: dict[str, Any]) -> None:
                         row["preset"],
                         row.get("status", "queued"),
                         row.get("output_uri"),
-                        __import__("json").dumps(row.get("metrics_jsonb") or {}),
+                        json.dumps(row.get("metrics_jsonb") or {}),
                     ),
                 )
             conn.commit()
@@ -453,7 +539,7 @@ def insert_guardrail_decision(
                         verdict,
                         reason_code,
                         score,
-                        __import__("json").dumps(details or {}),
+                        json.dumps(details or {}),
                     ),
                 )
             conn.commit()
@@ -480,7 +566,7 @@ def audit_log(project_id: UUID | None, actor_id: UUID | None, event_type: str, p
                         str(project_id) if project_id else None,
                         str(actor_id) if actor_id else None,
                         event_type,
-                        __import__("json").dumps(payload),
+                        json.dumps(payload),
                     ),
                 )
             conn.commit()

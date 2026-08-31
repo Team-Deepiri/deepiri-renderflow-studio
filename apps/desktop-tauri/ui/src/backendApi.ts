@@ -286,6 +286,29 @@ export async function orchestratorCreateClip(
   return res.json();
 }
 
+/** Clip row sent to the atomic replace endpoint. `id` is minted client-side
+ *  and stable, so rows are updated in place rather than recreated. */
+export interface ClipUpsert {
+  id: string;
+  track_id: string;
+  asset_id: string;
+  in_tick: number;
+  out_tick: number;
+}
+
+export async function orchestratorReplaceClips(
+  sequenceId: string,
+  clips: ClipUpsert[],
+): Promise<Clip[]> {
+  const res = await fetch(`${BASE}/v1/sequences/${sequenceId}/clips`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(clips),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function orchestratorListClips(sequenceId: string): Promise<Clip[]> {
   const res = await fetch(`${BASE}/v1/sequences/${sequenceId}/clips`);
   return res.json();

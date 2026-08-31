@@ -20,7 +20,6 @@ from __future__ import annotations
 import shutil
 import time
 from pathlib import Path
-from uuid import uuid4
 
 import pytest
 
@@ -66,8 +65,13 @@ def client(monkeypatch, tmp_path):
 
 
 def _submit_scene_job(client, prompt: str) -> dict:
+    from app import memory_store
+    from app.services import studio
+
+    # A real project: accept refuses to mint an asset for one that doesn't exist.
+    project = studio.create_project(memory_store.DEMO_OWNER, "E2E Scene Job")
     resp = client.post("/v1/jobs", json={
-        "project_id": str(uuid4()),
+        "project_id": str(project["id"]),
         "mode": "scene",
         "prompt": prompt,
     })

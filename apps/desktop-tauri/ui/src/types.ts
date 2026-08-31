@@ -10,13 +10,25 @@ export type { Asset } from "./backendApi";
 
 /** A clip as rendered in the timeline UI. */
 export type UiClip = {
+  /** DOM/selection key. Local to this session, not persisted. */
   id: number;
-  serverId?: string;
+  /** Server clip id. Minted client-side at creation and stable across saves,
+   *  so persisting a timeline updates clip rows instead of replacing them
+  */
+  clipId: string;
+  /** Linked asset id. Undefined for clips with no media behind them. */
+  assetId?: string;
   label: string;
   inTick: number;
   outTick: number;
   color: string;
 };
+
+/** Mints a stable server clip id. Client-side so a clip keeps one identity
+ *  from creation through every save. */
+export function newClipId(): string {
+  return crypto.randomUUID();
+}
 
 /** A track as rendered in the timeline UI. */
 export type UiTrack = {
