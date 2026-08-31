@@ -58,18 +58,6 @@ def update_project(row: dict[str, Any]) -> None:
         logger.warning("update_project: %s", e)
 
 
-def delete_project(project_id: UUID) -> None:
-    if not db.pool_ready():
-        return
-    try:
-        with db.connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("delete from projects where id = %s::uuid", (str(project_id),))
-            conn.commit()
-    except Exception as e:
-        logger.warning("delete_project: %s", e)
-
-
 def fetch_project(project_id: UUID) -> dict[str, Any] | None:
     if not db.pool_ready():
         return None
