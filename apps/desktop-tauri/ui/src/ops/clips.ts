@@ -165,14 +165,9 @@ export function insertClipFromAsset(
 
   const newClip: UiClip = {
     id: state.nextClipId++,
-<<<<<<< HEAD
     clipId: newClipId(),
     assetId: asset.id,
-    label: asset.uri.split("/").pop() ?? asset.id,
-=======
-    serverId: asset.id,
     label: clipLabel(asset),
->>>>>>> 9ba541a (fix(timeline): label clips by asset name, and split Windows paths correctly)
     inTick,
     outTick: inTick + durationTicks,
     color: CLIP_COLORS[state.nextClipId % CLIP_COLORS.length],

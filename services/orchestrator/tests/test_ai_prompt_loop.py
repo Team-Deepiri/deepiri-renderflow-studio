@@ -15,7 +15,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -67,7 +67,9 @@ def test_accepted_clip_reaches_the_exported_file(tmp_path):
     # A finished scene job awaiting review, with a real 2s artifact.
     mp4 = tmp_path / "output.mp4"
     _make_video(str(mp4), duration=2.0)
-    job = store.create(uuid4(), "scene", "a teal horizon")
+    # The job belongs to the project created above: accept refuses to mint an
+    # asset for a project that no longer exists.
+    job = store.create(UUID(pid), "scene", "a teal horizon")
     store.merge_meta(job.id, "output_path", str(mp4))
     store.update_status(job.id, JobStatus.REVIEW, stages=["preparing", "review"])
 

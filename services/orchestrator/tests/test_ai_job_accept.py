@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from uuid import uuid4
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -40,8 +40,15 @@ def _make_video(path: str, duration: float, size: str = "320x240", fps: int = 24
 
 
 def _job_in_review(output_path: str) -> str:
-    """A scene job parked in review with `output_path` as its artifact."""
-    rec = store.create(uuid4(), "scene", "a blue field")
+    """A scene job parked in review with `output_path` as its artifact.
+
+    The project has to be real: accept refuses to mint an asset for a project
+    that no longer exists, so a fabricated id comes back as a 409.
+    """
+    project = client.post(
+        "/v1/projects", json={"name": "accept", "fps_num": 24, "fps_den": 1}
+    ).json()
+    rec = store.create(UUID(project["id"]), "scene", "a blue field")
     store.merge_meta(rec.id, "output_path", output_path)
     store.update_status(rec.id, JobStatus.REVIEW, stages=["preparing", "review"])
     return str(rec.id)
