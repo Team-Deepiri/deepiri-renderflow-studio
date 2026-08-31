@@ -168,4 +168,30 @@ describe("insertAcceptedClip", () => {
     expect(sync.message).toContain("AI · a calm lake");
     expect(sync.message).toContain("500 sequence not found");
   });
+
+  it("treats a missing sequence as a failed server save", async () => {
+    // Nothing to save the clip on means no server copy, which Export reads —
+    // the same outcome as a rejected save, so it must not read as success.
+    const { api, createdClips } = fakeApi();
+    state.activeSequenceId = null;
+
+    const err = await insertAcceptedClip(state, history, JOB, api).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ServerSyncError);
+    expect((err as ServerSyncError).clip.label).toBe("AI · a calm lake");
+    expect(createdClips).toHaveLength(0);
+    expect(state.timeline.tracks[0].clips).toHaveLength(1); // still on the timeline
+  });
+
+  it("returns null when the project has no video track to hold the clip", async () => {
+    // Distinct from "no asset": the asset exists, there is just nowhere to put
+    // it, and the caller has to say so rather than blame a missing asset.
+    const { api, createdClips } = fakeApi();
+    state.timeline.tracks = state.timeline.tracks.filter((t) => t.kind !== "Video");
+
+    const clip = await insertAcceptedClip(state, history, JOB, api);
+
+    expect(clip).toBeNull();
+    expect(createdClips).toHaveLength(0);
+  });
 });

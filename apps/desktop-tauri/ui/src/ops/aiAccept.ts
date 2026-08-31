@@ -47,9 +47,10 @@ export class ServerSyncError extends Error {
  * Returns the inserted clip, or null when the job carries no asset (accept
  * failed to create one) or the project has no video track to hold it.
  *
- * Throws ServerSyncError when the local insert succeeds but persisting the
- * clip on the sequence's video track fails — the clip stays on the timeline,
- * but the caller must tell the user the server copy is missing.
+ * Throws ServerSyncError when the local insert succeeds but the clip does not
+ * reach the server — the save failed, or there is no active sequence to save
+ * it on. Either way the clip stays on the timeline, and the caller must tell
+ * the user the server copy is missing.
  */
 export async function insertAcceptedClip(
   state: StudioState,
@@ -62,10 +63,13 @@ export async function insertAcceptedClip(
 
   const asset = await api.getAsset(assetId);
   const clip = insertAssetIntoVideoTrack(state, asset, history);
-  if (!clip || !state.activeSequenceId) return clip;
+  if (!clip) return null;
+  if (!state.activeSequenceId) {
+    throw new ServerSyncError(clip, new Error("no active sequence to save the clip on"));
+  }
 
-  const trackId = await resolveVideoTrackId(state, api);
   try {
+    const trackId = await resolveVideoTrackId(state, api);
     await api.createClip(
       state.activeSequenceId,
       trackId,

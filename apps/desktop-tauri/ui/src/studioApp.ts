@@ -1244,8 +1244,13 @@ export function bootstrapStudioApp(): void {
           jobStatusEl.textContent = `Status: ${job.status}\nAdded "${clip.label}" to the timeline.`;
           devLog(`Inserted accepted clip ${clip.label} at tick ${clip.inTick}`);
         } else {
-          jobStatusEl.textContent = `Status: ${job.status}\nNo clip added — the job produced no asset.`;
-          devLog(`Accepted job ${state.lastJobId} carried no asset`);
+          // null has two causes — name the right one instead of always
+          // blaming a missing asset the job may well have produced.
+          const why = job.metadata?.asset_id
+            ? "this project has no video track to hold it"
+            : "the job produced no asset";
+          jobStatusEl.textContent = `Status: ${job.status}\nNo clip added — ${why}.`;
+          devLog(`Accepted job ${state.lastJobId}: no clip added — ${why}`);
         }
       } catch (e) {
         // ServerSyncError means the clip is on the local timeline but its
