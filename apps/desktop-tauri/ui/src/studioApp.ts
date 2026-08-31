@@ -777,12 +777,12 @@ export function bootstrapStudioApp(): void {
         submitAiJob,
       });
       devLog(`Prompt launch: project ${launched.project.id}, job ${launched.jobId}`);
-      state.lastJobId = launched.jobId;
       homePrompt.value = "";
       homePromptStatus.textContent = "";
 
       // Into the editor, AI panel open, with the clip auto-accepted on arrival.
       await openProject(launched.project);
+      state.lastJobId = launched.jobId;
       aiPrompt.value = prompt.trim();
       setActivePanel("ai");
       jobStatusEl.textContent = "Status: queued\nGenerating your video…";
