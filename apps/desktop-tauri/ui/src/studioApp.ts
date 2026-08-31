@@ -674,18 +674,19 @@ export function bootstrapStudioApp(): void {
     state.activeProjectId = pid;
     state.timeline.fps = project.fps_num / project.fps_den;
     fpsInput.value = String(state.timeline.fps);
+    // Resolved into a local, not straight into state
+    let sequenceId: string;
     try {
       const seqs = await orchestratorListSequences(pid);
-      if (seqs.length > 0) {
-        state.activeSequenceId = seqs[0].id;
-      } else {
-        const seq = await orchestratorCreateSequence(pid, "Main Sequence");
-        state.activeSequenceId = seq.id;
-      }
+      sequenceId = seqs.length
+        ? seqs[0].id
+        : (await orchestratorCreateSequence(pid, "Main Sequence")).id;
     } catch {
-      const seq = await orchestratorCreateSequence(pid, "Main Sequence");
-      state.activeSequenceId = seq.id;
+      sequenceId = (await orchestratorCreateSequence(pid, "Main Sequence")).id;
     }
+    if (state.activeProjectId !== pid) return;
+    state.activeSequenceId = sequenceId;
+
     // Load assets
     try {
       const assets = await listProjectAssets(pid);
@@ -703,7 +704,7 @@ export function bootstrapStudioApp(): void {
     // reset, so a failure here leaves it empty rather than showing the last
     // project's.
     try {
-      const rows = await orchestratorListTracks(state.activeSequenceId);
+      const rows = await orchestratorListTracks(sequenceId);
       if (state.activeProjectId !== pid) return;
       const tracks = rows
         .slice()
@@ -720,7 +721,7 @@ export function bootstrapStudioApp(): void {
           clips: [],
         }));
 
-      const clipRows = await orchestratorListClips(state.activeSequenceId);
+      const clipRows = await orchestratorListClips(sequenceId);
       if (state.activeProjectId !== pid) return;
       const byTrack = new Map(tracks.map((t) => [t.serverId, t]));
       // In tick order: insertClipFromAsset appends after the last clip, so an
