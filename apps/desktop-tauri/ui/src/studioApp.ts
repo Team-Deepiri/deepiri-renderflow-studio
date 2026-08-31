@@ -5,7 +5,11 @@
 // ============================================================
 
 import type { StudioState, HistoryStack } from "./state";
-import { createInitialState, createHistoryStack } from "./state";
+import {
+  createInitialState,
+  createHistoryStack,
+  resetProjectState,
+} from "./state";
 import type { ProjectTemplate } from "./types";
 import { PROJECT_TEMPLATES } from "./types";
 import {
@@ -55,6 +59,10 @@ import {
   orchestratorCreateSequence,
   orchestratorDeleteProject,
   orchestratorCreateTrack,
+  orchestratorDeleteTrack,
+  orchestratorListTracks,
+  orchestratorListClips,
+  orchestratorReplaceClips,
   submitAiJob,
   getAiJob,
   acceptAiJob,
@@ -216,6 +224,18 @@ pre{background:#0f131b;border:1px solid var(--border);border-radius:8px;padding:
 .modal-close{background:none;border:none;color:var(--text-dim);font-size:20px;cursor:pointer;padding:0 4px;line-height:1}
 .modal-close:hover{color:var(--text)}
 .modal-sub{color:var(--text-dim);font-size:12px;margin:0 0 16px}
+.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+.modal-error{background:#0f131b;border:1px solid var(--border);border-radius:8px;padding:10px;
+  font-family:ui-monospace,monospace;font-size:11px;color:var(--text-dim);
+  max-height:120px;overflow:auto;word-break:break-word;white-space:pre-wrap}
+/* toasts — stacked bottom-right, below the modal layer */
+#toast-host{position:fixed;right:16px;bottom:16px;z-index:900;display:flex;
+  flex-direction:column;gap:8px;align-items:flex-end;pointer-events:none}
+.toast{pointer-events:auto;cursor:pointer;max-width:380px;padding:10px 14px;border-radius:8px;
+  font-size:12px;border:1px solid var(--border);background:#181c24;color:var(--text);
+  box-shadow:0 10px 30px rgba(0,0,0,0.5);word-break:break-word}
+.toast-ok{border-color:#18b487}
+.toast-error{border-color:#ff6b6b}
 .template-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
 .template-card{background:#0f131b;border:1px solid var(--border);border-radius:10px;padding:14px;cursor:pointer;transition:border-color 0.15s,background 0.15s}
 .template-card:hover{border-color:var(--accent);background:rgba(77,125,255,0.07)}
@@ -416,6 +436,24 @@ function buildDom(root: HTMLElement): void {
     <div class="template-grid" id="template-grid"></div>
   </div>
 </div>
+
+<!-- SAVE FAILURE (hidden by default). Deliberately has no × and no backdrop
+     dismiss: leaving has to be an explicit choice between the two buttons. -->
+<div id="save-error-overlay" class="modal-overlay" style="display:none">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Couldn't save your timeline</h2>
+    </div>
+    <p class="modal-sub" id="save-error-stake"></p>
+    <div class="modal-error" id="save-error-detail"></div>
+    <div class="modal-actions">
+      <button class="btn subtle" id="btn-leave-anyway" type="button">Leave anyway</button>
+      <button class="btn" id="btn-return-to-project" type="button">Return to project</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast-host"></div>
 `;
   renderTemplateGrid();
 }
@@ -505,6 +543,75 @@ export function bootstrapStudioApp(): void {
     devtoolsOut.scrollTop = devtoolsOut.scrollHeight;
   }
 
+  // ── Toasts ──
+  const toastHost = $("#toast-host");
+
+  /** Transient message, bottom-right. Click to dismiss early. */
+  function toast(message: string, kind: "ok" | "error" = "ok"): void {
+    const el = document.createElement("div");
+    el.className = `toast toast-${kind}`;
+    el.textContent = message;
+    const remove = () => el.remove();
+    el.addEventListener("click", remove);
+    toastHost.appendChild(el);
+    // Errors linger: they usually need reading, and often acting on.
+    window.setTimeout(remove, kind === "error" ? 8000 : 3000);
+  }
+
+  // -- Timeline Persistence --
+  /** Returns null on success, or the error text so callers can surface it. */
+  async function persistTimeline(): Promise<string | null> {
+    const sid = state.activeSequenceId;
+    if (!sid) return null;
+    const clips = state.timeline.tracks.flatMap((t) =>
+      t.serverId
+        ? t.clips
+            .filter((c) => c.assetId)
+            .map((c) => ({
+              id: c.clipId,
+              track_id: t.serverId!,
+              asset_id: c.assetId!,
+              in_tick: c.inTick,
+              out_tick: c.outTick,
+            }))
+        : [],
+    );
+    try {
+      await orchestratorReplaceClips(sid, clips);
+      devLog(`Saved ${clips.length} clip(s)`);
+      return null;
+    } catch (e) {
+      devLog(`Save timeline error: ${String(e)}`);
+      return String(e);
+    }
+  }
+
+  /** How many clips a failed save would take with it — the stake, stated. */
+  function unsavedClipCount(): number {
+    return state.timeline.tracks.reduce(
+      (n, t) => n + (t.serverId ? t.clips.filter((c) => c.assetId).length : 0),
+      0,
+    );
+  }
+
+  function showSaveFailedModal(error: string, onLeave: () => void): void {
+    const overlay = $("#save-error-overlay");
+    const n = unsavedClipCount();
+    $("#save-error-stake").textContent =
+      `${n} clip${n === 1 ? "" : "s"} ${n === 1 ? "has" : "have"} not been saved. ` +
+      `Leaving now discards ${n === 1 ? "it" : "them"}.`;
+    $("#save-error-detail").textContent = error;
+
+    const close = () => (overlay.style.display = "none");
+    ($("#btn-return-to-project") as HTMLButtonElement).onclick = close;
+    ($("#btn-leave-anyway") as HTMLButtonElement).onclick = () => {
+      devLog(`Left project with ${n} unsaved clip(s) discarded`);
+      close();
+      onLeave();
+    };
+    overlay.style.display = "";
+  }
+
   // ── Navigation ──
   function navigateTo(view: "home" | "studio"): void {
     state.currentView = view;
@@ -513,11 +620,49 @@ export function bootstrapStudioApp(): void {
       studioView.style.display = "none";
       state.activeProjectId = null;
       state.activeSequenceId = null;
+      resetProjectView();
       refreshHomeProjects();
     } else {
       homeView.style.display = "none";
       studioView.style.display = "";
     }
+  }
+
+  /**
+   * Saving has to finish before navigateTo runs
+   */
+  async function goHome(): Promise<void> {
+    const err = await persistTimeline();
+    if (err) {
+      showSaveFailedModal(err, () => navigateTo("home"));
+      return;
+    }
+    navigateTo("home");
+  }
+
+  /**
+   * Puts the app back to "no project open". resetProjectState() clears the
+   * plain data; everything below it releases a resource that state can't
+   * clear on its own — running timers, the monitor element, the AI panel.
+   */
+  function resetProjectView(): void {
+    resetProjectState(state, history);
+
+    pause(state);
+    stopProxyPolling(state);
+    stopJobPolling();
+    setReviewButtons(false);
+    jobStatusEl.textContent = "";
+    const playBtn = $("#btn-play");
+    if (playBtn) playBtn.textContent = "Play";
+
+    previewVideo.pause();
+    previewVideo.removeAttribute("src");
+    previewVideo.load();
+    previewVideo.style.display = "none";
+    previewFrame.removeAttribute("src");
+    previewFrame.style.display = "none";
+    previewEmpty.style.display = "";
   }
 
   // ── Home project list ──
@@ -556,35 +701,82 @@ export function bootstrapStudioApp(): void {
 
   // ── Open a project → create default sequence if needed ──
   async function openProject(project: Project): Promise<void> {
-    state.activeProjectId = project.id;
+    const pid = project.id;
+    resetProjectView();
+    state.activeProjectId = pid;
     state.timeline.fps = project.fps_num / project.fps_den;
     fpsInput.value = String(state.timeline.fps);
     try {
-      const seqs = await orchestratorListSequences(project.id);
+      const seqs = await orchestratorListSequences(pid);
       if (seqs.length > 0) {
         state.activeSequenceId = seqs[0].id;
       } else {
-        const seq = await orchestratorCreateSequence(
-          project.id,
-          "Main Sequence",
-        );
+        const seq = await orchestratorCreateSequence(pid, "Main Sequence");
         state.activeSequenceId = seq.id;
       }
     } catch {
-      const seq = await orchestratorCreateSequence(project.id, "Main Sequence");
+      const seq = await orchestratorCreateSequence(pid, "Main Sequence");
       state.activeSequenceId = seq.id;
     }
-    // Load assets
+    if (state.activeProjectId !== pid || !state.activeSequenceId) return;
+
+    // Load assets first — the clips below take their labels from the bin.
     try {
-      const assets = await listProjectAssets(project.id);
-      state.assets = [];
+      const assets = await listProjectAssets(pid);
+      if (state.activeProjectId !== pid) return;
       for (const a of assets) registerAsset(state, a);
       startProxyPolling(state, getAsset, (updated) => {
         updateAsset(state, updated.id, updated);
         renderAssets();
       });
     } catch {
-      /* no assets yet */
+      /* no assets yet — the bin stays empty from the reset */
+    }
+
+    // Load this project's tracks and clips. The timeline is empty after the
+    // reset, so a failure here leaves it empty rather than showing the last
+    // project's.
+    try {
+      const rows = await orchestratorListTracks(state.activeSequenceId);
+      if (state.activeProjectId !== pid) return;
+      const tracks = rows
+        .slice()
+        .sort((a, b) => a.lane_index - b.lane_index)
+        .map((t, i): import("./types").UiTrack => ({
+          id: i + 1,
+          serverId: t.id,
+          name: t.name,
+          kind: t.track_type === "audio" ? "Audio" : "Video",
+          lane_index: t.lane_index,
+          clips: [],
+        }));
+
+      const clipRows = await orchestratorListClips(state.activeSequenceId);
+      if (state.activeProjectId !== pid) return;
+      const byTrack = new Map(tracks.map((t) => [t.serverId, t]));
+      for (const c of clipRows) {
+        const track = byTrack.get(c.track_id);
+        if (!track) continue;
+        const asset = state.assets.find((a) => a.id === c.asset_id);
+        track.clips.push({
+          id: state.nextClipId++,
+          clipId: c.id,
+          assetId: c.asset_id,
+          label: asset?.uri.split("/").pop() ?? c.asset_id,
+          inTick: c.in_tick,
+          outTick: c.out_tick,
+          color: "#4d7dff",
+        });
+      }
+
+      state.timeline.tracks = tracks;
+      state.ui.activeTrackId = tracks[0]?.id ?? null;
+      const maxOut = Math.max(0, ...tracks.flatMap((t) => t.clips.map((c) => c.outTick)));
+      if (maxOut + state.timeline.fps * 2 > state.timeline.durationTicks) {
+        state.timeline.durationTicks = maxOut + state.timeline.fps * 2;
+      }
+    } catch (e) {
+      devLog(`Load timeline error: ${String(e)}`);
     }
     navigateTo("studio");
     renderTimelineFull();
@@ -632,6 +824,13 @@ export function bootstrapStudioApp(): void {
         if (!window.confirm(`Delete "${track.name}"? This will also remove ${track.clips.length} clip(s).`)) return;
       }
       state.timeline.tracks.splice(idx, 1);
+      // Tracks are server-backed now, so a local-only splice would come back on
+      // the next open. The clips cascade with it server-side.
+      if (track.serverId && state.activeSequenceId) {
+        void orchestratorDeleteTrack(state.activeSequenceId, track.serverId).catch(
+          (e) => devLog(`Delete track error: ${String(e)}`),
+        );
+      }
       if (state.ui.activeTrackId === trackId) {
         state.ui.activeTrackId = state.timeline.tracks[0]?.id ?? null;
       }
@@ -694,9 +893,12 @@ export function bootstrapStudioApp(): void {
   }
 
   async function refreshAssets(): Promise<void> {
-    if (!state.activeProjectId) return;
+    const pid = state.activeProjectId;
+    if (!pid) return;
     try {
-      const assets = await listProjectAssets(state.activeProjectId);
+      const assets = await listProjectAssets(pid);
+      // The user may have switched projects while this was in flight.
+      if (state.activeProjectId !== pid) return;
       state.assets = [];
       for (const a of assets) registerAsset(state, a);
       renderAssets();
@@ -765,8 +967,8 @@ export function bootstrapStudioApp(): void {
     for (const track of state.timeline.tracks) {
       if (track.kind !== "Video") continue;
       for (const clip of track.clips) {
-        if (clip.inTick <= ph && ph < clip.outTick && clip.serverId) {
-          const asset = state.assets.find((a) => a.id === clip.serverId) ?? null;
+        if (clip.inTick <= ph && ph < clip.outTick && clip.assetId) {
+          const asset = state.assets.find((a) => a.id === clip.assetId) ?? null;
           if (asset) return { clip, asset };
         }
       }
@@ -775,6 +977,7 @@ export function bootstrapStudioApp(): void {
   }
 
   async function fetchFrameForPlayhead(): Promise<void> {
+    const pid = state.activeProjectId;
     const found = clipAtPlayhead();
     if (!found) {
       previewFrame.style.display = "none";
@@ -794,6 +997,8 @@ export function bootstrapStudioApp(): void {
     previewEmpty.style.display = "none";
     try {
       const b64 = await fetchFrame(proxyPath, offsetSecs);
+      // Don't paint a frame the user has already navigated away from.
+      if (state.activeProjectId !== pid) return;
       previewFrame.src = `data:image/jpeg;base64,${b64}`;
       previewFrame.style.display = "block";
     } catch {
@@ -922,7 +1127,7 @@ export function bootstrapStudioApp(): void {
     }
   }
   async function doListProjects() {
-    navigateTo("home");
+    await goHome();
   }
   // ── AI job progress (Task 12): poll status, show stages, gate review buttons ──
   let jobPollTimer: number | null = null;
@@ -1079,8 +1284,8 @@ export function bootstrapStudioApp(): void {
   // ═══════════════════════════════════════════
 
   // Navigation
-  $("#brand-studio").addEventListener("click", () => navigateTo("home"));
-  $("#btn-home-nav").addEventListener("click", () => navigateTo("home"));
+  $("#brand-studio").addEventListener("click", () => void goHome());
+  $("#btn-home-nav").addEventListener("click", () => void goHome());
   $("#btn-list-projects").addEventListener("click", doListProjects);
 
   // Dev mode
@@ -1185,7 +1390,7 @@ export function bootstrapStudioApp(): void {
       const videoTrack = state.timeline.tracks.find((t) => t.kind === "Video");
       if (videoTrack) {
         // Clear demo clips (clips without a linked asset)
-        videoTrack.clips = videoTrack.clips.filter((c) => c.serverId);
+        videoTrack.clips = videoTrack.clips.filter((c) => c.assetId);
         state.ui.activeTrackId = videoTrack.id;
         insertClipFromAsset(state, asset, history);
         // Extend timeline if clip exceeds duration
@@ -1233,7 +1438,7 @@ export function bootstrapStudioApp(): void {
         registerAsset(state, asset);
         const videoTrack = state.timeline.tracks.find((t) => t.kind === "Video");
         if (videoTrack) {
-          videoTrack.clips = videoTrack.clips.filter((c) => c.serverId);
+          videoTrack.clips = videoTrack.clips.filter((c) => c.assetId);
           state.ui.activeTrackId = videoTrack.id;
           insertClipFromAsset(state, asset, history);
           const maxOut = videoTrack.clips.reduce((m, c) => Math.max(m, c.outTick), 0);
@@ -1257,39 +1462,65 @@ export function bootstrapStudioApp(): void {
     void fetchFrameForPlayhead();
   });
 
-  // Add tracks
-  let nextLaneIdx = 10;
-  $("#btn-add-video-track").addEventListener("click", () => {
-    const t: import("./types").UiTrack = {
-      id: state.nextClipId + 1000,
-      name: `V${state.timeline.tracks.filter((t) => t.kind === "Video").length + 1}`,
-      kind: "Video",
-      lane_index: nextLaneIdx++,
-      clips: [],
-    };
-    state.timeline.tracks.push(t);
-    commitHistory(state, history, "add video track");
-    renderTimelineFull();
-  });
-  $("#btn-add-audio-track").addEventListener("click", () => {
-    const t: import("./types").UiTrack = {
-      id: state.nextClipId + 2000,
-      name: `A${state.timeline.tracks.filter((t) => t.kind === "Audio").length + 1}`,
-      kind: "Audio",
-      lane_index: nextLaneIdx++,
-      clips: [],
-    };
-    state.timeline.tracks.push(t);
-    commitHistory(state, history, "add audio track");
-    renderTimelineFull();
-  });
+  // ── Add tracks ──
+  //
+  // Creates the track on the server first, exactly like Import Media creates
+  // the asset first, then mirrors the returned row into the timeline. A track
+  // without a serverId is invisible to persistTimeline() — it filters those
+  // out — so a local-only track silently swallowed every clip placed on it.
+  async function addTrack(kind: "Video" | "Audio"): Promise<void> {
+    const sid = state.activeSequenceId;
+    if (!sid) {
+      devLog("Add track: open a project first.");
+      return;
+    }
+    const prefix = kind === "Video" ? "V" : "A";
+    const name = `${prefix}${
+      state.timeline.tracks.filter((t) => t.kind === kind).length + 1
+    }`;
+    // Derive both indices from what's on screen. A module-level counter drifts
+    // once you switch projects, since the timeline is rebuilt from the server.
+    const laneIndex =
+      state.timeline.tracks.reduce((m, t) => Math.max(m, t.lane_index), -1) + 1;
+    const localId =
+      state.timeline.tracks.reduce((m, t) => Math.max(m, t.id), 0) + 1;
+
+    try {
+      const row = await orchestratorCreateTrack(sid, kind.toLowerCase(), laneIndex, name);
+      // The user may have switched projects while the request was in flight.
+      if (state.activeSequenceId !== sid) return;
+      state.timeline.tracks.push({
+        id: localId,
+        serverId: row.id,
+        name: row.name,
+        kind,
+        lane_index: row.lane_index,
+        clips: [],
+      });
+      state.ui.activeTrackId = localId;
+      commitHistory(state, history, `add ${kind.toLowerCase()} track`);
+      renderTimelineFull();
+      devLog(`Track created: ${row.name} (${row.id})`);
+    } catch (e) {
+      devLog(`Add track error: ${String(e)}`);
+    }
+  }
+
+  $("#btn-add-video-track").addEventListener("click", () => void addTrack("Video"));
+  $("#btn-add-audio-track").addEventListener("click", () => void addTrack("Audio"));
 
   // Save / Export (placeholder)
-  $("#btn-save-project").addEventListener("click", () => {
+  $("#btn-save-project").addEventListener("click", async () => {
     commitHistory(state, history, "save");
     const projectName = ($("#project-name") as HTMLInputElement).value || "Untitled";
     saveProject(projectName, snapshotState(state));
+    const err = await persistTimeline();
+    if (err) {
+      toast(`Couldn't save timeline: ${err}`, "error");
+      return;
+    }
     devLog(`Project "${projectName}" saved.`);
+    toast(`Project "${projectName}" saved`, "ok");
   });
   $("#btn-export").addEventListener("click", () =>
     devLog("Export: not yet wired."),

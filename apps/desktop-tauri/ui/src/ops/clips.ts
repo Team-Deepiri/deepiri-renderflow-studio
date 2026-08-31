@@ -1,5 +1,6 @@
 import type { StudioState, HistoryStack } from "../state";
 import type { UiClip, UiTrack, Asset } from "../types";
+import { newClipId } from "../types";
 import { commitHistory } from "./history";
 
 const CLIP_COLORS = [
@@ -42,7 +43,10 @@ export function splitClip(
 
   const newClip: UiClip = {
     id: state.nextClipId++,
-    serverId: undefined,
+    clipId: newClipId(),
+    // Inherit the source's asset: the fragment is the same media, so it stays
+    // previewable and persists like any other clip.
+    assetId: clip.assetId,
     label: clip.label,
     inTick: ph,
     outTick: clip.outTick,
@@ -150,7 +154,8 @@ export function insertClipFromAsset(
 
   const newClip: UiClip = {
     id: state.nextClipId++,
-    serverId: asset.id,
+    clipId: newClipId(),
+    assetId: asset.id,
     label: asset.uri.split("/").pop() ?? asset.id,
     inTick,
     outTick: inTick + durationTicks,

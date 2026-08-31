@@ -257,6 +257,14 @@ def track_list(sequence_id: UUID) -> list[dict[str, Any]]:
 def track_delete(track_id: UUID) -> bool:
     with _lock:
         existed = _tracks.pop(track_id, None)
+        if existed:
+            clip_ids = [c["id"] for c in _clips.values() if c["track_id"] == track_id]
+            for cid in clip_ids:
+                _clips.pop(cid, None)
+                for eid in [
+                    e["id"] for e in _clip_effects.values() if e["clip_id"] == cid
+                ]:
+                    _clip_effects.pop(eid, None)
     if existed:
         _save()
     return existed is not None
@@ -293,6 +301,47 @@ def clip_list_for_sequence(sequence_id: UUID) -> list[dict[str, Any]]:
     with _lock:
         track_ids = {t["id"] for t in _tracks.values() if t["sequence_id"] == sequence_id}
         return [c for c in _clips.values() if c["track_id"] in track_ids]
+
+
+def clip_replace_for_sequence(
+    sequence_id: UUID, rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Make `rows` this sequence's complete clip list, under one lock + save.
+
+    Clips carrying an id already present are updated in place (created_at is
+    preserved); clips in the sequence but absent from `rows` are dropped. Rows
+    pointing at a track outside this sequence are ignored.
+    """
+    with _lock:
+        track_ids = {t["id"] for t in _tracks.values() if t["sequence_id"] == sequence_id}
+        keep = {r["id"] for r in rows}
+        for cid in [
+            c["id"]
+            for c in _clips.values()
+            if c["track_id"] in track_ids and c["id"] not in keep
+        ]:
+            _clips.pop(cid, None)
+
+        created: list[dict[str, Any]] = []
+        for r in rows:
+            if r["track_id"] not in track_ids:
+                continue
+            existing = _clips.get(r["id"])
+            row = {
+                "id": r["id"],
+                "track_id": r["track_id"],
+                "asset_id": r["asset_id"],
+                "in_tick": r["in_tick"],
+                "out_tick": r["out_tick"],
+                "src_in_tick": r.get("src_in_tick", 0),
+                "speed_ratio": r.get("speed_ratio", 1.0),
+                "transform_jsonb": dict(r.get("transform") or {}),
+                "created_at": existing["created_at"] if existing else _now(),
+            }
+            _clips[r["id"]] = row
+            created.append(row)
+    _save()
+    return created
 
 
 def clip_effect_create(clip_id: UUID, effect_type: str, order_idx: int, params: dict[str, Any]) -> dict[str, Any]:
@@ -448,7 +497,35 @@ def project_update(
 
 
 def project_delete(project_id: UUID) -> None:
+    """Drop the project and everything hanging off it, under one lock + save."""
     with _lock:
+        seq_ids = {s["id"] for s in sequence_list(project_id)}
+        track_ids = {t["id"] for sid in seq_ids for t in track_list(sid)}
+        clip_ids = {c["id"] for c in _clips.values() if c["track_id"] in track_ids}
+        effect_ids = {
+            e["id"] for e in _clip_effects.values() if e["clip_id"] in clip_ids
+        }
+        scene_ids = {s["id"] for s in _scenes.values() if s["project_id"] == project_id}
+        node_ids = {
+            n["id"] for n in _scene_nodes.values() if n["scene_id"] in scene_ids
+        }
+        asset_ids = {a["id"] for a in asset_list(project_id)}
+        job_ids = {
+            j["id"] for j in _render_jobs.values() if j["project_id"] == project_id
+        }
+
+        for store, keys in (
+            (_clip_effects, effect_ids),
+            (_clips, clip_ids),
+            (_tracks, track_ids),
+            (_sequences, seq_ids),
+            (_scene_nodes, node_ids),
+            (_scenes, scene_ids),
+            (_assets, asset_ids),
+            (_render_jobs, job_ids),
+        ):
+            for key in keys:
+                store.pop(key, None)
         _projects.pop(project_id, None)
     _save()
 

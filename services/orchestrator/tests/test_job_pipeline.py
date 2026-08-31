@@ -197,6 +197,7 @@ def test_accept_creates_video_asset(tmp_path, monkeypatch):
     import shutil
     import subprocess
 
+    from app import memory_store
     from app.api.routers.ai_jobs import accept_ai_job
     from app.job_store import JobStatus
     from app.services import studio
@@ -213,7 +214,8 @@ def test_accept_creates_video_asset(tmp_path, monkeypatch):
         output.write_bytes(b"\x00")
 
     store = _store()
-    pid = uuid4()
+    # A real project: accept refuses to mint an asset for one that doesn't exist.
+    pid = studio.create_project(memory_store.DEMO_OWNER, "Accept Test")["id"]
     job = store.create(pid, "scene", "sunset beach")
 
     store.update_status(job.id, JobStatus.REVIEW, stages=["preparing", "storyboard", "review"])
@@ -250,6 +252,7 @@ class _NoThread:
 def test_accept_asset_uses_real_path_and_hash(tmp_path, monkeypatch):
     """The created asset must reference the real resolved file with a real
     content hash"""
+    from app import memory_store
     from app.api.routers.ai_jobs import accept_ai_job
     from app.services import studio
 
@@ -257,7 +260,7 @@ def test_accept_asset_uses_real_path_and_hash(tmp_path, monkeypatch):
     output.write_bytes(b"real mp4 bytes")
 
     store = _store()
-    pid = uuid4()
+    pid = studio.create_project(memory_store.DEMO_OWNER, "Hash Check")["id"]
     job = store.create(pid, "scene", "hash check")
     store.update_status(job.id, JobStatus.REVIEW, stages=["review"])
     store.merge_meta(job.id, "output_path", str(output))

@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+import shutil
 from typing import Any
 from uuid import UUID
 
 from app import db_repos, memory_store
+from app.paths import data_subdir, resolve_within_data_dir
+
+logger = logging.getLogger(__name__)
 
 
 def bootstrap() -> None:
@@ -54,8 +59,12 @@ def create_asset(
 
 
 def list_assets(project_id: UUID) -> list[dict[str, Any]]:
+    # Falling through on an empty list conflates "no assets" with "not stored
+    # here", so a known-but-empty project would serve back rows the store has
+    # already dropped. Consult the mirror only when memory holds neither the
+    # parent nor any rows for it.
     mem = memory_store.asset_list(project_id)
-    if mem:
+    if mem or memory_store.project_get(project_id):
         return mem
     return db_repos.list_assets(project_id)
 
@@ -74,7 +83,7 @@ def create_sequence(
 
 def list_sequences(project_id: UUID) -> list[dict[str, Any]]:
     mem = memory_store.sequence_list(project_id)
-    if mem:
+    if mem or memory_store.project_get(project_id):
         return mem
     return db_repos.list_sequences(project_id)
 
@@ -94,7 +103,7 @@ def create_track(sequence_id: UUID, track_type: str, lane_index: int, name: str)
 
 def list_tracks(sequence_id: UUID) -> list[dict[str, Any]]:
     mem = memory_store.track_list(sequence_id)
-    if mem:
+    if mem or memory_store.sequence_get(sequence_id):
         return mem
     return db_repos.list_tracks(sequence_id)
 
@@ -122,10 +131,19 @@ def create_clip(
 
 
 def list_clips_for_sequence(sequence_id: UUID) -> list[dict[str, Any]]:
+    # An emptied timeline must read back as empty, not resurrect from the mirror.
     mem = memory_store.clip_list_for_sequence(sequence_id)
-    if mem:
+    if mem or memory_store.sequence_get(sequence_id):
         return mem
     return db_repos.list_clips_for_sequence(sequence_id)
+
+
+def replace_clips_for_sequence(
+    sequence_id: UUID, rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    created = memory_store.clip_replace_for_sequence(sequence_id, rows)
+    db_repos.replace_clips_for_sequence(sequence_id, created)
+    return created
 
 
 def add_clip_effect(
@@ -178,9 +196,49 @@ def update_project(
     return row
 
 
+_TERMINAL_JOB_STATUSES = frozenset(
+    {"cancelled", "failed", "rejected", "accepted", "committed"}
+)
+
+
+def _cancel_project_jobs(project_id: UUID) -> list[UUID]:
+    """Stop this project's AI jobs and return every job id it owns."""
+    from app.job_store import JobStatus, store
+    from app.worker_loop import cancel_job
+
+    job_ids: list[UUID] = []
+    try:
+        for rec in store.list_by_project(project_id):
+            job_ids.append(rec.id)
+            if rec.status.value in _TERMINAL_JOB_STATUSES:
+                continue
+            cancel_job(str(rec.id))
+            store.update_status(rec.id, JobStatus.CANCELLED, stages=["cancelled"])
+    except Exception as e:
+        logger.warning("_cancel_project_jobs: %s", e)
+    return job_ids
+
+
+def _purge_project_files(project_id: UUID, job_ids: list[UUID]) -> None:
+    """Delete the project's generated media from disk."""
+    for asset in memory_store.asset_list(project_id):
+        meta = asset.get("meta_jsonb") or {}
+        for path in (asset.get("uri"), meta.get("proxy_path")):
+            if not path:
+                continue
+            try:
+                resolve_within_data_dir(str(path)).unlink(missing_ok=True)
+            except (ValueError, OSError):
+                pass  # outside the data dir, or already gone — leave it alone
+    for job_id in job_ids:
+        shutil.rmtree(data_subdir("render_outputs") / str(job_id), ignore_errors=True)
+
+
 def delete_project(project_id: UUID) -> None:
-    memory_store.project_delete(project_id)
+    job_ids = _cancel_project_jobs(project_id)
+    _purge_project_files(project_id, job_ids)
     db_repos.delete_project(project_id)
+    memory_store.project_delete(project_id)
 
 
 def get_asset(asset_id: UUID) -> dict[str, Any] | None:

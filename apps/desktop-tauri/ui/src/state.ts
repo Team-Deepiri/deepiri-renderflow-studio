@@ -1,5 +1,6 @@
 import type { Asset } from "./backendApi";
 import type { TimelineState, TimelineUiState, TimelineSnapshot } from "./types";
+import { newClipId } from "./types";
 
 /** The complete application state — one mutable object. */
 export type StudioState = {
@@ -39,8 +40,8 @@ export function createInitialState(): StudioState {
           kind: "Video",
           lane_index: 0,
           clips: [
-            { id: 101, label: "Clip A", inTick: 0, outTick: 480, color: "#4d7dff" },
-            { id: 102, label: "Clip B", inTick: 480, outTick: 960, color: "#18b487" },
+            { id: 101, clipId: newClipId(), label: "Clip A", inTick: 0, outTick: 480, color: "#4d7dff" },
+            { id: 102, clipId: newClipId(), label: "Clip B", inTick: 480, outTick: 960, color: "#18b487" },
           ],
         },
         {
@@ -49,7 +50,7 @@ export function createInitialState(): StudioState {
           kind: "Video",
           lane_index: 1,
           clips: [
-            { id: 201, label: "Title", inTick: 240, outTick: 720, color: "#ff8c42" },
+            { id: 201, clipId: newClipId(), label: "Title", inTick: 240, outTick: 720, color: "#ff8c42" },
           ],
         },
         {
@@ -58,7 +59,7 @@ export function createInitialState(): StudioState {
           kind: "Audio",
           lane_index: 2,
           clips: [
-            { id: 301, label: "VO", inTick: 0, outTick: 960, color: "#a855f7" },
+            { id: 301, clipId: newClipId(), label: "VO", inTick: 0, outTick: 960, color: "#a855f7" },
           ],
         },
       ],
@@ -90,4 +91,20 @@ export function createHistoryStack(): HistoryStack {
     future: [],
     suppressHistory: false,
   };
+}
+
+/** Clears everything that belongs to a single project. */
+export function resetProjectState(
+  state: StudioState,
+  history: HistoryStack
+): StudioState {
+  const fresh = createInitialState();
+  state.timeline = { ...fresh.timeline, tracks: [], playheadTick: 0 };
+  state.ui = fresh.ui;
+  state.assets = [];
+  state.nextClipId = fresh.nextClipId;
+  state.lastJobId = "";
+  history.past = [];
+  history.future = [];
+  return state;
 }
