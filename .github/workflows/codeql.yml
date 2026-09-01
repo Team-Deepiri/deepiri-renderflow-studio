@@ -1,6 +1,13 @@
 name: CodeQL
 
 on:
+  pull_request:
+    branches: [main, dev]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '.gitignore'
+      - 'LICENSE*'
   workflow_dispatch:
 
 permissions:
@@ -8,8 +15,13 @@ permissions:
   contents: read
   security-events: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   analyze:
+    timeout-minutes: 20
     name: Analyze (JavaScript/TypeScript, Python)
     runs-on: ubuntu-latest
 
