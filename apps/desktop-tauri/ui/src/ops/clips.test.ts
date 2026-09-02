@@ -9,6 +9,7 @@ import {
   moveClip,
   trimClip,
   insertClipFromAsset,
+  insertAssetIntoVideoTrack,
 } from "./clips";
 
 let state: StudioState;
@@ -245,5 +246,75 @@ describe("insertClipFromAsset", () => {
     const before = state.nextClipId;
     insertClipFromAsset(state, makeAsset(), history);
     expect(state.nextClipId).toBe(before + 1);
+  });
+
+  it("labels the clip with the asset's name when it has one", () => {
+    state.ui.activeTrackId = 1;
+    insertClipFromAsset(
+      state,
+      makeAsset({ meta_jsonb: { name: "AI · a calm lake at sunrise" } }),
+      history,
+    );
+    const clips = state.timeline.tracks[0].clips;
+    expect(clips[clips.length - 1].label).toBe("AI · a calm lake at sunrise");
+  });
+
+  it("falls back to the file name, not the whole Windows path", () => {
+    state.ui.activeTrackId = 1;
+    insertClipFromAsset(
+      state,
+      makeAsset({ uri: "C:\\data\\render_outputs\\job-1\\output.mp4", meta_jsonb: {} }),
+      history,
+    );
+    const clips = state.timeline.tracks[0].clips;
+    expect(clips[clips.length - 1].label).toBe("output.mp4");
+  });
+});
+
+// ── insertAssetIntoVideoTrack ────────────────────────────────────────────────
+
+describe("insertAssetIntoVideoTrack", () => {
+  const makeAsset = (overrides: Partial<Asset> = {}): Asset => ({
+    id: "asset-1",
+    project_id: "proj-1",
+    kind: "video",
+    uri: "file:///ai/output.mp4",
+    sha256: "abc",
+    duration_ms: 5000,
+    created_at: new Date().toISOString(),
+    meta_jsonb: { proxy_status: "ready" },
+    ...overrides,
+  });
+
+  it("replaces the placeholder clips on the first video track", () => {
+    const clip = insertAssetIntoVideoTrack(state, makeAsset(), history);
+
+    const videoTrack = state.timeline.tracks[0];
+    expect(clip).not.toBeNull();
+    // The demo clips (101, 102) carry no asset — only the new one survives.
+    expect(videoTrack.clips.map((c) => c.id)).toEqual([clip!.id]);
+    expect(clip!.inTick).toBe(0);
+    expect(clip!.outTick).toBe(120); // 5000ms at 24fps
+  });
+
+  it("grows the timeline past a clip that runs off the end", () => {
+    // 150s at 24fps = 3600 ticks, well past the default 2400.
+    const clip = insertAssetIntoVideoTrack(state, makeAsset({ duration_ms: 150_000 }), history);
+
+    expect(state.timeline.durationTicks).toBeGreaterThan(clip!.outTick);
+  });
+
+  it("appends after existing real clips instead of overwriting them", () => {
+    const first = insertAssetIntoVideoTrack(state, makeAsset(), history)!;
+    const second = insertAssetIntoVideoTrack(state, makeAsset({ id: "asset-2" }), history)!;
+
+    expect(second.inTick).toBe(first.outTick);
+    expect(state.timeline.tracks[0].clips).toHaveLength(2);
+  });
+
+  it("returns null when the project has no video track", () => {
+    state.timeline.tracks = state.timeline.tracks.filter((t) => t.kind !== "Video");
+
+    expect(insertAssetIntoVideoTrack(state, makeAsset(), history)).toBeNull();
   });
 });
