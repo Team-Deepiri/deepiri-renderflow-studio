@@ -7,6 +7,8 @@ export type HotkeyDispatch = {
   addMarker: () => void;
   splitClip: () => void;
   deleteClip: () => void;
+  rippleDeleteClip: () => void;
+  duplicateClip: () => void;
   undo: () => void;
   redo: () => void;
 };
@@ -24,6 +26,8 @@ export type HotkeyDispatch = {
  *   m              → add marker at playhead
  *   s              → split selected clip at playhead
  *   Delete / Backspace → delete selected clip
+ *   Shift+Delete   → ripple delete (close the gap)
+ *   Ctrl+D         → duplicate selected clip
  *   Ctrl+Z         → undo
  *   Ctrl+Y / Ctrl+Shift+Z → redo
  */
@@ -48,6 +52,11 @@ export function registerHotkeys(dispatch: HotkeyDispatch): () => void {
     if (ctrlKey && (key === "y" || (key === "z" && shiftKey))) {
       event.preventDefault();
       dispatch.redo();
+      return;
+    }
+    if (ctrlKey && key === "d") {
+      event.preventDefault();
+      dispatch.duplicateClip();
       return;
     }
 
@@ -77,7 +86,8 @@ export function registerHotkeys(dispatch: HotkeyDispatch): () => void {
         break;
       case "Delete":
       case "Backspace":
-        dispatch.deleteClip();
+        if (shiftKey) dispatch.rippleDeleteClip();
+        else dispatch.deleteClip();
         break;
     }
   };

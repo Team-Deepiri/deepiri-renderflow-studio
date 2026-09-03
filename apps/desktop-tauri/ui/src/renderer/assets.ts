@@ -1,4 +1,5 @@
 import type { Asset } from "../types";
+import { escapeHtml } from "./escape";
 
 export type AssetCallbacks = {
   /** Single click — preview the asset in the program monitor. */
@@ -52,9 +53,9 @@ export function renderAssetList(
         : "proxy-pending";
 
     li.innerHTML = `
-      <div class="asset-item-name" title="${asset.uri}">${name}</div>
+      <div class="asset-item-name" title="${escapeHtml(asset.uri)}">${escapeHtml(name)}</div>
       <div class="asset-item-meta">
-        <span class="asset-badge ${badgeClass}">${asset.kind}</span>
+        <span class="asset-badge ${badgeClass}">${escapeHtml(asset.kind)}</span>
         ${durMeta ? `<span>${durMeta}</span>` : ""}
         ${resMeta ? `<span>${resMeta}</span>` : ""}
         ${fpsMeta ? `<span>${fpsMeta}</span>` : ""}

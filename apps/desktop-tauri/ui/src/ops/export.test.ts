@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { RenderJob } from "../backendApi";
-import { runExport, type ExportApi } from "./export";
+import { runExport, saveThenExport, type ExportApi } from "./export";
 
 /** Serves a scripted sequence of render-job states, one per poll. */
 function fakeApi(states: Partial<RenderJob>[]) {
@@ -77,5 +77,71 @@ describe("runExport", () => {
       runExport("proj-1", "seq-1", api, { wait: noWait, maxPolls: 5 }),
     ).rejects.toThrow(/timed out/i);
     expect(pollCount()).toBe(5);
+  });
+});
+
+// ── saveThenExport ───────────────────────────────────────────────────────────
+
+const aJob = (over: Partial<RenderJob> = {}): RenderJob => ({
+  id: "render-1",
+  project_id: "proj-1",
+  sequence_id: "seq-1",
+  preset: "h264_1080p",
+  status: "completed",
+  progress: 1,
+  ...over,
+});
+
+describe("saveThenExport", () => {
+  it("saves the timeline before rendering it", async () => {
+    const order: string[] = [];
+
+    await saveThenExport(
+      async () => {
+        order.push("save");
+        return null;
+      },
+      async () => {
+        order.push("render");
+        return aJob();
+      },
+    );
+
+    expect(order).toEqual(["save", "render"]);
+  });
+
+  it("does not render when the save failed", async () => {
+    let rendered = false;
+
+    const result = await saveThenExport(
+      async () => "orchestrator unreachable",
+      async () => {
+        rendered = true;
+        return aJob();
+      },
+    );
+
+    // The whole point: a stale render is worse than no render, because the
+    // file looks authoritative while missing every unsaved edit.
+    expect(rendered).toBe(false);
+    expect(result).toEqual({ ok: false, saveError: "orchestrator unreachable" });
+  });
+
+  it("hands the finished render back when the save went through", async () => {
+    const job = aJob({ output_uri: "C:/data/render_outputs/render-1/export.mp4" });
+
+    const result = await saveThenExport(async () => null, async () => job);
+
+    expect(result).toEqual({ ok: true, job });
+  });
+
+  it("reports a failed render as a render result, not a save failure", async () => {
+    const failed = aJob({ status: "failed", error: "no readable clip sources" });
+
+    const result = await saveThenExport(async () => null, async () => failed);
+
+    // runExport resolves on a failed render rather than throwing, so the save
+    // gate has to stay out of the way and let the caller read job.status.
+    expect(result).toEqual({ ok: true, job: failed });
   });
 });

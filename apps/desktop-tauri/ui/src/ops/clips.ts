@@ -79,6 +79,109 @@ export function deleteClip(
 }
 
 /**
+ * Deletes the selected clip and pulls everything after it on the same track
+ * back by its length, so no gap is left behind.
+ *
+ * The plain delete leaves the hole in place — that stays the default, because
+ * closing gaps is not always what you want.
+ */
+export function rippleDeleteClip(
+  state: StudioState,
+  history: HistoryStack
+): StudioState {
+  if (state.ui.selectedClipId === null) return state;
+  const found = getClipById(state, state.ui.selectedClipId);
+  if (!found) return state;
+
+  commitHistory(state, history, "ripple delete clip");
+
+  const { track, clip } = found;
+  const gap = clip.outTick - clip.inTick;
+  const removedAt = clip.inTick;
+
+  track.clips = track.clips.filter((c) => c !== clip);
+  for (const c of track.clips) {
+    if (c.inTick >= removedAt) {
+      c.inTick -= gap;
+      c.outTick -= gap;
+    }
+  }
+  state.ui.selectedClipId = null;
+  return state;
+}
+
+/**
+ * Copies the selected clip in directly after itself and selects the copy.
+ * Returns the new clip, or null when nothing is selected.
+ */
+export function duplicateClip(
+  state: StudioState,
+  history: HistoryStack
+): UiClip | null {
+  if (state.ui.selectedClipId === null) return null;
+  const found = getClipById(state, state.ui.selectedClipId);
+  if (!found) return null;
+
+  commitHistory(state, history, "duplicate clip");
+
+  const { track, clip } = found;
+  const len = clip.outTick - clip.inTick;
+  const copy: UiClip = {
+    id: state.nextClipId++,
+    // Its own clip row, so a fresh clipId — but the same media underneath, so
+    // the asset carries over and the copy stays previewable and persistable.
+    clipId: newClipId(),
+    assetId: clip.assetId,
+    label: clip.label,
+    inTick: clip.outTick,
+    outTick: clip.outTick + len,
+    color: clip.color,
+  };
+
+  track.clips.splice(track.clips.indexOf(clip) + 1, 0, copy);
+  state.ui.selectedClipId = copy.id;
+
+  const tail = copy.outTick + state.timeline.fps * 2;
+  if (tail > state.timeline.durationTicks) state.timeline.durationTicks = tail;
+
+  return copy;
+}
+
+/**
+ * Snaps a dragged tick to the nearest clip edge, the playhead, or zero when
+ * one is within `threshold` ticks. Edges of `movingClipId` are skipped so a
+ * clip never snaps to itself.
+ *
+ * Returns `tick` unchanged when nothing is close enough, which is what keeps
+ * single-frame nudges possible.
+ */
+export function snapTick(
+  state: StudioState,
+  tick: number,
+  movingClipId: number | null,
+  threshold: number
+): number {
+  const targets: number[] = [0, state.timeline.playheadTick];
+  for (const track of state.timeline.tracks) {
+    for (const clip of track.clips) {
+      if (clip.id === movingClipId) continue;
+      targets.push(clip.inTick, clip.outTick);
+    }
+  }
+
+  let best = tick;
+  let bestDist = threshold;
+  for (const target of targets) {
+    const dist = Math.abs(target - tick);
+    if (dist <= bestDist) {
+      bestDist = dist;
+      best = target;
+    }
+  }
+  return best;
+}
+
+/**
  * Moves a clip by `deltaInTick` ticks.
  * Clamps so: inTick >= 0 and outTick <= durationTicks.
  */

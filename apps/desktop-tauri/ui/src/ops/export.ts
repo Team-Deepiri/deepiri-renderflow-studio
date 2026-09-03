@@ -60,3 +60,23 @@ export async function runExport(
   if (DONE.has(job.status)) return job;
   throw new Error(`Export timed out after ${maxPolls} polls (last status: ${job.status})`);
 }
+
+/** A save failure cancels the export; anything else carries the render back. */
+export type SaveThenExportResult =
+  | { ok: true; job: RenderJob }
+  | { ok: false; saveError: string };
+
+/**
+ * Pushes the local timeline to the server, then renders it.
+ *
+ * `persist` follows persistTimeline's contract: an error message, or null
+ * when the save went through.
+ */
+export async function saveThenExport(
+  persist: () => Promise<string | null>,
+  render: () => Promise<RenderJob>,
+): Promise<SaveThenExportResult> {
+  const saveError = await persist();
+  if (saveError) return { ok: false, saveError };
+  return { ok: true, job: await render() };
+}
