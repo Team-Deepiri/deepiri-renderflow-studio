@@ -527,7 +527,18 @@ export function bootstrapStudioApp(): void {
   }
 
   // -- Timeline Persistence --
-  /** Returns null on success, or the error text so callers can surface it. */
+  /** Raw fetch/server errors ("TypeError: Failed to fetch", a JSON 500 body)
+   *  mean nothing to a user; say what happened and what to do about it.
+   *  The raw text still goes to devLog for debugging. */
+  function friendlySaveError(raw: string): string {
+    if (/failed to fetch|networkerror|load failed|connection refused/i.test(raw)) {
+      return "We couldn't reach the RenderFlow backend. Make sure it's running, then try again.";
+    }
+    return "The RenderFlow backend hit a problem while saving. Please try again in a moment.";
+  }
+
+  /** Returns null on success, or a user-friendly error message so callers
+   *  can surface it directly. */
   async function persistTimeline(): Promise<string | null> {
     const sid = state.activeSequenceId;
     if (!sid) return null;
@@ -550,7 +561,7 @@ export function bootstrapStudioApp(): void {
       return null;
     } catch (e) {
       devLog(`Save timeline error: ${String(e)}`);
-      return String(e);
+      return friendlySaveError(String(e));
     }
   }
 
@@ -1595,7 +1606,7 @@ export function bootstrapStudioApp(): void {
     saveProject(projectName, snapshotState(state));
     const err = await persistTimeline();
     if (err) {
-      toast(`Couldn't save timeline: ${err}`, "error");
+      toast(`Your project couldn't be saved. ${err}`, "error");
       return;
     }
     devLog(`Project "${projectName}" saved.`);
@@ -1637,7 +1648,7 @@ export function bootstrapStudioApp(): void {
       if (!result.ok) {
         exportStatusEl.textContent = "Export cancelled — couldn't save timeline";
         toast(
-          `Couldn't export: saving your timeline failed, so nothing was rendered. ${result.saveError}`,
+          `Nothing was exported — your latest changes couldn't be saved first. ${result.saveError}`,
           "error",
         );
         devLog(`Export aborted — save failed: ${result.saveError}`);
