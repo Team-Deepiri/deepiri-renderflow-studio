@@ -227,6 +227,7 @@ pre{background:#0f131b;border:1px solid var(--border);border-radius:8px;padding:
   box-shadow:0 10px 30px rgba(0,0,0,0.5);word-break:break-word}
 .toast-ok{border-color:#18b487}
 .toast-error{border-color:#ff6b6b}
+.toast-detail{margin-top:5px;font-size:10.5px;line-height:1.4;color:var(--text-dim);opacity:0.75}
 .template-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
 .template-card{background:#0f131b;border:1px solid var(--border);border-radius:10px;padding:14px;cursor:pointer;transition:border-color 0.15s,background 0.15s}
 .template-card:hover{border-color:var(--accent);background:rgba(77,125,255,0.07)}
@@ -514,11 +515,22 @@ export function bootstrapStudioApp(): void {
   // ── Toasts ──
   const toastHost = $("#toast-host");
 
-  /** Transient message, bottom-right. Click to dismiss early. */
-  function toast(message: string, kind: "ok" | "error" = "ok"): void {
+  /** Transient message, bottom-right. Click to dismiss early. An optional
+   *  `detail` (e.g. the underlying server error) renders smaller and dimmer
+   *  below the main message so it doesn't compete with it. */
+  function toast(message: string, kind: "ok" | "error" = "ok", detail?: string): void {
     const el = document.createElement("div");
     el.className = `toast toast-${kind}`;
-    el.textContent = message;
+    const main = document.createElement("div");
+    main.className = "toast-msg";
+    main.textContent = message;
+    el.appendChild(main);
+    if (detail) {
+      const sub = document.createElement("div");
+      sub.className = "toast-detail";
+      sub.textContent = detail;
+      el.appendChild(sub);
+    }
     const remove = () => el.remove();
     el.addEventListener("click", remove);
     toastHost.appendChild(el);
@@ -1606,7 +1618,7 @@ export function bootstrapStudioApp(): void {
     saveProject(projectName, snapshotState(state));
     const err = await persistTimeline();
     if (err) {
-      toast(`Your project couldn't be saved. ${err}`, "error");
+      toast("Your project couldn't be saved.", "error", err);
       return;
     }
     devLog(`Project "${projectName}" saved.`);
@@ -1648,8 +1660,9 @@ export function bootstrapStudioApp(): void {
       if (!result.ok) {
         exportStatusEl.textContent = "Export cancelled — couldn't save timeline";
         toast(
-          `Nothing was exported — your latest changes couldn't be saved first. ${result.saveError}`,
+          "Nothing was exported — your latest changes couldn't be saved first.",
           "error",
+          result.saveError,
         );
         devLog(`Export aborted — save failed: ${result.saveError}`);
         return;
