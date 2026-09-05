@@ -41,6 +41,23 @@ def packs_to_roles(packs: list[str] | tuple[str, ...]) -> frozenset[str]:
     return frozenset(m.role for m in REGISTRY.values() if m.pack in wanted)
 
 
+def all_role_dirs(t2i_model_id: str) -> dict[str, str]:
+    """Every registered role → the directory it occupies, for the LRU.
+
+    The T2I backend that is *not* selected appears under the synthetic role
+    `t2i_keyframe_fallback` (the same key `ROLE_BYTES_FP16` uses). That role is
+    unpinned, so an SDXL directory left behind by an older prepaid install is
+    reclaimable instead of sitting on disk forever.
+    """
+    dirs: dict[str, str] = {}
+    for manifest in REGISTRY.values():
+        if manifest.role == "t2i_keyframe" and manifest.id != t2i_model_id:
+            dirs.setdefault("t2i_keyframe_fallback", manifest.local_dir)
+            continue
+        dirs.setdefault(manifest.role, manifest.local_dir)
+    return dirs
+
+
 def is_resident(models_dir: str, local_dir: str) -> bool:
     """A role is resident iff its dir exists and is non-empty.
 
