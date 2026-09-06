@@ -55,6 +55,7 @@ def _prepare_models(graph: RfirGraph) -> None:
         return
     t2i_model_id = _t2i_model_id()
     logger.info("Ensuring %d model role(s) on disk: %s", len(roles), sorted(roles))
+    _record_residency(roles, models_dir, t2i_model_id)
     try:
         ensure_roles(roles, models_dir=models_dir, t2i_model_id=t2i_model_id)
     except RuntimeError:
@@ -73,6 +74,25 @@ def _prepare_models(graph: RfirGraph) -> None:
         ensure_roles(
             roles - {"t2i_keyframe"}, models_dir=models_dir, t2i_model_id=t2i_model_id
         )
+
+
+def _record_residency(roles: frozenset[str], models_dir: str, t2i_model_id: str) -> None:
+    """Report the disk working set for this job. Never raises."""
+    try:
+        from app.rfir.metrics import registry as metrics_registry
+        from app.rfir.models.disk_lru import resident_bytes
+        from app.rfir.models.fetcher import all_role_dirs, residency_report
+
+        report = residency_report(roles, models_dir=models_dir, t2i_model_id=t2i_model_id)
+        metrics_registry.record_residency(
+            hot_roles=report.hot_roles,
+            missing_roles=report.missing_roles,
+            hot_bytes=report.hot_bytes,
+            miss_bytes=report.miss_bytes,
+            disk_bytes=resident_bytes(models_dir, all_role_dirs(t2i_model_id)),
+        )
+    except Exception as exc:  # noqa: BLE001 — observability must not fail a job
+        logger.debug("residency metrics unavailable: %s", exc)
 
 
 def _fallback_t2i_resident(models_dir: str, t2i_model_id: str) -> bool:

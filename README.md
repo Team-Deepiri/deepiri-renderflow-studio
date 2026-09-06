@@ -166,6 +166,8 @@ Set `RENDERFLOW_MODELS_MAX_BYTES` to cap the tree — after each job, least-rece
 
 The model worker can expose Prometheus-style metrics (`rfir_gpu_seconds_total`, `rfir_tier_count`, `rfir_jobs_total`, `rfir_cost_usd_total`) via `app.rfir.metrics.serve_metrics(port)`, scraped at `/metrics`.
 
+Disk working set (see [Model weights](#model-weights)): `rfir_model_disk_bytes` (gauge), `rfir_model_fetch_bytes_total`, `rfir_model_hit_roles_total`, `rfir_model_miss_roles_total`. Each job also logs one JSON line with `roles`, `hot_bytes`, `miss_bytes` and `rho_hat` — the measured share of the old prepaid catalog that job actually needed resident. A healthy Tier A worker sits well below 1.0 and its fetch counter stops growing once its roles are warm.
+
 ---
 
 ## Dependencies

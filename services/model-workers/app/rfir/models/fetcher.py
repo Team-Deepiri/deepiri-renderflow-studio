@@ -14,10 +14,16 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from app.rfir.models.registry import REGISTRY, ModelManifest, artifacts_for_roles
-from app.rfir.models.residency import ROLE_BYTES_FP16, FetchItem, fetch_priority
+from app.rfir.models.residency import (
+    ROLE_BYTES_FP16,
+    FetchItem,
+    catalog_bytes_fp16,
+    fetch_priority,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +45,50 @@ def packs_to_roles(packs: list[str] | tuple[str, ...]) -> frozenset[str]:
     if unknown:
         raise ValueError(f"unknown pack(s): {sorted(unknown)}; known: {list(PACKS)}")
     return frozenset(m.role for m in REGISTRY.values() if m.pack in wanted)
+
+
+@dataclass(frozen=True)
+class ResidencyReport:
+    """What this job found on disk, and what it had to pay for.
+
+    `rho_hat` is the measured counterpart to the design's ρ = E[disk] / catalog:
+    the share of the old prepaid catalog this job actually needed resident. A
+    Tier A job should sit well below 1.0 — that gap is the whole point.
+    """
+
+    hot_roles: frozenset[str]
+    missing_roles: frozenset[str]
+    hot_bytes: int
+    miss_bytes: int
+    rho_hat: float
+
+
+def residency_report(
+    roles: frozenset[str], *, models_dir: str, t2i_model_id: str
+) -> ResidencyReport:
+    """Classify a job's roles as hot or missing, before any fetch happens.
+
+    Sizes come from the fp16 table rather than `du`, so a hit and a miss are
+    comparable across machines and the numbers line up with the design's
+    predictions instead of with local quantization choices.
+    """
+    hot: set[str] = set()
+    missing: set[str] = set()
+    for manifest in artifacts_for_roles(roles, t2i_model_id=t2i_model_id):
+        if is_resident(models_dir, manifest.local_dir):
+            hot.add(manifest.role)
+        elif manifest.repo:
+            missing.add(manifest.role)
+
+    hot_bytes = sum(ROLE_BYTES_FP16.get(r, 0) for r in hot)
+    catalog = catalog_bytes_fp16(False)
+    return ResidencyReport(
+        hot_roles=frozenset(hot),
+        missing_roles=frozenset(missing),
+        hot_bytes=hot_bytes,
+        miss_bytes=sum(ROLE_BYTES_FP16.get(r, 0) for r in missing),
+        rho_hat=hot_bytes / catalog if catalog else 0.0,
+    )
 
 
 def plan_downloads(
