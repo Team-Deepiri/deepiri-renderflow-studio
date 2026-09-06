@@ -47,6 +47,22 @@ def packs_to_roles(packs: list[str] | tuple[str, ...]) -> frozenset[str]:
     return frozenset(m.role for m in REGISTRY.values() if m.pack in wanted)
 
 
+def artifact_bytes(manifest: ModelManifest) -> int:
+    """Predicted fp16 size of one artifact.
+
+    `ROLE_BYTES_FP16` is keyed by role and is a frozen contract, but two models
+    can share a role at very different sizes — SDXL-Turbo is ~6 GB where FLUX is
+    ~12 GB. The registry already marks the cheaper one with `fallback_for`, and
+    the size table already carries a `<role>_fallback` entry, so use it. Without
+    this an SDXL install reports FLUX's bytes and rho_hat is a fiction.
+    """
+    if manifest.extras.get("fallback_for"):
+        fallback = ROLE_BYTES_FP16.get(f"{manifest.role}_fallback")
+        if fallback is not None:
+            return fallback
+    return ROLE_BYTES_FP16.get(manifest.role, 0)
+
+
 @dataclass(frozen=True)
 class ResidencyReport:
     """What this job found on disk, and what it had to pay for.
@@ -74,19 +90,22 @@ def residency_report(
     """
     hot: set[str] = set()
     missing: set[str] = set()
+    hot_bytes = 0
+    miss_bytes = 0
     for manifest in artifacts_for_roles(roles, t2i_model_id=t2i_model_id):
         if is_resident(models_dir, manifest.local_dir):
             hot.add(manifest.role)
+            hot_bytes += artifact_bytes(manifest)
         elif manifest.repo:
             missing.add(manifest.role)
+            miss_bytes += artifact_bytes(manifest)
 
-    hot_bytes = sum(ROLE_BYTES_FP16.get(r, 0) for r in hot)
     catalog = catalog_bytes_fp16(False)
     return ResidencyReport(
         hot_roles=frozenset(hot),
         missing_roles=frozenset(missing),
         hot_bytes=hot_bytes,
-        miss_bytes=sum(ROLE_BYTES_FP16.get(r, 0) for r in missing),
+        miss_bytes=miss_bytes,
         rho_hat=hot_bytes / catalog if catalog else 0.0,
     )
 
@@ -105,8 +124,8 @@ def plan_downloads(
     by_role = {m.role: m for m in manifests if m.repo}
     order = fetch_priority(
         [
-            FetchItem(role=role, bytes=ROLE_BYTES_FP16.get(role, 0), in_current_job=True)
-            for role in by_role
+            FetchItem(role=role, bytes=artifact_bytes(manifest), in_current_job=True)
+            for role, manifest in by_role.items()
         ]
     )
     return [by_role[item.role] for item in order]
@@ -198,10 +217,10 @@ def ensure_roles(
     queue = [
         FetchItem(
             role=role,
-            bytes=ROLE_BYTES_FP16.get(role, 0),
+            bytes=artifact_bytes(manifest),
             in_current_job=True,
         )
-        for role in missing
+        for role, manifest in missing.items()
     ]
 
     fetched: list[str] = []

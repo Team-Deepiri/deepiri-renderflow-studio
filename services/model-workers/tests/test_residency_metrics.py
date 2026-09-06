@@ -10,7 +10,11 @@ import pytest
 
 from app.rfir.metrics import MetricsRegistry
 from app.rfir.models.fetcher import residency_report
-from app.rfir.models.residency import DEFAULT_T2I_MODEL_ID, catalog_bytes_fp16
+from app.rfir.models.residency import (
+    DEFAULT_T2I_MODEL_ID,
+    FALLBACK_T2I_MODEL_ID,
+    catalog_bytes_fp16,
+)
 
 
 def _plant(root, name: str, nbytes: int = 8) -> None:
@@ -97,6 +101,60 @@ def test_roles_with_no_artifact_are_not_counted_as_missing(tmp_path):
 
     assert report.missing_roles == frozenset()
     assert report.hot_roles == frozenset()
+
+
+def test_sizes_follow_the_model_not_just_the_role(tmp_path):
+    """SDXL is ~6 GB. Billing it at FLUX's 12 GB makes rho_hat a fiction.
+
+    ROLE_BYTES_FP16 is keyed by role and is a frozen contract, so the fallback
+    backend's size lives under `t2i_keyframe_fallback`. Anything holding a
+    manifest must use that, not the role default.
+    """
+    _plant(tmp_path, "sdxl-turbo")
+
+    report = residency_report(
+        frozenset({"t2i_keyframe"}),
+        models_dir=str(tmp_path),
+        t2i_model_id=FALLBACK_T2I_MODEL_ID,
+    )
+
+    assert report.hot_bytes == 6 * 10**9
+
+
+def test_flux_still_bills_at_its_own_size(tmp_path):
+    _plant(tmp_path, "flux-schnell")
+
+    report = residency_report(
+        frozenset({"t2i_keyframe"}),
+        models_dir=str(tmp_path),
+        t2i_model_id=DEFAULT_T2I_MODEL_ID,
+    )
+
+    assert report.hot_bytes == 12 * 10**9
+
+
+def test_miss_bytes_also_follow_the_model(tmp_path):
+    report = residency_report(
+        frozenset({"t2i_keyframe"}),
+        models_dir=str(tmp_path),
+        t2i_model_id=FALLBACK_T2I_MODEL_ID,
+    )
+
+    assert report.miss_bytes == 6 * 10**9
+
+
+def test_sdxl_install_reports_a_smaller_rho_than_flux(tmp_path):
+    """The cheaper backend must show up as a cheaper working set."""
+    _plant(tmp_path, "sdxl-turbo")
+    sdxl = residency_report(
+        frozenset({"t2i_keyframe"}), models_dir=str(tmp_path), t2i_model_id=FALLBACK_T2I_MODEL_ID
+    )
+    _plant(tmp_path, "flux-schnell")
+    flux = residency_report(
+        frozenset({"t2i_keyframe"}), models_dir=str(tmp_path), t2i_model_id=DEFAULT_T2I_MODEL_ID
+    )
+
+    assert sdxl.rho_hat < flux.rho_hat
 
 
 # --- metrics registry -------------------------------------------------------

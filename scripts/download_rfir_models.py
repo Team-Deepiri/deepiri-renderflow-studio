@@ -33,14 +33,12 @@ sys.path.insert(0, os.path.join(_REPO_ROOT, "services", "model-workers"))
 from app.rfir.models.fetcher import (  # noqa: E402
     DEFAULT_PACKS,
     PACKS,
+    artifact_bytes,
     is_resident,
     plan_downloads,
 )
 from app.rfir.models.registry import ModelManifest  # noqa: E402
-from app.rfir.models.residency import (  # noqa: E402
-    DEFAULT_T2I_MODEL_ID,
-    ROLE_BYTES_FP16,
-)
+from app.rfir.models.residency import DEFAULT_T2I_MODEL_ID  # noqa: E402
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -112,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    predicted = sum(ROLE_BYTES_FP16.get(m.role, 0) for m in plan)
+    predicted = sum(artifact_bytes(m) for m in plan)
     print(f"Models root: {models_dir}")
     print(f"Packs: {','.join(packs)}   T2I: {args.t2i_model}")
     print(f"Planned: {len(plan)} artifact(s), ~{predicted / 1e9:.0f} GB if none are present\n")
@@ -120,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         for manifest in plan:
             state = "present" if is_resident(models_dir, manifest.local_dir) else "missing"
-            size = ROLE_BYTES_FP16.get(manifest.role, 0) / 1e9
+            size = artifact_bytes(manifest) / 1e9
             print(f"  {state:8} {manifest.local_dir:26} {manifest.repo}  (~{size:.1f} GB)")
         return 0
 
