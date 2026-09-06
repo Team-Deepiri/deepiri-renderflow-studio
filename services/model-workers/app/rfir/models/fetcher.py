@@ -41,6 +41,27 @@ def packs_to_roles(packs: list[str] | tuple[str, ...]) -> frozenset[str]:
     return frozenset(m.role for m in REGISTRY.values() if m.pack in wanted)
 
 
+def plan_downloads(
+    packs: list[str] | tuple[str, ...], *, t2i_model_id: str
+) -> list[ModelManifest]:
+    """Artifacts the bootstrap script should pull for `packs`, biggest first.
+
+    Same covering rules as a live job — one T2I backend, shared checkpoints
+    fetched once — so a pre-fetch and an on-demand fetch never disagree about
+    what belongs on disk. Roles with no HF repo (in-repo LFS weights) are
+    omitted: there is nothing to snapshot.
+    """
+    manifests = artifacts_for_roles(packs_to_roles(packs), t2i_model_id=t2i_model_id)
+    by_role = {m.role: m for m in manifests if m.repo}
+    order = fetch_priority(
+        [
+            FetchItem(role=role, bytes=ROLE_BYTES_FP16.get(role, 0), in_current_job=True)
+            for role in by_role
+        ]
+    )
+    return [by_role[item.role] for item in order]
+
+
 def all_role_dirs(t2i_model_id: str) -> dict[str, str]:
     """Every registered role → the directory it occupies, for the LRU.
 
