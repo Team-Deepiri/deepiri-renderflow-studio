@@ -109,6 +109,54 @@ def test_fetch_failure_propagates(monkeypatch, tmp_path):
         engine._prepare_models(_graph("t2i_keyframe"))
 
 
+def test_t2i_failure_is_survivable_when_the_other_backend_is_on_disk(monkeypatch, tmp_path):
+    """FLUX is gated; SDXL is installed. The op falls back, so do not fail early."""
+    (tmp_path / "sdxl-turbo").mkdir()
+    (tmp_path / "sdxl-turbo" / "model.safetensors").write_bytes(b"w")
+    asked: list[frozenset] = []
+
+    def gated(roles, **kwargs):
+        asked.append(roles)
+        if "t2i_keyframe" in roles:
+            raise RuntimeError("403 gated")
+        return []
+
+    monkeypatch.setattr("app.rfir.models.fetcher.ensure_roles", gated)
+    monkeypatch.setenv("RENDERFLOW_MODELS_DIR", str(tmp_path))
+    monkeypatch.setenv("RENDERFLOW_RFIR_T2I_MODEL", DEFAULT_T2I_MODEL_ID)
+
+    engine._prepare_models(_graph("t2i_keyframe", "depth_estimate"))
+
+    # Retried without the unreachable T2I, so depth still gets fetched.
+    assert asked[-1] == frozenset({"depth_estimate"})
+
+
+def test_t2i_failure_still_fails_when_no_backend_is_on_disk(monkeypatch, tmp_path):
+    def gated(roles, **kwargs):
+        raise RuntimeError("403 gated")
+
+    monkeypatch.setattr("app.rfir.models.fetcher.ensure_roles", gated)
+    monkeypatch.setenv("RENDERFLOW_MODELS_DIR", str(tmp_path))
+
+    with pytest.raises(RuntimeError, match="403 gated"):
+        engine._prepare_models(_graph("t2i_keyframe"))
+
+
+def test_a_stub_t2i_dir_does_not_count_as_a_fallback(monkeypatch, tmp_path):
+    """The 16 KB README-only dir a gated pull leaves behind is not a backend."""
+    (tmp_path / "sdxl-turbo").mkdir()
+    (tmp_path / "sdxl-turbo" / "README.md").write_text("#")
+
+    monkeypatch.setattr(
+        "app.rfir.models.fetcher.ensure_roles",
+        lambda roles, **kw: (_ for _ in ()).throw(RuntimeError("403 gated")),
+    )
+    monkeypatch.setenv("RENDERFLOW_MODELS_DIR", str(tmp_path))
+
+    with pytest.raises(RuntimeError, match="403 gated"):
+        engine._prepare_models(_graph("t2i_keyframe"))
+
+
 # --- post-job bookkeeping ---------------------------------------------------
 
 

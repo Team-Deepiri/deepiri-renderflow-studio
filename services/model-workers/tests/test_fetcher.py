@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from app.rfir.models.fetcher import ensure_roles, packs_to_roles
+from app.rfir.models.fetcher import ensure_roles, is_resident, packs_to_roles
 from app.rfir.models.residency import DEFAULT_T2I_MODEL_ID, FALLBACK_T2I_MODEL_ID
 
 
@@ -19,7 +19,7 @@ def _recorder() -> tuple[list[str], object]:
     def fake_download(repo_id: str, local_dir: str, allow_patterns=None) -> str:
         calls.append(repo_id)
         Path(local_dir).mkdir(parents=True, exist_ok=True)
-        (Path(local_dir) / "ok").write_text("1")
+        (Path(local_dir) / "model.safetensors").write_bytes(b"w")
         return local_dir
 
     return calls, fake_download
@@ -28,7 +28,7 @@ def _recorder() -> tuple[list[str], object]:
 def test_ensure_roles_skips_present_and_fetches_missing(tmp_path):
     models = tmp_path / "models"
     (models / "depth-anything-v2-small").mkdir(parents=True)
-    (models / "depth-anything-v2-small" / "config.json").write_text("{}")
+    (models / "depth-anything-v2-small" / "model.safetensors").write_bytes(b"w")
     calls, download = _recorder()
 
     ensure_roles(
@@ -80,6 +80,68 @@ def test_empty_dir_counts_as_missing(tmp_path):
     assert "black-forest-labs/FLUX.1-schnell" in calls
 
 
+# --- residency: a directory is not the same thing as a model ----------------
+
+
+def test_gated_download_stub_counts_as_missing(tmp_path):
+    """A 401 on a gated repo still writes README/.gitattributes first.
+
+    This is the real shape of a failed FLUX pull: ~16 KB of metadata and no
+    weights. Calling it resident makes the fetcher skip the download and the
+    loader fail later, which is strictly worse than fetching again.
+    """
+    stub = tmp_path / "flux-schnell"
+    stub.mkdir(parents=True)
+    (stub / "README.md").write_text("# FLUX.1-schnell")
+    (stub / ".gitattributes").write_text("*.safetensors filter=lfs\n")
+
+    assert is_resident(str(tmp_path), "flux-schnell") is False
+
+    calls, download = _recorder()
+    ensure_roles(
+        frozenset({"t2i_keyframe"}),
+        models_dir=str(tmp_path),
+        t2i_model_id=DEFAULT_T2I_MODEL_ID,
+        download=download,
+    )
+    assert calls == ["black-forest-labs/FLUX.1-schnell"]
+
+
+def test_weights_in_a_subdirectory_count(tmp_path):
+    """Diffusers keeps weights under transformer/, vae/, text_encoder/."""
+    (tmp_path / "flux-schnell" / "transformer").mkdir(parents=True)
+    (tmp_path / "flux-schnell" / "model_index.json").write_text("{}")
+    (tmp_path / "flux-schnell" / "transformer" / "diffusion_pytorch_model.safetensors").write_bytes(b"w")
+
+    assert is_resident(str(tmp_path), "flux-schnell") is True
+
+
+def test_hf_cache_metadata_alone_is_not_residency(tmp_path):
+    """.cache/huggingface holds .metadata and .incomplete files, not weights."""
+    cache = tmp_path / "cogvideox-2b" / ".cache" / "huggingface" / "download"
+    cache.mkdir(parents=True)
+    (cache / "blob.metadata").write_text("x")
+    (cache / "blob.incomplete").write_bytes(b"partial")
+
+    assert is_resident(str(tmp_path), "cogvideox-2b") is False
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ["model.safetensors", "pytorch_model.bin", "q4_k_m.gguf", "sam2_hiera_tiny.pt", "flownet.pkl"],
+)
+def test_each_weight_format_counts(tmp_path, filename):
+    d = tmp_path / "m"
+    d.mkdir()
+    (d / filename).write_bytes(b"w")
+
+    assert is_resident(str(tmp_path), "m") is True
+
+
+def test_absent_dir_is_not_resident(tmp_path):
+    assert is_resident(str(tmp_path), "nope") is False
+
+
 def test_largest_missing_role_is_fetched_first(tmp_path):
     """Demand-priority pop: the biggest blocker goes first, not insertion order."""
     calls, download = _recorder()
@@ -110,7 +172,7 @@ def test_allow_patterns_are_passed_through(tmp_path):
     def download(repo_id: str, local_dir: str, allow_patterns=None) -> str:
         seen[repo_id] = allow_patterns
         Path(local_dir).mkdir(parents=True, exist_ok=True)
-        (Path(local_dir) / "ok").write_text("1")
+        (Path(local_dir) / "model.safetensors").write_bytes(b"w")
         return local_dir
 
     ensure_roles(

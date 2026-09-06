@@ -20,7 +20,7 @@ import os
 
 import pytest
 
-from app.rfir.models.fetcher import DEFAULT_PACKS, plan_downloads
+from app.rfir.models.fetcher import DEFAULT_PACKS, is_resident, plan_downloads
 from app.rfir.models.loader import detect_device
 from app.rfir.models.registry import REGISTRY
 from app.rfir.models.residency import DEFAULT_T2I_MODEL_ID
@@ -65,8 +65,12 @@ def test_core_and_t2i_present(subdir: str, label: str):
         f"Model: {label}\n"
         "Run scripts/download_rfir_models.py to download."
     )
-    contents = os.listdir(path)
-    assert contents, f"{path} exists but is empty — download may have been interrupted."
+    assert is_resident(MODELS_DIR, subdir), (  # type: ignore[arg-type]
+        f"{path} holds no weights file — an interrupted or gated download.\n"
+        f"Model: {label}\n"
+        f"Delete it and re-run scripts/download_rfir_models.py "
+        f"(gated repos need: huggingface-cli login)."
+    )
 
 
 @pytest.mark.skipif(not MODELS_DIR, reason="RENDERFLOW_MODELS_DIR not set")
@@ -80,10 +84,10 @@ def test_t2v_and_sam_optional(subdir: str, label: str):
     path = os.path.join(MODELS_DIR, subdir)  # type: ignore[arg-type]
     if not os.path.isdir(path):
         pytest.skip(f"{label} not installed; fetched on first use")
-    assert os.listdir(path), (
-        f"{path} exists but is empty — interrupted download. "
-        f"Delete it and let the executor re-fetch, or run scripts/download_rfir_models.py "
-        f"--pack all."
+    assert is_resident(MODELS_DIR, subdir), (  # type: ignore[arg-type]
+        f"{path} exists but holds no weights — interrupted download. "
+        f"Delete it and let the executor re-fetch, or run "
+        f"scripts/download_rfir_models.py --pack all."
     )
 
 
@@ -92,7 +96,7 @@ def test_only_one_t2i_backend_is_installed():
     """Shipping FLUX and SDXL together is 6 GB of prepaid disk for nothing."""
     present = [
         d for d in ("flux-schnell", "sdxl-turbo")
-        if os.path.isdir(os.path.join(MODELS_DIR, d))  # type: ignore[arg-type]
+        if is_resident(MODELS_DIR, d)  # type: ignore[arg-type]
     ]
     if len(present) < 2:
         return

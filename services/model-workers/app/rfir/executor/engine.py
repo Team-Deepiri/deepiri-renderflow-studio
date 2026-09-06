@@ -53,8 +53,39 @@ def _prepare_models(graph: RfirGraph) -> None:
     roles = required_roles(graph)
     if not roles:
         return
+    t2i_model_id = _t2i_model_id()
     logger.info("Ensuring %d model role(s) on disk: %s", len(roles), sorted(roles))
-    ensure_roles(roles, models_dir=models_dir, t2i_model_id=_t2i_model_id())
+    try:
+        ensure_roles(roles, models_dir=models_dir, t2i_model_id=t2i_model_id)
+    except RuntimeError:
+        # t2i_keyframe is the one role with a working runtime fallback: the op
+        # retries with the other backend if its first choice will not load. If
+        # that backend is already on disk, an unreachable primary (FLUX is
+        # gated) is not a reason to fail the job before it starts. Every other
+        # role has no second source, so the failure stands.
+        if "t2i_keyframe" not in roles or not _fallback_t2i_resident(models_dir, t2i_model_id):
+            raise
+        logger.warning(
+            "could not fetch t2i backend %s; the other backend is on disk and the "
+            "op will fall back to it",
+            t2i_model_id,
+        )
+        ensure_roles(
+            roles - {"t2i_keyframe"}, models_dir=models_dir, t2i_model_id=t2i_model_id
+        )
+
+
+def _fallback_t2i_resident(models_dir: str, t2i_model_id: str) -> bool:
+    """Is the T2I backend we did *not* ask for usable on disk?"""
+    from app.rfir.models.fetcher import is_resident
+    from app.rfir.models.registry import REGISTRY
+
+    return any(
+        m.role == "t2i_keyframe"
+        and m.id != t2i_model_id
+        and is_resident(models_dir, m.local_dir)
+        for m in REGISTRY.values()
+    )
 
 
 def _finish_models(graph: RfirGraph) -> None:

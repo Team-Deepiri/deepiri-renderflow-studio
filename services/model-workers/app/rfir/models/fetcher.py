@@ -79,15 +79,34 @@ def all_role_dirs(t2i_model_id: str) -> dict[str, str]:
     return dirs
 
 
-def is_resident(models_dir: str, local_dir: str) -> bool:
-    """A role is resident iff its dir exists and is non-empty.
+# Extensions that carry actual weights. A snapshot that pulled only README.md,
+# .gitattributes and cache metadata is a failed download wearing a directory.
+WEIGHT_SUFFIXES: frozenset[str] = frozenset(
+    {".safetensors", ".bin", ".gguf", ".pth", ".pt", ".ckpt", ".pkl", ".onnx", ".msgpack"}
+)
 
-    Same rule as tests/test_bootstrap_env.py: an interrupted snapshot leaves an
-    empty directory behind, and that must count as a miss rather than silently
-    passing a broken tree to the loader.
+
+def is_resident(models_dir: str, local_dir: str) -> bool:
+    """A role is resident iff its dir holds at least one weights file.
+
+    "Exists and is non-empty" is not enough. A gated repo (FLUX without an
+    accepted licence) still writes README.md and .gitattributes before the 401,
+    leaving a ~16 KB directory that looks populated. Treating that as resident
+    makes the fetcher skip the download and hands the loader a model that is
+    not there — the exact failure this module exists to prevent.
+
+    Weights may sit in subdirectories (diffusers keeps them under transformer/,
+    vae/, text_encoder/), so this walks the tree.
     """
     path = os.path.join(models_dir, local_dir)
-    return os.path.isdir(path) and bool(os.listdir(path))
+    if not os.path.isdir(path):
+        return False
+    for root, dirs, files in os.walk(path):
+        dirs[:] = [d for d in dirs if not d.startswith(".")]  # skip .cache/huggingface
+        for name in files:
+            if os.path.splitext(name)[1].lower() in WEIGHT_SUFFIXES:
+                return True
+    return False
 
 
 def _snapshot_download(repo_id: str, local_dir: str, allow_patterns: Any = None) -> str:
