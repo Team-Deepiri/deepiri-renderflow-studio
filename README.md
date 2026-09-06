@@ -108,6 +108,7 @@ Then `POST /v1/jobs` as usual — job status will progress `queued` → `prepari
 |----------|---------|-------------|
 | `RENDERFLOW_RFIR_ENABLED` | `false` | Turn on the CFSV/RFIR pipeline (off = legacy stub pipeline) |
 | `RENDERFLOW_MODELS_DIR` | `./models` | Local directory for downloaded model weights |
+| `RENDERFLOW_MODELS_MAX_BYTES` | unset | Cap on the weights directory. After each job, least-recently-used unpinned models are evicted until the tree fits. Unset means never evict |
 | `RENDERFLOW_RFIR_MAX_GPU_SEC` | `120` | Per-job GPU time budget |
 | `RENDERFLOW_RFIR_MAX_TIER` | `C` | Highest tier allowed (`A`, `B`, `C`, or `D`) |
 | `RENDERFLOW_RFIR_T2I_MODEL` | `flux-schnell-fp16` | Keyframe model id from `models/registry.py` (e.g. `sdxl-turbo-fp16` for smaller/faster local dev) |
@@ -122,18 +123,38 @@ Then `POST /v1/jobs` as usual — job status will progress `queued` → `prepari
 
 ### Model weights
 
-All models are open-source (Apache 2.0 / MIT / OpenRAIL++) — see `services/model-workers/app/rfir/models/registry.py` for the full manifest and licenses. Weights are **not** committed to git; they download automatically on first use, or you can pre-fetch them into `RENDERFLOW_MODELS_DIR`.
+All models are open-source (Apache 2.0 / MIT / OpenRAIL++) — see `services/model-workers/app/rfir/models/registry.py` for the full manifest and licenses. Weights are **not** committed to git.
+
+Disk is a **working set, not a prepaid catalog**. A compiled RFIR graph names every model role it will invoke before any GPU work starts, so the executor fetches exactly those roles and leaves the rest alone. A machine that only renders Tier A stills never stores the video model.
 
 Approximate sizes (fp16):
 
-- FLUX.1-schnell (keyframes): ~12 GB — or SDXL-Turbo fallback: ~6 GB
-- CogVideoX-2B (sparse video, Tier C/D): ~10 GB
-- Depth Anything V2 Small: ~200 MB
-- SAM2 hiera-tiny (subject masks, Tier C): ~150 MB
-- Qwen2.5-3B GGUF Q4 (shot planner): ~2 GB
-- RIFE 4.6 (Tier B interpolation): ~100 MB
+| Model | Role | Size | When |
+|---|---|---|---|
+| FLUX.1-schnell **or** SDXL-Turbo | keyframes | ~12 GB / ~6 GB | default — **one**, never both |
+| Qwen2.5-3B GGUF Q4 | shot planner | ~2 GB | default |
+| NSFW image detection | safety | ~330 MB | default |
+| Depth Anything V2 Small | depth | ~200 MB | default |
+| RIFE 4.6 | Tier B interpolation | ~100 MB | in-repo (LFS) |
+| SAM2 hiera-tiny | subject masks | ~150 MB | first Tier C job |
+| CogVideoX-2B | sparse video + VAE | ~10 GB | first Tier C/D job |
 
-Total: **~20–30 GB** depending on which T2I model you use. On 8 GB-class GPUs (including most MacBooks), prefer SDXL-Turbo over FLUX.
+Expected disk:
+
+- **Default install (`core` + `t2i`): ~14 GB** with FLUX, ~8 GB with SDXL-Turbo
+- **Full stack, all tiers exercised: ~24 GB**
+- The first Tier C/D job pauses to fetch CogVideoX, then it is cached
+
+Pre-fetch with:
+
+```bash
+export RENDERFLOW_MODELS_DIR=$HOME/renderflow-models
+python scripts/download_rfir_models.py              # core + t2i (default)
+python scripts/download_rfir_models.py --pack all   # everything up front
+python scripts/download_rfir_models.py --dry-run    # show the plan, download nothing
+```
+
+Set `RENDERFLOW_MODELS_MAX_BYTES` to cap the tree — after each job, least-recently-used unpinned models are evicted until it fits. The small always-on models (planner, depth, RIFE, safety) are pinned and never evicted. On 8 GB-class GPUs (including most MacBooks), prefer SDXL-Turbo over FLUX via `RENDERFLOW_RFIR_T2I_MODEL=sdxl-turbo-fp16`.
 
 ### Platform notes
 
@@ -144,6 +165,8 @@ Total: **~20–30 GB** depending on which T2I model you use. On 8 GB-class GPUs 
 ### Worker metrics (optional)
 
 The model worker can expose Prometheus-style metrics (`rfir_gpu_seconds_total`, `rfir_tier_count`, `rfir_jobs_total`, `rfir_cost_usd_total`) via `app.rfir.metrics.serve_metrics(port)`, scraped at `/metrics`.
+
+Disk working set (see [Model weights](#model-weights)): `rfir_model_disk_bytes` (gauge), `rfir_model_fetch_bytes_total`, `rfir_model_hit_roles_total`, `rfir_model_miss_roles_total`. Each job also logs one JSON line with `roles`, `hot_bytes`, `miss_bytes` and `rho_hat` — the measured share of the old prepaid catalog that job actually needed resident. A healthy Tier A worker sits well below 1.0 and its fetch counter stops growing once its roles are warm.
 
 ---
 

@@ -28,6 +28,112 @@ logger = logging.getLogger(__name__)
 _OP_HANDLERS: dict[str, Any] = {}
 
 
+def _t2i_model_id() -> str:
+    from app.rfir.models.residency import DEFAULT_T2I_MODEL_ID
+
+    return os.environ.get("RENDERFLOW_RFIR_T2I_MODEL") or DEFAULT_T2I_MODEL_ID
+
+
+def _prepare_models(graph: RfirGraph) -> None:
+    """Make the graph's model roles resident before any node runs.
+
+    The compiled graph names every role it will invoke, so this is the last
+    point at which a missing model is a cheap failure rather than a crash
+    halfway through a render. Roles already on disk cost nothing here.
+
+    A job without RENDERFLOW_MODELS_DIR keeps today's behaviour: the loaders
+    fall back to the HuggingFace cache and manage their own downloads.
+    """
+    from app.rfir.models.fetcher import ensure_roles
+    from app.rfir.models.residency import required_roles
+
+    models_dir = os.environ.get("RENDERFLOW_MODELS_DIR")
+    if not models_dir:
+        return
+    roles = required_roles(graph)
+    if not roles:
+        return
+    t2i_model_id = _t2i_model_id()
+    logger.info("Ensuring %d model role(s) on disk: %s", len(roles), sorted(roles))
+    _record_residency(roles, models_dir, t2i_model_id)
+    try:
+        ensure_roles(roles, models_dir=models_dir, t2i_model_id=t2i_model_id)
+    except RuntimeError:
+        # t2i_keyframe is the one role with a working runtime fallback: the op
+        # retries with the other backend if its first choice will not load. If
+        # that backend is already on disk, an unreachable primary (FLUX is
+        # gated) is not a reason to fail the job before it starts. Every other
+        # role has no second source, so the failure stands.
+        if "t2i_keyframe" not in roles or not _fallback_t2i_resident(models_dir, t2i_model_id):
+            raise
+        logger.warning(
+            "could not fetch t2i backend %s; the other backend is on disk and the "
+            "op will fall back to it",
+            t2i_model_id,
+        )
+        ensure_roles(
+            roles - {"t2i_keyframe"}, models_dir=models_dir, t2i_model_id=t2i_model_id
+        )
+
+
+def _record_residency(roles: frozenset[str], models_dir: str, t2i_model_id: str) -> None:
+    """Report the disk working set for this job. Never raises."""
+    try:
+        from app.rfir.metrics import registry as metrics_registry
+        from app.rfir.models.disk_lru import resident_bytes
+        from app.rfir.models.fetcher import all_role_dirs, residency_report
+
+        report = residency_report(roles, models_dir=models_dir, t2i_model_id=t2i_model_id)
+        metrics_registry.record_residency(
+            hot_roles=report.hot_roles,
+            missing_roles=report.missing_roles,
+            hot_bytes=report.hot_bytes,
+            miss_bytes=report.miss_bytes,
+            disk_bytes=resident_bytes(models_dir, all_role_dirs(t2i_model_id)),
+        )
+    except Exception as exc:  # noqa: BLE001 — observability must not fail a job
+        logger.debug("residency metrics unavailable: %s", exc)
+
+
+def _fallback_t2i_resident(models_dir: str, t2i_model_id: str) -> bool:
+    """Is the T2I backend we did *not* ask for usable on disk?"""
+    from app.rfir.models.fetcher import is_resident
+    from app.rfir.models.registry import REGISTRY
+
+    return any(
+        m.role == "t2i_keyframe"
+        and m.id != t2i_model_id
+        and is_resident(models_dir, m.local_dir)
+        for m in REGISTRY.values()
+    )
+
+
+def _finish_models(graph: RfirGraph) -> None:
+    """Record role usage and, if a cap is set, evict cold unpinned models.
+
+    Never raises: the job has produced its output by now, and disk bookkeeping
+    is not worth failing it over.
+    """
+    models_dir = os.environ.get("RENDERFLOW_MODELS_DIR")
+    if not models_dir:
+        return
+    try:
+        from app.rfir.models.disk_lru import evict_until, touch
+        from app.rfir.models.fetcher import all_role_dirs
+        from app.rfir.models.residency import required_roles
+
+        for role in required_roles(graph):
+            touch(role, models_dir)
+
+        cap = os.environ.get("RENDERFLOW_MODELS_MAX_BYTES")
+        if cap:
+            evicted = evict_until(models_dir, int(cap), all_role_dirs(_t2i_model_id()))
+            if evicted:
+                logger.info("Evicted cold model dirs: %s", evicted)
+    except Exception as exc:  # noqa: BLE001 — bookkeeping must not fail a finished job
+        logger.warning("model residency bookkeeping failed: %s", exc)
+
+
 def _register_handlers() -> None:
     _OP_HANDLERS["t2i_keyframe"] = _run_t2i_keyframe
     _OP_HANDLERS["depth_estimate"] = _run_depth_estimate
@@ -65,6 +171,10 @@ def run_graph(
     """
     if not _OP_HANDLERS:
         _register_handlers()
+
+    # Cover disk before any GPU work: a missing model should fail here, not
+    # partway through a render.
+    _prepare_models(graph)
 
     device = detect_device()
     ctx = ExecutionContext(job_id=job_id, device=device)
@@ -158,6 +268,8 @@ def run_graph(
     # Clean up checkpoint on successful completion.
     if cp_uri:
         delete_checkpoint(cp_uri)
+
+    _finish_models(graph)
 
     from app.rfir.metrics import registry as metrics_registry
     metrics_registry.record_job(ctx)
