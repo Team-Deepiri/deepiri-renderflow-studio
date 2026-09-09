@@ -55,6 +55,7 @@ import { updateInspector } from "./renderer/inspector";
 import { renderHomeProjects, homeViewHtml } from "./renderer/home";
 import type { HomeCallbacks } from "./renderer/home";
 import { chatStudioViewHtml } from "./renderer/chatStudio";
+import { escapeHtml } from "./renderer/escape";
 import { brandHtml } from "./renderer/brand";
 import { registerHotkeys } from "./hotkeys";
 import type { HotkeyDispatch } from "./hotkeys";
@@ -87,6 +88,16 @@ import {
   type AIJob,
 } from "./backendApi";
 
+/**
+ * One-click starter prompts on the copilot's idle state. Clicking one fills
+ * the composer and submits, the way the home page's chips used to.
+ */
+const COPILOT_SUGGESTIONS: string[] = [
+  "A neon-lit city street at night, just after rain",
+  "Slow drone shot drifting over a misty mountain valley",
+  "A cozy coffee shop in warm morning light",
+];
+
 // ── buildStyle: inject full application CSS ──
 function buildStyle(): void {
   const style = document.createElement("style");
@@ -97,7 +108,7 @@ function buildStyle(): void {
   --text: #eef1f9; --text-dim: #8a95b0; --text-muted: #4f5a74;
   --accent: #4d7dff; --accent-glow: rgba(77,125,255,0.15); --accent-hover: #6390ff;
   --danger: #f04d6e; --sidebar-width: 280px; --activity-bar-width: 48px;
-  --copilot-width: 320px;
+  --copilot-width: 320px; --copilot-rail-width: 44px;
 }
 body {
   margin:0; font-family:"Inter","Segoe UI",system-ui,sans-serif;
@@ -122,7 +133,7 @@ body {
   transition:grid-template-columns 0.2s ease;
 }
 .workspace.copilot-collapsed{
-  grid-template-columns:var(--activity-bar-width) var(--sidebar-width) 1fr 0;
+  grid-template-columns:var(--activity-bar-width) var(--sidebar-width) 1fr var(--copilot-rail-width);
 }
 .activity-bar{
   background:var(--bg); border-right:1px solid var(--border-subtle);
@@ -140,10 +151,76 @@ body {
 .activity-spacer{flex:1;min-height:0}
 .panel,.center{border-right:1px solid var(--border-subtle);background:var(--bg-soft)}
 .panel{padding:14px 12px;overflow-y:auto;overflow-x:hidden}
-.panel.copilot{border-right:none;border-left:1px solid var(--border-subtle)}
-.workspace.copilot-collapsed .panel.copilot{padding:0;border-left:none;overflow:hidden}
-#ai-mode-select{width:100%;background:#0f131b;border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px;margin-bottom:8px}
-.ai-job-status{margin-top:10px;padding:8px;border:1px solid var(--border-subtle);border-radius:6px;background:#0f131b;font-size:11px;color:var(--text-dim);white-space:pre-wrap}
+/* copilot — chat-style right dock */
+.panel.copilot{
+  border-right:none;border-left:1px solid var(--border-subtle);
+  padding:0;display:flex;flex-direction:column;overflow:hidden;
+}
+.workspace.copilot-collapsed .panel.copilot{align-items:center}
+.copilot-rail{display:none;flex-direction:column;align-items:center;gap:14px;padding-top:14px;width:100%;height:100%}
+.workspace.copilot-collapsed .copilot-rail{display:flex}
+.copilot-rail-btn{
+  width:26px;height:26px;border-radius:6px;border:1px solid var(--border);background:var(--bg-raised);
+  color:var(--text-dim);cursor:pointer;display:grid;place-items:center;flex-shrink:0;
+  transition:color 0.15s,border-color 0.15s;
+}
+.copilot-rail-btn:hover{color:var(--accent);border-color:var(--accent)}
+.copilot-rail-label{
+  writing-mode:vertical-rl;text-orientation:mixed;font-size:10px;font-weight:700;
+  letter-spacing:1.5px;color:var(--text-muted);text-transform:uppercase;
+}
+.copilot-body{display:flex;flex-direction:column;min-height:0;height:100%;padding:12px}
+.workspace.copilot-collapsed .copilot-body{display:none}
+.copilot-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding-bottom:10px;margin-bottom:10px;border-bottom:1px solid var(--border-subtle);flex-shrink:0;
+}
+.copilot-header-title{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:var(--text)}
+.copilot-header-title svg{color:var(--accent)}
+.copilot-collapse-btn{
+  width:26px;height:26px;border-radius:6px;border:1px solid transparent;background:none;
+  color:var(--text-muted);cursor:pointer;display:grid;place-items:center;
+  transition:background 0.15s,color 0.15s;
+}
+.copilot-collapse-btn:hover{background:var(--bg-raised);color:var(--text)}
+.copilot-thread{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding-bottom:4px}
+.copilot-msg{background:var(--bg-raised);border:1px solid var(--border);border-radius:10px;padding:10px 12px}
+.copilot-msg-label{
+  font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
+  color:var(--text-muted);margin-bottom:6px;
+}
+.copilot-msg-text{margin:0;font-size:12px;color:var(--text-dim);line-height:1.5}
+.copilot-status{font-size:12.5px;color:var(--text);white-space:pre-wrap;line-height:1.5}
+.copilot-review-actions{display:flex;gap:8px;margin-top:10px}
+.copilot-empty{padding:4px 2px}
+.copilot-empty-title{margin:0 0 8px;font-size:16px;font-weight:700;letter-spacing:-0.2px;color:var(--text)}
+.copilot-empty-text{margin:0 0 14px;font-size:12.5px;color:var(--text-dim);line-height:1.6}
+.copilot-suggestions{display:flex;flex-direction:column;gap:8px}
+.copilot-suggestion{
+  text-align:left;background:var(--bg-raised);border:1px solid var(--border);color:var(--text-dim);
+  border-radius:8px;padding:9px 12px;font-size:12px;font-family:inherit;line-height:1.4;cursor:pointer;
+  transition:border-color 0.15s,color 0.15s,background 0.15s;
+}
+.copilot-suggestion:hover{border-color:var(--accent);color:var(--text);background:rgba(77,125,255,0.08)}
+.copilot-mode-select{
+  width:100%;margin-top:8px;background:#0f131b;border:1px solid var(--border);color:var(--text-dim);
+  border-radius:999px;padding:6px 10px;font-size:11px;
+}
+.copilot-composer{
+  flex-shrink:0;margin-top:10px;background:var(--bg-raised);border:1px solid var(--border);
+  border-radius:14px;padding:10px;display:flex;align-items:flex-end;gap:8px;transition:border-color 0.15s;
+}
+.copilot-composer:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow)}
+.copilot-composer textarea{
+  flex:1;background:none;border:none;color:var(--text);font-family:inherit;font-size:13px;
+  resize:none;outline:none;padding:4px 2px;
+}
+.copilot-send{
+  flex-shrink:0;width:30px;height:30px;border-radius:999px;border:none;background:var(--accent);
+  color:#fff;cursor:pointer;display:grid;place-items:center;transition:background 0.15s,opacity 0.15s;
+}
+.copilot-send:hover{background:var(--accent-hover)}
+.copilot-send:active{opacity:0.8}
 .export-status{font-size:11px;color:var(--text-dim);max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .panel-title{
   font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;
@@ -335,12 +412,24 @@ ${chatStudioViewHtml()}
         <button class="btn subtle" id="btn-jump-next-marker" type="button">Next Marker</button>
       </div>
       <div class="asset-section">
+        <h4>Copilot Tools</h4>
+        <div class="quick-actions">
+          <button class="btn subtle" id="btn-health" type="button">Orchestrator Health</button>
+          <button class="btn subtle" id="btn-list-projects" type="button">List Projects</button>
+          <button class="btn subtle" id="btn-refresh-job" type="button">Refresh Job</button>
+        </div>
+      </div>
+      <div class="asset-section">
         <h4>Assets</h4>
         <div id="drop-zone" class="drop-zone">Drop media files here</div>
         <ul id="asset-list" class="asset-list"></ul>
         <div class="asset-actions">
           <button class="btn narrow" id="btn-import-media" type="button">Import Media</button>
         </div>
+      </div>
+      <div class="asset-section">
+        <h4>Selection</h4>
+        <div id="inspector" class="inspector">No clip selected.</div>
       </div>
     </aside>
     <main class="center">
@@ -379,25 +468,56 @@ ${chatStudioViewHtml()}
       </section>
     </main>
     <aside class="panel copilot" id="ai-panel">
-      <div class="panel-title">AI Copilot</div>
-      <div class="ai-mode">Manual path parity: every action has a no-AI equivalent.</div>
-      <select id="ai-mode-select" title="Generation mode">
-        <option value="scene">Scene (video)</option>
-        <!-- Only video generation is wired today; audio/voice/dialogue come later. -->
-      </select>
-      <textarea id="ai-prompt" rows="4" placeholder="Describe a scene, shot list, or generation request..."></textarea>
-      <div class="stack">
-        <button class="btn" id="btn-health" type="button">Orchestrator Health</button>
-        <button class="btn" id="btn-list-projects" type="button">List Projects</button>
-        <button class="btn" id="btn-submit-job" type="button">Submit AI Job</button>
-        <button class="btn" id="btn-refresh-job" type="button">Refresh Job</button>
-        <div style="display:flex;gap:6px">
-          <button class="btn btn-accept" id="btn-accept-job" type="button" disabled>Accept</button>
-          <button class="btn btn-reject" id="btn-reject-job" type="button" disabled>Reject</button>
+      <div class="copilot-rail" id="copilot-rail">
+        <button class="copilot-rail-btn" id="btn-copilot-expand" title="Expand Copilot" type="button">
+          <svg width="13" height="13" viewBox="0 0 20 20" fill="none"><path d="M8 5l6 5-6 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" transform="rotate(180 10 10)"/></svg>
+        </button>
+        <span class="copilot-rail-label">Copilot</span>
+      </div>
+      <div class="copilot-body">
+        <div class="copilot-header">
+          <div class="copilot-header-title">
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M10 3l1.6 4.4L16 9l-4.4 1.6L10 15l-1.6-4.4L4 9l4.4-1.6z" fill="currentColor"/></svg>
+            <span>Copilot</span>
+          </div>
+          <button class="copilot-collapse-btn" id="btn-copilot-collapse" title="Collapse Copilot" type="button">
+            <svg width="13" height="13" viewBox="0 0 20 20" fill="none"><path d="M8 5l6 5-6 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+        <div class="copilot-thread" id="copilot-thread">
+          <div class="copilot-msg">
+            <div class="copilot-msg-label">Manual path parity</div>
+            <p class="copilot-msg-text">Every action here has a no-AI equivalent — nothing hits the timeline until you accept it.</p>
+            <select id="ai-mode-select" class="copilot-mode-select" title="Generation mode">
+              <option value="scene">Scene (video)</option>
+              <!-- Only video generation is wired today; audio/voice/dialogue come later. -->
+            </select>
+          </div>
+          <!-- Idle state: swapped out for the job-status card the moment a job starts. -->
+          <div class="copilot-empty" id="copilot-empty-state">
+            <h3 class="copilot-empty-title">Type a prompt, get a clip</h3>
+            <p class="copilot-empty-text">Describe a shot and the copilot generates it, or ask it to restyle and fill the scenes in this template. Clips arrive as review cards you accept onto the timeline.</p>
+            <div class="copilot-suggestions" id="copilot-suggestions">${COPILOT_SUGGESTIONS.map(
+              (s) =>
+                `<button class="copilot-suggestion" type="button" data-prompt="${escapeHtml(s)}">${escapeHtml(s)}</button>`,
+            ).join("")}</div>
+          </div>
+          <div class="copilot-msg" id="copilot-job-status-msg" style="display:none">
+            <div class="copilot-msg-label">Job status</div>
+            <div id="ai-job-status" class="copilot-status">No job submitted.</div>
+            <div class="copilot-review-actions">
+              <button class="btn btn-accept" id="btn-accept-job" type="button" disabled>Accept</button>
+              <button class="btn btn-reject" id="btn-reject-job" type="button" disabled>Reject</button>
+            </div>
+          </div>
+        </div>
+        <div class="copilot-composer">
+          <textarea id="ai-prompt" rows="2" placeholder="Describe a scene, shot list, or generation request..."></textarea>
+          <button class="copilot-send" id="btn-submit-job" type="button" title="Submit AI Job" aria-label="Submit AI Job">
+            <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M10 15V5M10 5l-5 5M10 5l5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
         </div>
       </div>
-      <div id="ai-job-status" class="ai-job-status">No job submitted.</div>
-      <div id="inspector" class="inspector">No clip selected.</div>
     </aside>
   </div>
   <div class="devtools-drawer" id="devtools-drawer" style="display:none">
@@ -494,6 +614,8 @@ export function bootstrapStudioApp(): void {
   const previewEmpty = $("#preview-empty");
   const aiModeSelect = $("#ai-mode-select") as HTMLSelectElement;
   const jobStatusEl = $("#ai-job-status") as HTMLElement;
+  const jobStatusMsg = $("#copilot-job-status-msg");
+  const emptyStateEl = $("#copilot-empty-state");
   const acceptBtn = $("#btn-accept-job") as HTMLButtonElement;
   const rejectBtn = $("#btn-reject-job") as HTMLButtonElement;
 
@@ -645,6 +767,7 @@ export function bootstrapStudioApp(): void {
     stopProxyPolling(state);
     stopJobPolling();
     setReviewButtons(false);
+    setJobStatusVisible(false);
     jobStatusEl.textContent = "";
     const playBtn = $("#btn-play");
     if (playBtn) playBtn.textContent = "Play";
@@ -1161,6 +1284,16 @@ export function bootstrapStudioApp(): void {
     rejectBtn.disabled = !enabled;
   }
 
+  /**
+   * The copilot thread shows one of two things: the starter prompts, or the
+   * job it is working on. An idle "No job submitted." card with two dead
+   * buttons is noise, so the status card only appears once a job exists.
+   */
+  function setJobStatusVisible(visible: boolean): void {
+    jobStatusMsg.style.display = visible ? "" : "none";
+    emptyStateEl.style.display = visible ? "none" : "";
+  }
+
   function renderJobStatus(job: AIJob): void {
     const stages = (job.stages || []).join(" → ");
     let line = `Status: ${job.status}`;
@@ -1191,6 +1324,7 @@ export function bootstrapStudioApp(): void {
    */
   function startJobPolling(jobId: string, autoAccept = false): void {
     stopJobPolling();
+    setJobStatusVisible(true);
     jobPollTimer = window.setInterval(async () => {
       try {
         const job = await getAiJob(jobId);
@@ -1211,6 +1345,7 @@ export function bootstrapStudioApp(): void {
     if (!state.activeProjectId || !aiPrompt.value.trim()) return;
     stopJobPolling();
     setReviewButtons(false);
+    setJobStatusVisible(true);
     jobStatusEl.textContent = "Submitting…";
     try {
       const res = await submitAiJob(
@@ -1366,6 +1501,8 @@ export function bootstrapStudioApp(): void {
 
   // Copilot toggle (right-side dock; collapsible per the design doc)
   actAi.addEventListener("click", () => setCopilotOpen(!state.aiVisible));
+  $("#btn-copilot-collapse").addEventListener("click", () => setCopilotOpen(false));
+  $("#btn-copilot-expand").addEventListener("click", () => setCopilotOpen(true));
 
   // Home buttons
   $("#btn-home-new-project").addEventListener("click", () => {
@@ -1456,6 +1593,21 @@ export function bootstrapStudioApp(): void {
   $("#btn-refresh-job").addEventListener("click", doRefreshJob);
   $("#btn-accept-job").addEventListener("click", doAcceptJob);
   $("#btn-reject-job").addEventListener("click", doRejectJob);
+  aiPrompt.addEventListener("keydown", (e) => {
+    const ev = e as KeyboardEvent;
+    if (ev.key === "Enter" && !ev.shiftKey) {
+      ev.preventDefault();
+      void doSubmitJob();
+    }
+  });
+  // Starter prompts: one click fills the composer and generates, as the home
+  // page's chips used to.
+  $("#copilot-suggestions").addEventListener("click", (e) => {
+    const chip = (e.target as HTMLElement).closest<HTMLElement>(".copilot-suggestion");
+    if (!chip) return;
+    aiPrompt.value = chip.dataset.prompt ?? "";
+    void doSubmitJob();
+  });
 
   // Import media
   $("#btn-import-media").addEventListener("click", async () => {
