@@ -114,7 +114,7 @@ body {
   margin:0; font-family:"Inter","Segoe UI",system-ui,sans-serif;
   background:var(--bg); color:var(--text); -webkit-font-smoothing:antialiased;
 }
-.studio{min-height:100vh;display:flex;flex-direction:column}
+.studio{height:100vh;overflow:hidden;display:flex;flex-direction:column}
 .topbar{
   border-bottom:1px solid var(--border-subtle); display:flex; align-items:center;
   justify-content:space-between; padding:10px 16px;
@@ -149,6 +149,10 @@ body {
 .activity-btn:hover{background:var(--bg-raised);color:var(--text-dim)}
 .activity-btn.active{background:var(--accent-glow);color:var(--accent)}
 .activity-spacer{flex:1;min-height:0}
+/* min-height:0 — grid items default to min-height:auto and refuse to shrink
+   below their content, which made the copilot panel grow past the window
+   instead of letting its thread scroll. */
+.activity-bar,.panel,.center{min-height:0}
 .panel,.center{border-right:1px solid var(--border-subtle);background:var(--bg-soft)}
 .panel{padding:14px 12px;overflow-y:auto;overflow-x:hidden}
 /* copilot — chat-style right dock */
@@ -192,6 +196,16 @@ body {
 .copilot-msg-text{margin:0;font-size:12px;color:var(--text-dim);line-height:1.5}
 .copilot-status{font-size:12.5px;color:var(--text);white-space:pre-wrap;line-height:1.5}
 .copilot-review-actions{display:flex;gap:8px;margin-top:10px}
+.copilot-transcript{display:flex;flex-direction:column;gap:10px}
+.copilot-msg-user{
+  align-self:flex-end;max-width:88%;background:var(--accent);color:#fff;
+  border:none;border-radius:12px 12px 4px 12px;padding:9px 12px;
+  font-size:12.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;
+}
+.copilot-msg-copilot{
+  align-self:flex-start;max-width:95%;background:var(--bg-raised);
+  border:1px solid var(--border);border-radius:12px 12px 12px 4px;padding:10px 12px;
+}
 .copilot-empty{padding:4px 2px}
 .copilot-empty-title{margin:0 0 8px;font-size:16px;font-weight:700;letter-spacing:-0.2px;color:var(--text)}
 .copilot-empty-text{margin:0 0 14px;font-size:12.5px;color:var(--text-dim);line-height:1.6}
@@ -234,22 +248,22 @@ body {
   background:#0f131b;border:1px solid var(--border);color:var(--text);
   border-radius:6px;padding:8px;
 }
-.center{display:grid;grid-template-rows:1fr 290px}
-.monitor{padding:12px;border-bottom:1px solid var(--border);display:grid;grid-template-rows:auto 1fr}
+.center{display:grid;grid-template-rows:1fr 290px;min-height:0}
+.monitor{padding:12px;border-bottom:1px solid var(--border);display:grid;grid-template-rows:auto 1fr;min-height:0}
 .monitor-head,.timeline-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.monitor-head,.timeline-head,.hint{flex-shrink:0}
 .monitor-head h3,.timeline-head h3{margin:0;font-size:12px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:var(--text-dim)}
 .preview{margin-top:10px;border:1px solid var(--border);border-radius:10px;position:relative;overflow:hidden;background:#080a10;box-shadow:inset 0 0 30px rgba(0,0,0,0.4)}
 .preview-overlay{position:absolute;inset:0;display:grid;place-items:center;align-content:center;gap:10px;color:var(--text-dim);font-size:12px;padding:16px;background:rgba(13,17,25,0.82);pointer-events:none}
 .preview-overlay .btn{pointer-events:auto}
 #preview-frame{display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain;border-radius:10px}
 #preview-video{display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain;border-radius:10px}
-.timeline{padding:12px;background:#111621}
-/* Wraps instead of clipping: the center column narrows when the copilot dock
-   opens, and a nowrap row would push Ripple off the edge. The slider keeps a
-   fixed width so it stays draggable at every panel state. */
+.timeline{padding:12px;background:#111621;display:flex;flex-direction:column;min-height:0;overflow:hidden}
 .timeline-controls{display:flex;align-items:center;gap:6px;flex:1;min-width:0;flex-wrap:wrap;justify-content:flex-end}
 .timeline-controls .btn{padding:7px 10px}
-.timeline-grid{margin-top:10px;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#0d1119;user-select:none}
+/* The track list scrolls in place. overflow was hidden, which silently cut off
+   every track past the fold with no way to reach them. */
+.timeline-grid{margin-top:10px;flex:1;min-height:0;border:1px solid var(--border);border-radius:8px;overflow-y:auto;overflow-x:hidden;background:#0d1119;user-select:none}
 .hint{font-size:10px;color:var(--text-muted);padding:4px 12px;background:var(--bg);border-bottom:1px solid var(--border-subtle);letter-spacing:0.3px}
 .track-row{display:grid;grid-template-columns:110px 1fr;min-height:46px;border-bottom:1px solid #1f2736}
 .track-name{border-right:1px solid #1f2736;padding:8px;font-size:12px;color:var(--text-dim);display:flex;align-items:center;justify-content:space-between;gap:4px}
@@ -509,13 +523,14 @@ ${chatStudioViewHtml()}
                 `<button class="copilot-suggestion" type="button" data-prompt="${escapeHtml(s)}">${escapeHtml(s)}</button>`,
             ).join("")}</div>
           </div>
-          <div class="copilot-msg" id="copilot-job-status-msg" style="display:none">
-            <div class="copilot-msg-label">Job status</div>
-            <div id="ai-job-status" class="copilot-status">No job submitted.</div>
-            <div class="copilot-review-actions">
-              <button class="btn btn-accept" id="btn-accept-job" type="button" disabled>Accept</button>
-              <button class="btn btn-reject" id="btn-reject-job" type="button" disabled>Reject</button>
-            </div>
+          <!-- Conversation: one user bubble per prompt, the copilot's reply
+               under it. Filled in by appendUserMessage/startCopilotMessage. -->
+          <div class="copilot-transcript" id="copilot-transcript"></div>
+          <!-- Lives here between jobs; moved into the newest copilot message so
+               the buttons always sit with the reply they belong to. -->
+          <div class="copilot-review-actions" id="copilot-review-actions" style="display:none">
+            <button class="btn btn-accept" id="btn-accept-job" type="button" disabled>Accept</button>
+            <button class="btn btn-reject" id="btn-reject-job" type="button" disabled>Reject</button>
           </div>
         </div>
         <div class="copilot-composer">
@@ -636,11 +651,16 @@ export function bootstrapStudioApp(): void {
   const previewVideo = document.getElementById("preview-video") as HTMLVideoElement;
   const previewEmpty = $("#preview-empty");
   const aiModeSelect = $("#ai-mode-select") as HTMLSelectElement;
-  const jobStatusEl = $("#ai-job-status") as HTMLElement;
-  const jobStatusMsg = $("#copilot-job-status-msg");
+  const threadEl = $("#copilot-thread");
+  const transcriptEl = $("#copilot-transcript");
+  const reviewActions = $("#copilot-review-actions");
   const emptyStateEl = $("#copilot-empty-state");
   const acceptBtn = $("#btn-accept-job") as HTMLButtonElement;
   const rejectBtn = $("#btn-reject-job") as HTMLButtonElement;
+  // Points at the status line of the newest copilot reply, so every existing
+  // writer (submit, poll, accept, reject) lands in the right message. Detached
+  // between jobs, which makes stray writes harmless no-ops.
+  let jobStatusEl: HTMLElement = document.createElement("div");
 
   // ── Dev mode ──
   // No toggle in the UI: developers opt in with
@@ -834,8 +854,7 @@ export function bootstrapStudioApp(): void {
     stopProxyPolling(state);
     stopJobPolling();
     setReviewButtons(false);
-    setJobStatusVisible(false);
-    jobStatusEl.textContent = "";
+    clearCopilotThread();
     const playBtn = $("#btn-play");
     if (playBtn) playBtn.textContent = "Play";
 
@@ -1376,14 +1395,55 @@ export function bootstrapStudioApp(): void {
     rejectBtn.disabled = !enabled;
   }
 
+  /** Keep the newest message in view, the way a chat transcript does. */
+  function scrollThreadToEnd(): void {
+    threadEl.scrollTop = threadEl.scrollHeight;
+  }
+
+  /** The prompt the user just sent, as their own bubble in the thread. */
+  function appendUserMessage(text: string): void {
+    emptyStateEl.style.display = "none";
+    const el = document.createElement("div");
+    el.className = "copilot-msg-user";
+    el.textContent = text; // textContent, not innerHTML — prompts are user input
+    transcriptEl.appendChild(el);
+    scrollThreadToEnd();
+  }
+
   /**
-   * The copilot thread shows one of two things: the starter prompts, or the
-   * job it is working on. An idle "No job submitted." card with two dead
-   * buttons is noise, so the status card only appears once a job exists.
+   * Opens the copilot's reply to the message just sent and points jobStatusEl
+   * at it, so the submit/poll/accept/reject writers all land in this bubble.
+   * The review buttons move here too, sitting with the reply they belong to.
    */
-  function setJobStatusVisible(visible: boolean): void {
-    jobStatusMsg.style.display = visible ? "" : "none";
-    emptyStateEl.style.display = visible ? "none" : "";
+  function startCopilotMessage(): void {
+    emptyStateEl.style.display = "none";
+    const el = document.createElement("div");
+    el.className = "copilot-msg-copilot";
+
+    const label = document.createElement("div");
+    label.className = "copilot-msg-label";
+    label.textContent = "Copilot";
+
+    const status = document.createElement("div");
+    status.className = "copilot-status";
+
+    el.append(label, status);
+    // appendChild moves the existing node, so acceptBtn/rejectBtn stay valid.
+    reviewActions.style.display = "";
+    el.appendChild(reviewActions);
+
+    transcriptEl.appendChild(el);
+    jobStatusEl = status;
+    scrollThreadToEnd();
+  }
+
+  /** Back to the starter prompts: no conversation, no job. */
+  function clearCopilotThread(): void {
+    reviewActions.style.display = "none";
+    threadEl.appendChild(reviewActions); // rescue before wiping the transcript
+    transcriptEl.replaceChildren();
+    jobStatusEl = document.createElement("div");
+    emptyStateEl.style.display = "";
   }
 
   function renderJobStatus(job: AIJob): void {
@@ -1395,6 +1455,7 @@ export function bootstrapStudioApp(): void {
       if (err) line += `\nError: ${String(err)}`;
     }
     jobStatusEl.textContent = line;
+    scrollThreadToEnd();
     // Accept/Reject are only meaningful while the job awaits review.
     setReviewButtons(job.status === "review");
   }
@@ -1416,7 +1477,9 @@ export function bootstrapStudioApp(): void {
    */
   function startJobPolling(jobId: string, autoAccept = false): void {
     stopJobPolling();
-    setJobStatusVisible(true);
+    // A job can start outside the composer (a resumed one, say) — give it a
+    // reply bubble to write into rather than dropping its status on the floor.
+    if (!jobStatusEl.isConnected) startCopilotMessage();
     jobPollTimer = window.setInterval(async () => {
       try {
         const job = await getAiJob(jobId);
@@ -1434,15 +1497,22 @@ export function bootstrapStudioApp(): void {
   }
 
   async function doSubmitJob() {
-    if (!state.activeProjectId || !aiPrompt.value.trim()) return;
+    const prompt = aiPrompt.value.trim();
+    if (!state.activeProjectId || !prompt) return;
     stopJobPolling();
     setReviewButtons(false);
-    setJobStatusVisible(true);
+
+    // Send it: the prompt becomes the user's message and the composer empties,
+    // the way a chat does. The reply opens underneath it.
+    appendUserMessage(prompt);
+    aiPrompt.value = "";
+    startCopilotMessage();
     jobStatusEl.textContent = "Submitting…";
+
     try {
       const res = await submitAiJob(
         state.activeProjectId,
-        aiPrompt.value.trim(),
+        prompt,
         aiModeSelect.value,
       );
       devLog(`AI job submitted: ${res.job_id} (mode=${aiModeSelect.value})`);
