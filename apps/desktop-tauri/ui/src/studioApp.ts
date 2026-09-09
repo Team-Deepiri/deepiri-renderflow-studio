@@ -35,9 +35,13 @@ import {
   moveClip,
   trimClip,
   insertAssetIntoVideoTrack,
+  rippleDeleteClip,
+  duplicateClip,
+  snapTick,
 } from "./ops/clips";
 import { insertAcceptedClip, ServerSyncError } from "./ops/aiAccept";
-import { runExport } from "./ops/export";
+import { launchAiProject } from "./ops/aiLaunch";
+import { runExport, saveThenExport } from "./ops/export";
 import { addMarker, jumpToNextMarker } from "./ops/markers";
 import {
   registerAsset,
@@ -49,8 +53,9 @@ import { renderTimeline } from "./renderer/timeline";
 import type { TimelineCallbacks } from "./renderer/timeline";
 import { renderAssetList } from "./renderer/assets";
 import { updateInspector } from "./renderer/inspector";
-import { renderHomeProjects } from "./renderer/home";
+import { renderHomeProjects, homeViewHtml } from "./renderer/home";
 import type { HomeCallbacks } from "./renderer/home";
+import { brandHtml } from "./renderer/brand";
 import { registerHotkeys } from "./hotkeys";
 import type { HotkeyDispatch } from "./hotkeys";
 import {
@@ -81,23 +86,6 @@ import {
   type Asset,
   type AIJob,
 } from "./backendApi";
-
-// ── Shared SVG logo (Renderflow gradient icon) ──
-const LOGO_SVG = `<svg class="brand-logo" width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="logoGrad" x1="4" y1="4" x2="28" y2="28" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#4d7dff"/><stop offset="100%" stop-color="#8b5cf6"/>
-    </linearGradient>
-    <filter id="logoGlow"><feGaussianBlur stdDeviation="0.8" result="blur"/>
-      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
-  </defs>
-  <rect width="32" height="32" rx="8" fill="url(#logoGrad)" filter="url(#logoGlow)"/>
-  <path d="M7 14V9.5C7 8.12 8.12 7 9.5 7H22.5C23.88 7 25 8.12 25 9.5V14" stroke="white" stroke-width="2.2" stroke-linecap="round" fill="none"/>
-  <path d="M9 19h14" stroke="white" stroke-width="2.2" stroke-linecap="round" opacity="0.7"/>
-  <path d="M12 22h8" stroke="white" stroke-width="2.2" stroke-linecap="round" opacity="0.4"/>
-  <circle cx="16" cy="14" r="3.5" fill="white" opacity="0.9"/>
-</svg>`;
 
 // ── buildStyle: inject full application CSS ──
 function buildStyle(): void {
@@ -199,9 +187,6 @@ body {
 .btn.subtle:hover{background:rgba(255,255,255,0.09);color:var(--text);border-color:var(--border)}
 .btn.narrow{padding:7px 10px}
 .btn.icon{min-width:56px}
-.btn-large{padding:12px 24px;font-size:14px;border-radius:8px;display:flex;align-items:center;gap:8px}
-.btn-large.subtle{background:rgba(255,255,255,0.04);border:1px solid var(--border);color:var(--text-dim)}
-.btn-large.subtle:hover{background:rgba(255,255,255,0.08);color:var(--text)}
 #playhead-slider{width:56%}
 .timecode{min-width:110px;text-align:right;color:var(--text-dim);font-variant-numeric:tabular-nums}
 .elapsed{font-size:11px;color:#18b487;font-variant-numeric:tabular-nums;min-width:56px;text-align:right}
@@ -242,6 +227,7 @@ pre{background:#0f131b;border:1px solid var(--border);border-radius:8px;padding:
   box-shadow:0 10px 30px rgba(0,0,0,0.5);word-break:break-word}
 .toast-ok{border-color:#18b487}
 .toast-error{border-color:#ff6b6b}
+.toast-detail{margin-top:5px;font-size:10.5px;line-height:1.4;color:var(--text-dim);opacity:0.75}
 .template-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
 .template-card{background:#0f131b;border:1px solid var(--border);border-radius:10px;padding:14px;cursor:pointer;transition:border-color 0.15s,background 0.15s}
 .template-card:hover{border-color:var(--accent);background:rgba(77,125,255,0.07)}
@@ -258,15 +244,25 @@ pre{background:#0f131b;border:1px solid var(--border);border-radius:8px;padding:
 /* home */
 .home-view{min-height:100vh;display:flex;flex-direction:column}
 .topbar-home{background:rgba(13,15,22,0.98)}
-.dev-mode-toggle{font-size:11px;padding:5px 10px}
-.dev-mode-toggle.on{background:rgba(24,180,135,0.2);border-color:#18b487;color:#4addb5}
 .devtools-btn.dev-hidden{display:none!important}
 .home-main{flex:1;display:flex;flex-direction:column;align-items:center;padding:60px 24px 40px}
 .home-hero{text-align:center;max-width:640px;margin-bottom:48px}
-.home-hero h1{font-size:32px;font-weight:700;letter-spacing:-0.6px;margin:0 0 12px;line-height:1.25}
-.hero-accent{background:linear-gradient(135deg,#4d7dff,#8b5cf6);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.home-hero h1{font-size:40px;font-weight:800;letter-spacing:-1px;margin:0 0 12px;line-height:1.2}
+/* Render and Flow read as two words: each gets its own color. */
+.word-render{color:#4d7dff}
+.word-flow{color:#c084fc}
+.hero-studio{color:var(--text-dim);font-weight:600}
 .hero-sub{font-size:15px;color:var(--text-dim);line-height:1.55;margin:0 0 24px}
-.hero-actions{display:flex;justify-content:center;gap:10px}
+/* prompt entry */
+.prompt-box{background:var(--bg-raised);border:1px solid var(--border);border-radius:14px;padding:12px;text-align:left;transition:border-color 0.15s}
+.prompt-box:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow)}
+#home-prompt{width:100%;box-sizing:border-box;background:none;border:none;color:var(--text);font-family:inherit;font-size:15px;resize:none;outline:none;padding:6px}
+.prompt-actions{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px}
+.suggestions{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:16px}
+.suggestion-chip{background:rgba(255,255,255,0.04);border:1px solid var(--border);color:var(--text-dim);border-radius:999px;padding:7px 14px;font-size:12px;font-family:inherit;cursor:pointer;transition:border-color 0.15s,color 0.15s,background 0.15s}
+.suggestion-chip:hover{border-color:var(--accent);color:var(--text);background:rgba(77,125,255,0.08)}
+.prompt-status{font-size:12px;color:var(--text-dim);margin-top:14px;min-height:16px}
+.prompt-status.error{color:var(--danger)}
 .home-projects{width:100%;max-width:900px}
 .home-section-header{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid var(--border-subtle)}
 .home-section-header h2{margin:0;font-size:16px;font-weight:600}
@@ -288,43 +284,13 @@ pre{background:#0f131b;border:1px solid var(--border);border-radius:8px;padding:
 function buildDom(root: HTMLElement): void {
   root.innerHTML = `
 <!-- HOME VIEW -->
-<div id="home-view" class="home-view">
-  <header class="topbar topbar-home">
-    <div class="brand" id="brand-home">${LOGO_SVG}<span class="brand-text">Renderflow <span class="brand-sub">Studio</span></span></div>
-    <div class="toolbar">
-      <button class="btn subtle" id="btn-toggle-theme-home" type="button">Theme</button>
-      <button class="btn subtle dev-mode-toggle" id="btn-toggle-dev-mode" type="button" title="Toggle Developer Mode">Dev Mode: OFF</button>
-    </div>
-  </header>
-  <main class="home-main">
-    <section class="home-hero">
-      <h1>Welcome to <span class="hero-accent">Renderflow Studio</span></h1>
-      <p class="hero-sub">AI-powered video editing and rendering platform. Create, edit, and export professional video content.</p>
-      <div class="hero-actions">
-        <button class="btn btn-large" id="btn-home-new-project" type="button">
-          <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
-          New Project
-        </button>
-        <button class="btn btn-large subtle" id="btn-home-refresh" type="button">
-          <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M14 4a6 6 0 00-8.48.53M6 16a6 6 0 008.48-.53" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M14 2v4h-4M6 18v-4h4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Refresh
-        </button>
-      </div>
-    </section>
-    <section class="home-projects">
-      <div class="home-section-header"><h2>Your Projects</h2><span class="home-project-count" id="home-project-count"></span></div>
-      <div id="home-project-list" class="home-project-grid"><div class="home-empty"><p>No projects yet. Create your first project to get started!</p></div></div>
-      <div id="home-loading" class="home-loading" style="display:none"><p>Loading projects...</p></div>
-      <div id="home-error" class="home-error" style="display:none"><p>Could not connect to the orchestrator. Make sure the backend is running.</p><button class="btn subtle" id="btn-home-retry" type="button">Retry</button></div>
-    </section>
-  </main>
-</div>
+${homeViewHtml()}
 
 <!-- STUDIO VIEW -->
 <div id="studio-view" class="studio-view" style="display:none">
 <div class="studio">
   <header class="topbar">
-    <div class="brand" id="brand-studio" style="cursor:pointer" title="Back to Home">${LOGO_SVG}<span class="brand-text">Renderflow <span class="brand-sub">Studio</span></span></div>
+    ${brandHtml("brand-studio", true)}
     <div class="toolbar">
       <button class="btn subtle" id="btn-home-nav" type="button">Home</button>
       <button class="btn subtle" id="btn-toggle-theme" type="button">Theme</button>
@@ -416,10 +382,12 @@ function buildDom(root: HTMLElement): void {
             <button class="btn subtle" id="btn-add-video-track" type="button">+ Video Track</button>
             <button class="btn subtle" id="btn-add-audio-track" type="button">+ Audio Track</button>
             <button class="btn subtle" id="btn-split-clip" type="button">Split</button>
+            <button class="btn subtle" id="btn-duplicate-clip" type="button">Duplicate</button>
             <button class="btn subtle" id="btn-delete-clip" type="button">Delete</button>
+            <button class="btn subtle" id="btn-ripple-delete-clip" type="button" title="Delete and close the gap">Ripple</button>
           </div>
         </div>
-        <div class="hint">Hotkeys: J/K/L shuttle, Arrow keys frame-step, M marker, S split, Del delete</div>
+        <div class="hint">Hotkeys: J/K/L shuttle, Arrow keys frame-step, M marker, S split, Ctrl+D duplicate, Del delete, Shift+Del ripple delete</div>
         <div id="timeline-grid" class="timeline-grid"></div>
       </section>
     </main>
@@ -514,7 +482,9 @@ export function bootstrapStudioApp(): void {
   const zoomSlider = $("#timeline-zoom") as HTMLInputElement;
   const fpsInput = $("#project-fps") as HTMLInputElement;
   const aiPrompt = $("#ai-prompt") as HTMLTextAreaElement;
-  const devModeToggle = $("#btn-toggle-dev-mode");
+  const homePrompt = $("#home-prompt") as HTMLTextAreaElement;
+  const homePromptStatus = $("#home-prompt-status");
+  const generateBtn = $("#btn-home-generate") as HTMLButtonElement;
   const previewFrame = document.getElementById("preview-frame") as HTMLImageElement;
   const previewVideo = document.getElementById("preview-video") as HTMLVideoElement;
   const previewEmpty = $("#preview-empty");
@@ -524,23 +494,15 @@ export function bootstrapStudioApp(): void {
   const rejectBtn = $("#btn-reject-job") as HTMLButtonElement;
 
   // ── Dev mode ──
-  const DEV_MODE_KEY = "deepiri_dev_mode";
+  // No toggle in the UI: developers opt in with
+  // localStorage.setItem("deepiri_dev_mode", "true") and reload.
   function applyDevMode(): void {
     const on = state.devMode;
-    if (devModeToggle) {
-      devModeToggle.textContent = on ? "Dev Mode: ON" : "Dev Mode: OFF";
-      devModeToggle.classList.toggle("on", on);
-    }
     actDevtools.classList.toggle("dev-hidden", !on);
     if (!on && devtoolsDrawer.style.display !== "none") {
       devtoolsDrawer.style.display = "none";
       actDevtools.classList.remove("active");
     }
-  }
-  function toggleDevMode(): void {
-    state.devMode = !state.devMode;
-    localStorage.setItem(DEV_MODE_KEY, String(state.devMode));
-    applyDevMode();
   }
 
   // ── Devtools log ──
@@ -553,11 +515,22 @@ export function bootstrapStudioApp(): void {
   // ── Toasts ──
   const toastHost = $("#toast-host");
 
-  /** Transient message, bottom-right. Click to dismiss early. */
-  function toast(message: string, kind: "ok" | "error" = "ok"): void {
+  /** Transient message, bottom-right. Click to dismiss early. An optional
+   *  `detail` (e.g. the underlying server error) renders smaller and dimmer
+   *  below the main message so it doesn't compete with it. */
+  function toast(message: string, kind: "ok" | "error" = "ok", detail?: string): void {
     const el = document.createElement("div");
     el.className = `toast toast-${kind}`;
-    el.textContent = message;
+    const main = document.createElement("div");
+    main.className = "toast-msg";
+    main.textContent = message;
+    el.appendChild(main);
+    if (detail) {
+      const sub = document.createElement("div");
+      sub.className = "toast-detail";
+      sub.textContent = detail;
+      el.appendChild(sub);
+    }
     const remove = () => el.remove();
     el.addEventListener("click", remove);
     toastHost.appendChild(el);
@@ -566,7 +539,18 @@ export function bootstrapStudioApp(): void {
   }
 
   // -- Timeline Persistence --
-  /** Returns null on success, or the error text so callers can surface it. */
+  /** Raw fetch/server errors ("TypeError: Failed to fetch", a JSON 500 body)
+   *  mean nothing to a user; say what happened and what to do about it.
+   *  The raw text still goes to devLog for debugging. */
+  function friendlySaveError(raw: string): string {
+    if (/failed to fetch|networkerror|load failed|connection refused/i.test(raw)) {
+      return "We couldn't reach the RenderFlow backend. Make sure it's running, then try again.";
+    }
+    return "The RenderFlow backend hit a problem while saving. Please try again in a moment.";
+  }
+
+  /** Returns null on success, or a user-friendly error message so callers
+   *  can surface it directly. */
   async function persistTimeline(): Promise<string | null> {
     const sid = state.activeSequenceId;
     if (!sid) return null;
@@ -589,7 +573,7 @@ export function bootstrapStudioApp(): void {
       return null;
     } catch (e) {
       devLog(`Save timeline error: ${String(e)}`);
-      return String(e);
+      return friendlySaveError(String(e));
     }
   }
 
@@ -713,21 +697,20 @@ export function bootstrapStudioApp(): void {
     state.activeProjectId = pid;
     state.timeline.fps = project.fps_num / project.fps_den;
     fpsInput.value = String(state.timeline.fps);
+    // Resolved into a local, not straight into state
+    let sequenceId: string;
     try {
       const seqs = await orchestratorListSequences(pid);
-      if (seqs.length > 0) {
-        state.activeSequenceId = seqs[0].id;
-      } else {
-        const seq = await orchestratorCreateSequence(pid, "Main Sequence");
-        state.activeSequenceId = seq.id;
-      }
+      sequenceId = seqs.length
+        ? seqs[0].id
+        : (await orchestratorCreateSequence(pid, "Main Sequence")).id;
     } catch {
-      const seq = await orchestratorCreateSequence(pid, "Main Sequence");
-      state.activeSequenceId = seq.id;
+      sequenceId = (await orchestratorCreateSequence(pid, "Main Sequence")).id;
     }
-    if (state.activeProjectId !== pid || !state.activeSequenceId) return;
+    if (state.activeProjectId !== pid) return;
+    state.activeSequenceId = sequenceId;
 
-    // Load assets first — the clips below take their labels from the bin.
+    // Load assets
     try {
       const assets = await listProjectAssets(pid);
       if (state.activeProjectId !== pid) return;
@@ -744,10 +727,13 @@ export function bootstrapStudioApp(): void {
     // reset, so a failure here leaves it empty rather than showing the last
     // project's.
     try {
-      const rows = await orchestratorListTracks(state.activeSequenceId);
+      const rows = await orchestratorListTracks(sequenceId);
       if (state.activeProjectId !== pid) return;
       const tracks = rows
         .slice()
+        // The timeline only draws video and audio lanes; anything else the
+        // server holds would otherwise render as a bogus video track.
+        .filter((t) => t.track_type === "video" || t.track_type === "audio")
         .sort((a, b) => a.lane_index - b.lane_index)
         .map((t, i): import("./types").UiTrack => ({
           id: i + 1,
@@ -758,10 +744,12 @@ export function bootstrapStudioApp(): void {
           clips: [],
         }));
 
-      const clipRows = await orchestratorListClips(state.activeSequenceId);
+      const clipRows = await orchestratorListClips(sequenceId);
       if (state.activeProjectId !== pid) return;
       const byTrack = new Map(tracks.map((t) => [t.serverId, t]));
-      for (const c of clipRows) {
+      // In tick order: insertClipFromAsset appends after the last clip, so an
+      // unsorted list would put the next insert in the wrong place.
+      for (const c of clipRows.slice().sort((a, b) => a.in_tick - b.in_tick)) {
         const track = byTrack.get(c.track_id);
         if (!track) continue;
         const asset = state.assets.find((a) => a.id === c.asset_id);
@@ -789,6 +777,47 @@ export function bootstrapStudioApp(): void {
     renderTimelineFull();
     renderAssets();
     updateInspector(state, inspectorEl);
+  }
+
+  // ── Home prompt → generated video in the editor ──
+  /**
+   * The ChatGPT-shaped path: one prompt creates the project, starts the
+   * generation, and drops the user straight into the editor to watch it land.
+   */
+  async function generateFromPrompt(prompt: string): Promise<void> {
+    if (!prompt.trim()) {
+      homePromptStatus.textContent = "Describe the video you want first.";
+      homePromptStatus.classList.add("error");
+      return;
+    }
+    generateBtn.disabled = true;
+    homePromptStatus.classList.remove("error");
+    homePromptStatus.textContent = "Setting up your project…";
+    try {
+      const launched = await launchAiProject(prompt, {
+        createProject: orchestratorCreateProject,
+        createSequence: orchestratorCreateSequence,
+        createTrack: orchestratorCreateTrack,
+        submitAiJob,
+      });
+      devLog(`Prompt launch: project ${launched.project.id}, job ${launched.jobId}`);
+      homePrompt.value = "";
+      homePromptStatus.textContent = "";
+
+      // Into the editor, AI panel open, with the clip auto-accepted on arrival.
+      await openProject(launched.project);
+      state.lastJobId = launched.jobId;
+      aiPrompt.value = prompt.trim();
+      setActivePanel("ai");
+      jobStatusEl.textContent = "Status: queued\nGenerating your video…";
+      startJobPolling(launched.jobId, true);
+    } catch (e) {
+      homePromptStatus.textContent = `Could not start generation: ${String(e)}`;
+      homePromptStatus.classList.add("error");
+      devLog(`Prompt launch error: ${String(e)}`);
+    } finally {
+      generateBtn.disabled = false;
+    }
   }
 
   // ── Create project from template ──
@@ -931,21 +960,35 @@ export function bootstrapStudioApp(): void {
       const found = getClipById(state, clipId);
       return found ? found.clip.outTick : 0;
     })();
+    const tickPerPx = scaledDuration / laneRect.width / state.ui.zoom;
+    // ~8px of slack, so snapping feels the same at any zoom level.
+    const snapThreshold = Math.max(1, Math.round(8 * tickPerPx));
     const onMove = (e: PointerEvent) => {
       const dx = e.clientX - startX;
-      const deltaTick = Math.round(
-        ((dx / laneRect.width) * scaledDuration) / state.ui.zoom,
-      );
+      const deltaTick = Math.round(dx * tickPerPx);
       if (mode === "move") {
-        moveClip(state, clipId, deltaTick, history);
+        // Positioned against the drag's origin, not the clip's current spot —
+        // offsetting from the live position compounds every pointer event.
+        const targetIn = snapTick(
+          state,
+          startInTick + deltaTick,
+          clipId,
+          snapThreshold,
+        );
+        const found = getClipById(state, clipId);
+        if (found) {
+          moveClip(state, clipId, targetIn - found.clip.inTick, history);
+        }
       } else if (mode === "trim-left") {
-        const newIn = Math.min(startInTick + deltaTick, startOutTick - 2);
+        const snapped = snapTick(state, startInTick + deltaTick, clipId, snapThreshold);
+        const newIn = Math.min(snapped, startOutTick - 2);
         const found = getClipById(state, clipId);
         if (found) {
           found.clip.inTick = Math.max(0, newIn);
         }
       } else {
-        const newOut = Math.max(startOutTick + deltaTick, startInTick + 2);
+        const snapped = snapTick(state, startOutTick + deltaTick, clipId, snapThreshold);
+        const newOut = Math.max(snapped, startInTick + 2);
         const found = getClipById(state, clipId);
         if (found) {
           found.clip.outTick = Math.min(state.timeline.durationTicks, newOut);
@@ -1101,6 +1144,16 @@ export function bootstrapStudioApp(): void {
     renderTimelineFull();
     updateInspector(state, inspectorEl);
   }
+  function doRippleDeleteClip() {
+    rippleDeleteClip(state, history);
+    renderTimelineFull();
+    updateInspector(state, inspectorEl);
+  }
+  function doDuplicateClip() {
+    duplicateClip(state, history);
+    renderTimelineFull();
+    updateInspector(state, inspectorEl);
+  }
 
   // ── Undo / Redo ──
   function doUndo() {
@@ -1167,7 +1220,15 @@ export function bootstrapStudioApp(): void {
     }
   }
 
-  function startJobPolling(jobId: string): void {
+  /**
+   * Polls a job to completion.
+   *
+   * `autoAccept` is for the home-page prompt flow: the user asked for a video
+   * and expects one, so we take the clip as soon as it is ready instead of
+   * parking it behind a review gate. The AI panel's own Submit keeps the
+   * explicit Accept/Reject step.
+   */
+  function startJobPolling(jobId: string, autoAccept = false): void {
     stopJobPolling();
     jobPollTimer = window.setInterval(async () => {
       try {
@@ -1176,6 +1237,7 @@ export function bootstrapStudioApp(): void {
         if (JOB_TERMINAL.has(job.status)) {
           stopJobPolling();
           devLog(`Job ${jobId} reached ${job.status}`);
+          if (autoAccept && job.status === "review") await doAcceptJob();
         }
       } catch (e) {
         stopJobPolling();
@@ -1293,6 +1355,8 @@ export function bootstrapStudioApp(): void {
     addMarker: doAddMarker,
     splitClip: doSplitClip,
     deleteClip: doDeleteClip,
+    rippleDeleteClip: doRippleDeleteClip,
+    duplicateClip: doDuplicateClip,
     undo: doUndo,
     redo: doRedo,
   };
@@ -1331,7 +1395,6 @@ export function bootstrapStudioApp(): void {
   $("#btn-list-projects").addEventListener("click", doListProjects);
 
   // Dev mode
-  devModeToggle.addEventListener("click", toggleDevMode);
   actDevtools.addEventListener("click", toggleDevtools);
   $("#btn-close-devtools").addEventListener("click", () => {
     devtoolsDrawer.style.display = "none";
@@ -1348,6 +1411,23 @@ export function bootstrapStudioApp(): void {
   });
   $("#btn-home-refresh").addEventListener("click", refreshHomeProjects);
   $("#btn-home-retry").addEventListener("click", refreshHomeProjects);
+
+  // Prompt entry: Generate, Enter-to-send, and one-click starter prompts.
+  generateBtn.addEventListener("click", () => generateFromPrompt(homePrompt.value));
+  homePrompt.addEventListener("keydown", (e) => {
+    const ev = e as KeyboardEvent;
+    if (ev.key === "Enter" && !ev.shiftKey) {
+      ev.preventDefault();
+      void generateFromPrompt(homePrompt.value);
+    }
+  });
+  $("#home-suggestions").addEventListener("click", (e) => {
+    const chip = (e.target as HTMLElement).closest<HTMLElement>(".suggestion-chip");
+    if (!chip) return;
+    const prompt = chip.dataset.prompt ?? "";
+    homePrompt.value = prompt;
+    void generateFromPrompt(prompt);
+  });
 
   // Modal
   $("#modal-close").addEventListener("click", () => {
@@ -1375,7 +1455,9 @@ export function bootstrapStudioApp(): void {
   $("#btn-add-marker").addEventListener("click", doAddMarker);
   $("#btn-jump-next-marker").addEventListener("click", doJumpNextMarker);
   $("#btn-split-clip").addEventListener("click", doSplitClip);
+  $("#btn-duplicate-clip").addEventListener("click", doDuplicateClip);
   $("#btn-delete-clip").addEventListener("click", doDeleteClip);
+  $("#btn-ripple-delete-clip").addEventListener("click", doRippleDeleteClip);
   $("#btn-undo").addEventListener("click", doUndo);
   $("#btn-redo").addEventListener("click", doRedo);
 
@@ -1536,7 +1618,7 @@ export function bootstrapStudioApp(): void {
     saveProject(projectName, snapshotState(state));
     const err = await persistTimeline();
     if (err) {
-      toast(`Couldn't save timeline: ${err}`, "error");
+      toast("Your project couldn't be saved.", "error", err);
       return;
     }
     devLog(`Project "${projectName}" saved.`);
@@ -1549,22 +1631,44 @@ export function bootstrapStudioApp(): void {
       exportStatusEl.textContent = "Open a project first";
       return;
     }
+    // Pinned now: the save is awaited first, and going Home mid-export would
+    // null these out from under the render.
+    const projectId = state.activeProjectId;
+    const sequenceId = state.activeSequenceId;
     exportBtn.disabled = true;
-    exportStatusEl.textContent = "Exporting…";
     try {
-      const job = await runExport(
-        state.activeProjectId,
-        state.activeSequenceId,
-        { submitRenderJob, getRenderJob },
-        {
-          onProgress: (j) => {
-            exportStatusEl.textContent =
-              j.status === "rendering"
-                ? `Exporting… ${Math.round(j.progress * 100)}%`
-                : `Export ${j.status}`;
+      // The render reads the server's clips, so the timeline has to get there
+      // first — otherwise Export quietly ships the last-saved cut.
+      exportStatusEl.textContent = "Saving timeline…";
+      const result = await saveThenExport(persistTimeline, () => {
+        exportStatusEl.textContent = "Exporting…";
+        return runExport(
+          projectId,
+          sequenceId,
+          { submitRenderJob, getRenderJob },
+          {
+            onProgress: (j) => {
+              exportStatusEl.textContent =
+                j.status === "rendering"
+                  ? `Exporting… ${Math.round(j.progress * 100)}%`
+                  : `Export ${j.status}`;
+            },
           },
-        },
-      );
+        );
+      });
+
+      if (!result.ok) {
+        exportStatusEl.textContent = "Export cancelled — couldn't save timeline";
+        toast(
+          "Nothing was exported — your latest changes couldn't be saved first.",
+          "error",
+          result.saveError,
+        );
+        devLog(`Export aborted — save failed: ${result.saveError}`);
+        return;
+      }
+
+      const job = result.job;
       if (job.status === "completed" && job.output_uri) {
         exportStatusEl.textContent = `Exported → ${job.output_uri}`;
         devLog(`Export completed: ${job.output_uri}`);
