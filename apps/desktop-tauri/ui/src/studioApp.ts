@@ -34,8 +34,10 @@ import {
   deleteClip,
   moveClip,
   trimClip,
-  insertClipFromAsset,
+  insertAssetIntoVideoTrack,
 } from "./ops/clips";
+import { insertAcceptedClip, ServerSyncError } from "./ops/aiAccept";
+import { runExport } from "./ops/export";
 import { addMarker, jumpToNextMarker } from "./ops/markers";
 import {
   registerAsset,
@@ -63,6 +65,9 @@ import {
   orchestratorListTracks,
   orchestratorListClips,
   orchestratorReplaceClips,
+  orchestratorCreateClip,
+  submitRenderJob,
+  getRenderJob,
   submitAiJob,
   getAiJob,
   acceptAiJob,
@@ -144,6 +149,7 @@ body {
 .panel{padding:14px 12px;overflow-y:auto;overflow-x:hidden}
 #ai-mode-select{width:100%;background:#0f131b;border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px;margin-bottom:8px}
 .ai-job-status{margin-top:10px;padding:8px;border:1px solid var(--border-subtle);border-radius:6px;background:#0f131b;font-size:11px;color:var(--text-dim);white-space:pre-wrap}
+.export-status{font-size:11px;color:var(--text-dim);max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .panel-title{
   font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;
   color:var(--text-muted);margin-bottom:12px;padding-bottom:8px;
@@ -326,6 +332,7 @@ function buildDom(root: HTMLElement): void {
       <button class="btn subtle" id="btn-redo" type="button">Redo</button>
       <button class="btn" id="btn-save-project" type="button">Save</button>
       <button class="btn" id="btn-export" type="button">Export</button>
+      <span id="export-status" class="export-status"></span>
     </div>
   </header>
   <div class="studio-body">
@@ -1223,6 +1230,41 @@ export function bootstrapStudioApp(): void {
       // Surface the new AI asset in the library so the user can click/drag it
       // onto the timeline later (it plays there now that its proxy is ready).
       await refreshAssets();
+
+      // Cut the generated clip straight into the timeline. It also lands on
+      // the server's sequence, which is what Export renders from.
+      try {
+        const clip = await insertAcceptedClip(state, history, job, {
+          getAsset,
+          listTracks: orchestratorListTracks,
+          createTrack: orchestratorCreateTrack,
+          createClip: orchestratorCreateClip,
+        });
+        if (clip) {
+          jobStatusEl.textContent = `Status: ${job.status}\nAdded "${clip.label}" to the timeline.`;
+          devLog(`Inserted accepted clip ${clip.label} at tick ${clip.inTick}`);
+        } else {
+          // null has two causes — name the right one instead of always
+          // blaming a missing asset the job may well have produced.
+          const why = job.metadata?.asset_id
+            ? "this project has no video track to hold it"
+            : "the job produced no asset";
+          jobStatusEl.textContent = `Status: ${job.status}\nNo clip added — ${why}.`;
+          devLog(`Accepted job ${state.lastJobId}: no clip added — ${why}`);
+        }
+      } catch (e) {
+        // ServerSyncError means the clip is on the local timeline but its
+        // server-side copy is missing — devLog alone would hide that in
+        // production, and Export renders from the server's clip list, so
+        // the exported file would silently skip the clip. Say it in the UI.
+        const synced = e instanceof ServerSyncError ? e.clip : null;
+        jobStatusEl.textContent = synced
+          ? `Status: ${job.status}\nAdded "${synced.label}" to the timeline, but it wasn't saved on the server — Export will skip it. (${String(e)})`
+          : `Status: ${job.status}\nCouldn't add the clip to the timeline: ${String(e)}`;
+        devLog(`Clip insert problem: ${String(e)}`);
+      }
+      renderTimelineFull();
+      updateInspector(state, inspectorEl);
     } catch (e) {
       jobStatusEl.textContent = `Accept failed: ${String(e)}`;
       devLog(`Accept error: ${String(e)}`);
@@ -1386,20 +1428,7 @@ export function bootstrapStudioApp(): void {
     try {
       const asset = await importMedia(state.activeProjectId, path);
       registerAsset(state, asset);
-      // Auto-insert clip onto the first video track
-      const videoTrack = state.timeline.tracks.find((t) => t.kind === "Video");
-      if (videoTrack) {
-        // Clear demo clips (clips without a linked asset)
-        videoTrack.clips = videoTrack.clips.filter((c) => c.assetId);
-        state.ui.activeTrackId = videoTrack.id;
-        insertClipFromAsset(state, asset, history);
-        // Extend timeline if clip exceeds duration
-        const maxOut = videoTrack.clips.reduce((m, c) => Math.max(m, c.outTick), 0);
-        if (maxOut + state.timeline.fps * 2 > state.timeline.durationTicks) {
-          state.timeline.durationTicks = maxOut + state.timeline.fps * 2;
-        }
-        renderTimelineFull();
-      }
+      if (insertAssetIntoVideoTrack(state, asset, history)) renderTimelineFull();
       renderAssets();
       // Start proxy polling if needed
       if (asset.meta_jsonb?.proxy_status === "pending") {
@@ -1436,16 +1465,7 @@ export function bootstrapStudioApp(): void {
         const filePath = (file as File & { path?: string }).path || file.name;
         const asset = await importMedia(state.activeProjectId, filePath);
         registerAsset(state, asset);
-        const videoTrack = state.timeline.tracks.find((t) => t.kind === "Video");
-        if (videoTrack) {
-          videoTrack.clips = videoTrack.clips.filter((c) => c.assetId);
-          state.ui.activeTrackId = videoTrack.id;
-          insertClipFromAsset(state, asset, history);
-          const maxOut = videoTrack.clips.reduce((m, c) => Math.max(m, c.outTick), 0);
-          if (maxOut + state.timeline.fps * 2 > state.timeline.durationTicks) {
-            state.timeline.durationTicks = maxOut + state.timeline.fps * 2;
-          }
-        }
+        insertAssetIntoVideoTrack(state, asset, history);
         if (asset.meta_jsonb?.proxy_status === "pending") {
           startProxyPolling(state, getAsset, (updated) => {
             updateAsset(state, updated.id, updated);
@@ -1522,9 +1542,43 @@ export function bootstrapStudioApp(): void {
     devLog(`Project "${projectName}" saved.`);
     toast(`Project "${projectName}" saved`, "ok");
   });
-  $("#btn-export").addEventListener("click", () =>
-    devLog("Export: not yet wired."),
-  );
+  const exportBtn = $("#btn-export") as HTMLButtonElement;
+  const exportStatusEl = $("#export-status") as HTMLElement;
+  exportBtn.addEventListener("click", async () => {
+    if (!state.activeProjectId || !state.activeSequenceId) {
+      exportStatusEl.textContent = "Open a project first";
+      return;
+    }
+    exportBtn.disabled = true;
+    exportStatusEl.textContent = "Exporting…";
+    try {
+      const job = await runExport(
+        state.activeProjectId,
+        state.activeSequenceId,
+        { submitRenderJob, getRenderJob },
+        {
+          onProgress: (j) => {
+            exportStatusEl.textContent =
+              j.status === "rendering"
+                ? `Exporting… ${Math.round(j.progress * 100)}%`
+                : `Export ${j.status}`;
+          },
+        },
+      );
+      if (job.status === "completed" && job.output_uri) {
+        exportStatusEl.textContent = `Exported → ${job.output_uri}`;
+        devLog(`Export completed: ${job.output_uri}`);
+      } else {
+        exportStatusEl.textContent = `Export failed: ${job.error ?? "unknown error"}`;
+        devLog(`Export failed: ${job.error ?? "unknown error"}`);
+      }
+    } catch (e) {
+      exportStatusEl.textContent = `Export failed: ${String(e)}`;
+      devLog(`Export error: ${String(e)}`);
+    } finally {
+      exportBtn.disabled = false;
+    }
+  });
 
   // Theme toggle (placeholder)
   const toggleTheme = () => devLog("Theme toggle: not yet wired.");
