@@ -1,5 +1,4 @@
 import type { Project } from "../backendApi";
-import { orchestratorDeleteProject } from "../backendApi";
 import { brandHtml } from "./brand";
 import { escapeHtml } from "./escape";
 
@@ -120,23 +119,15 @@ export async function renderHomeProjects(
     listEl
       .querySelectorAll<HTMLButtonElement>("[data-action='delete']")
       .forEach((btn) => {
-        btn.addEventListener("click", async (e) => {
+        btn.addEventListener("click", (e) => {
           e.stopPropagation();
           const projectId = btn.dataset.projectId!;
           const project = projects.find((p) => p.id === projectId);
           if (!project) return;
-          const confirmed = window.confirm(
-            `Delete project "${project.name}"? This cannot be undone.`,
-          );
-          if (!confirmed) return;
-          try {
-            await orchestratorDeleteProject(projectId);
-            callbacks.onDeleteProject(projectId);
-          } catch (err) {
-            // Say so — a dead-looking button is worse than an error.
-            console.error("delete_project_error", err);
-            window.alert(`Could not delete "${project.name}": ${String(err)}`);
-          }
+          // Confirming, deleting and reporting failure all belong to the host:
+          // this renderer has no dialogs of its own, and the native ones it
+          // used to reach for don't work inside the Tauri webview.
+          callbacks.onDeleteProject(projectId);
         });
       });
   } catch {

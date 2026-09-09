@@ -304,6 +304,9 @@ pre{background:#0f131b;border:1px solid var(--border);border-radius:8px;padding:
 .modal-close:hover{color:var(--text)}
 .modal-sub{color:var(--text-dim);font-size:12px;margin:0 0 16px}
 .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+.modal-narrow{width:420px}
+.btn-danger{background:var(--danger)}
+.btn-danger:hover{background:#ff6b85;box-shadow:0 0 0 3px rgba(240,77,110,0.18)}
 .modal-error{background:#0f131b;border:1px solid var(--border);border-radius:8px;padding:10px;
   font-family:ui-monospace,monospace;font-size:11px;color:var(--text-dim);
   max-height:120px;overflow:auto;word-break:break-word;white-space:pre-wrap}
@@ -560,6 +563,22 @@ ${chatStudioViewHtml()}
   </div>
 </div>
 
+<!-- CONFIRM (hidden by default). In-app rather than window.confirm(), which
+     the Tauri webview does not reliably show — a native dialog that never
+     appears reads as a dead button. -->
+<div id="confirm-overlay" class="modal-overlay" style="display:none">
+  <div class="modal modal-narrow">
+    <div class="modal-header">
+      <h2 id="confirm-title">Are you sure?</h2>
+    </div>
+    <p class="modal-sub" id="confirm-body"></p>
+    <div class="modal-actions">
+      <button class="btn subtle" id="btn-confirm-cancel" type="button">Cancel</button>
+      <button class="btn btn-danger" id="btn-confirm-ok" type="button">Delete</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast-host"></div>
 `;
   renderTemplateGrid();
@@ -715,6 +734,50 @@ export function bootstrapStudioApp(): void {
     );
   }
 
+  /**
+   * In-app replacement for window.confirm(). The Tauri webview does not
+   * reliably surface native dialogs — confirm() can return false without ever
+   * showing anything, which turned Delete into a button that did nothing.
+   * Resolves true only on an explicit confirm click.
+   */
+  function confirmDialog(
+    title: string,
+    body: string,
+    confirmLabel = "Delete",
+  ): Promise<boolean> {
+    const overlay = $("#confirm-overlay");
+    const okBtn = $("#btn-confirm-ok") as HTMLButtonElement;
+    const cancelBtn = $("#btn-confirm-cancel") as HTMLButtonElement;
+
+    $("#confirm-title").textContent = title;
+    $("#confirm-body").textContent = body;
+    okBtn.textContent = confirmLabel;
+
+    return new Promise<boolean>((resolve) => {
+      const settle = (result: boolean) => {
+        overlay.style.display = "none";
+        okBtn.onclick = null;
+        cancelBtn.onclick = null;
+        overlay.onclick = null;
+        document.removeEventListener("keydown", onKey);
+        resolve(result);
+      };
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key === "Escape") settle(false);
+      };
+
+      okBtn.onclick = () => settle(true);
+      cancelBtn.onclick = () => settle(false);
+      overlay.onclick = (e) => {
+        if (e.target === overlay) settle(false);
+      };
+      document.addEventListener("keydown", onKey);
+
+      overlay.style.display = "";
+      okBtn.focus();
+    });
+  }
+
   function showSaveFailedModal(error: string, onLeave: () => void): void {
     const overlay = $("#save-error-overlay");
     const n = unsavedClipCount();
@@ -805,6 +868,23 @@ export function bootstrapStudioApp(): void {
       },
       onRefresh: refreshHomeProjects,
       onDeleteProject: async (id) => {
+        const project = cachedProjects.find((p) => p.id === id);
+        const name = project?.name ?? "this project";
+        const ok = await confirmDialog(
+          "Delete project?",
+          `"${name}" and everything in it will be removed. This cannot be undone.`,
+        );
+        if (!ok) return;
+        try {
+          await orchestratorDeleteProject(id);
+        } catch (err) {
+          // Say so — a dead-looking button is worse than an error.
+          devLog(`Delete project error: ${String(err)}`);
+          toast(`Couldn't delete "${name}"`, "error", friendlySaveError(String(err)));
+          return;
+        }
+        devLog(`Project deleted: ${id}`);
+        toast(`Deleted "${name}"`, "ok");
         cachedProjects = cachedProjects.filter((p) => p.id !== id);
         await refreshHomeProjects();
       },
@@ -940,14 +1020,22 @@ export function bootstrapStudioApp(): void {
         state.ui.activeTrackId === trackId ? null : trackId;
       renderTimelineFull();
     },
-    onTrackDelete: (trackId) => {
+    onTrackDelete: async (trackId) => {
       const idx = state.timeline.tracks.findIndex((t) => t.id === trackId);
       if (idx < 0) return;
       const track = state.timeline.tracks[idx];
       if (track.clips.length > 0) {
-        if (!window.confirm(`Delete "${track.name}"? This will also remove ${track.clips.length} clip(s).`)) return;
+        const n = track.clips.length;
+        const ok = await confirmDialog(
+          "Delete track?",
+          `"${track.name}" holds ${n} clip${n === 1 ? "" : "s"}, which will be removed with it.`,
+        );
+        if (!ok) return;
       }
-      state.timeline.tracks.splice(idx, 1);
+      // The track may have moved while the confirm was open.
+      const at = state.timeline.tracks.indexOf(track);
+      if (at < 0) return;
+      state.timeline.tracks.splice(at, 1);
       // Tracks are server-backed now, so a local-only splice would come back on
       // the next open. The clips cascade with it server-side.
       if (track.serverId && state.activeSequenceId) {
