@@ -236,7 +236,7 @@ body {
 }
 .center{display:grid;grid-template-rows:1fr 290px}
 .monitor{padding:12px;border-bottom:1px solid var(--border);display:grid;grid-template-rows:auto 1fr}
-.monitor-head,.timeline-head{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.monitor-head,.timeline-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
 .monitor-head h3,.timeline-head h3{margin:0;font-size:12px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:var(--text-dim)}
 .preview{margin-top:10px;border:1px solid var(--border);border-radius:10px;position:relative;overflow:hidden;background:#080a10;box-shadow:inset 0 0 30px rgba(0,0,0,0.4)}
 .preview-overlay{position:absolute;inset:0;display:grid;place-items:center;align-content:center;gap:10px;color:var(--text-dim);font-size:12px;padding:16px;background:rgba(13,17,25,0.82);pointer-events:none}
@@ -244,7 +244,11 @@ body {
 #preview-frame{display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain;border-radius:10px}
 #preview-video{display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain;border-radius:10px}
 .timeline{padding:12px;background:#111621}
-.timeline-controls{display:flex;align-items:center;gap:6px;width:64%}
+/* Wraps instead of clipping: the center column narrows when the copilot dock
+   opens, and a nowrap row would push Ripple off the edge. The slider keeps a
+   fixed width so it stays draggable at every panel state. */
+.timeline-controls{display:flex;align-items:center;gap:6px;flex:1;min-width:0;flex-wrap:wrap;justify-content:flex-end}
+.timeline-controls .btn{padding:7px 10px}
 .timeline-grid{margin-top:10px;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#0d1119;user-select:none}
 .hint{font-size:10px;color:var(--text-muted);padding:4px 12px;background:var(--bg);border-bottom:1px solid var(--border-subtle);letter-spacing:0.3px}
 .track-row{display:grid;grid-template-columns:110px 1fr;min-height:46px;border-bottom:1px solid #1f2736}
@@ -271,7 +275,7 @@ body {
 .btn.subtle:hover{background:rgba(255,255,255,0.09);color:var(--text);border-color:var(--border)}
 .btn.narrow{padding:7px 10px}
 .btn.icon{min-width:56px}
-#playhead-slider{width:56%}
+#playhead-slider{flex:0 0 170px;width:170px}
 .timecode{min-width:110px;text-align:right;color:var(--text-dim);font-variant-numeric:tabular-nums}
 .elapsed{font-size:11px;color:#18b487;font-variant-numeric:tabular-nums;min-width:56px;text-align:right}
 pre{background:#0f131b;border:1px solid var(--border);border-radius:8px;padding:8px;font-size:11px;overflow:auto;max-height:230px;white-space:pre-wrap}
