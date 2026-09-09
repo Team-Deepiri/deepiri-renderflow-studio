@@ -40,7 +40,6 @@ import {
   snapTick,
 } from "./ops/clips";
 import { insertAcceptedClip, ServerSyncError } from "./ops/aiAccept";
-import { launchAiProject } from "./ops/aiLaunch";
 import { runExport, saveThenExport } from "./ops/export";
 import { addMarker, jumpToNextMarker } from "./ops/markers";
 import {
@@ -55,6 +54,7 @@ import { renderAssetList } from "./renderer/assets";
 import { updateInspector } from "./renderer/inspector";
 import { renderHomeProjects, homeViewHtml } from "./renderer/home";
 import type { HomeCallbacks } from "./renderer/home";
+import { chatStudioViewHtml } from "./renderer/chatStudio";
 import { brandHtml } from "./renderer/brand";
 import { registerHotkeys } from "./hotkeys";
 import type { HotkeyDispatch } from "./hotkeys";
@@ -97,6 +97,7 @@ function buildStyle(): void {
   --text: #eef1f9; --text-dim: #8a95b0; --text-muted: #4f5a74;
   --accent: #4d7dff; --accent-glow: rgba(77,125,255,0.15); --accent-hover: #6390ff;
   --danger: #f04d6e; --sidebar-width: 280px; --activity-bar-width: 48px;
+  --copilot-width: 320px;
 }
 body {
   margin:0; font-family:"Inter","Segoe UI",system-ui,sans-serif;
@@ -115,8 +116,13 @@ body {
 .toolbar{display:flex;gap:8px}
 .studio-body{flex:1;display:flex;flex-direction:column;min-height:0}
 .workspace{
-  display:grid; grid-template-columns:var(--activity-bar-width) var(--sidebar-width) 1fr;
+  display:grid;
+  grid-template-columns:var(--activity-bar-width) var(--sidebar-width) 1fr var(--copilot-width);
   grid-template-rows:1fr; flex:1; min-height:0;
+  transition:grid-template-columns 0.2s ease;
+}
+.workspace.copilot-collapsed{
+  grid-template-columns:var(--activity-bar-width) var(--sidebar-width) 1fr 0;
 }
 .activity-bar{
   background:var(--bg); border-right:1px solid var(--border-subtle);
@@ -132,9 +138,10 @@ body {
 .activity-btn:hover{background:var(--bg-raised);color:var(--text-dim)}
 .activity-btn.active{background:var(--accent-glow);color:var(--accent)}
 .activity-spacer{flex:1;min-height:0}
-.panel.ai-hidden{display:none}
 .panel,.center{border-right:1px solid var(--border-subtle);background:var(--bg-soft)}
 .panel{padding:14px 12px;overflow-y:auto;overflow-x:hidden}
+.panel.copilot{border-right:none;border-left:1px solid var(--border-subtle)}
+.workspace.copilot-collapsed .panel.copilot{padding:0;border-left:none;overflow:hidden}
 #ai-mode-select{width:100%;background:#0f131b;border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px;margin-bottom:8px}
 .ai-job-status{margin-top:10px;padding:8px;border:1px solid var(--border-subtle);border-radius:6px;background:#0f131b;font-size:11px;color:var(--text-dim);white-space:pre-wrap}
 .export-status{font-size:11px;color:var(--text-dim);max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -253,16 +260,17 @@ pre{background:#0f131b;border:1px solid var(--border);border-radius:8px;padding:
 .word-flow{color:#c084fc}
 .hero-studio{color:var(--text-dim);font-weight:600}
 .hero-sub{font-size:15px;color:var(--text-dim);line-height:1.55;margin:0 0 24px}
-/* prompt entry */
-.prompt-box{background:var(--bg-raised);border:1px solid var(--border);border-radius:14px;padding:12px;text-align:left;transition:border-color 0.15s}
-.prompt-box:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow)}
-#home-prompt{width:100%;box-sizing:border-box;background:none;border:none;color:var(--text);font-family:inherit;font-size:15px;resize:none;outline:none;padding:6px}
-.prompt-actions{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px}
-.suggestions{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:16px}
-.suggestion-chip{background:rgba(255,255,255,0.04);border:1px solid var(--border);color:var(--text-dim);border-radius:999px;padding:7px 14px;font-size:12px;font-family:inherit;cursor:pointer;transition:border-color 0.15s,color 0.15s,background 0.15s}
-.suggestion-chip:hover{border-color:var(--accent);color:var(--text);background:rgba(77,125,255,0.08)}
-.prompt-status{font-size:12px;color:var(--text-dim);margin-top:14px;min-height:16px}
-.prompt-status.error{color:var(--danger)}
+/* home hero CTAs */
+.home-hero-actions{display:flex;gap:10px;justify-content:center;margin-top:8px}
+/* chat studio (New Project interview — stub) */
+.chat-studio-view{min-height:100vh;display:flex;flex-direction:column}
+.chat-studio-main{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 24px}
+.chat-studio-card{background:var(--bg-raised);border:1px solid var(--border);border-radius:14px;padding:28px;max-width:640px;width:100%;text-align:center}
+.chat-studio-badge{display:inline-block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:var(--accent);background:var(--accent-glow);border-radius:999px;padding:4px 10px;margin-bottom:14px}
+.chat-studio-title{margin:0 0 8px;font-size:22px;font-weight:700;letter-spacing:-0.3px}
+.chat-studio-sub{color:var(--text-dim);font-size:13px;line-height:1.55;margin:0 0 20px}
+.chat-studio-thread-placeholder{background:#0f131b;border:1px dashed var(--border);border-radius:10px;padding:28px 16px;color:var(--text-muted);font-size:13px;margin-bottom:20px}
+.chat-studio-actions{display:flex;justify-content:center}
 .home-projects{width:100%;max-width:900px}
 .home-section-header{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid var(--border-subtle)}
 .home-section-header h2{margin:0;font-size:16px;font-weight:600}
@@ -286,6 +294,9 @@ function buildDom(root: HTMLElement): void {
 <!-- HOME VIEW -->
 ${homeViewHtml()}
 
+<!-- CHAT STUDIO VIEW (New Project interview — stub) -->
+${chatStudioViewHtml()}
+
 <!-- STUDIO VIEW -->
 <div id="studio-view" class="studio-view" style="display:none">
 <div class="studio">
@@ -304,10 +315,7 @@ ${homeViewHtml()}
   <div class="studio-body">
   <div class="workspace" id="workspace">
     <nav class="activity-bar" id="activity-bar">
-      <button class="activity-btn active" id="act-explorer" title="Project Explorer" type="button">
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="3" y="3" width="6" height="14" rx="1.5" fill="currentColor" opacity=".5"/><rect x="11" y="3" width="6" height="6" rx="1.5" fill="currentColor"/><rect x="11" y="11" width="6" height="6" rx="1.5" fill="currentColor" opacity=".7"/></svg>
-      </button>
-      <button class="activity-btn" id="act-ai" title="AI Copilot" type="button">
+      <button class="activity-btn active" id="act-ai" title="AI Copilot" type="button">
         <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M7 10h6M10 7v6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
       </button>
       <div class="activity-spacer"></div>
@@ -334,27 +342,6 @@ ${homeViewHtml()}
           <button class="btn narrow" id="btn-import-media" type="button">Import Media</button>
         </div>
       </div>
-    </aside>
-    <aside class="panel left ai-hidden" id="ai-panel">
-      <div class="panel-title">AI Copilot</div>
-      <div class="ai-mode">Manual path parity: every action has a no-AI equivalent.</div>
-      <select id="ai-mode-select" title="Generation mode">
-        <option value="scene">Scene (video)</option>
-        <!-- Only video generation is wired today; audio/voice/dialogue come later. -->
-      </select>
-      <textarea id="ai-prompt" rows="4" placeholder="Describe a scene, shot list, or generation request..."></textarea>
-      <div class="stack">
-        <button class="btn" id="btn-health" type="button">Orchestrator Health</button>
-        <button class="btn" id="btn-list-projects" type="button">List Projects</button>
-        <button class="btn" id="btn-submit-job" type="button">Submit AI Job</button>
-        <button class="btn" id="btn-refresh-job" type="button">Refresh Job</button>
-        <div style="display:flex;gap:6px">
-          <button class="btn btn-accept" id="btn-accept-job" type="button" disabled>Accept</button>
-          <button class="btn btn-reject" id="btn-reject-job" type="button" disabled>Reject</button>
-        </div>
-      </div>
-      <div id="ai-job-status" class="ai-job-status">No job submitted.</div>
-      <div id="inspector" class="inspector">No clip selected.</div>
     </aside>
     <main class="center">
       <section class="monitor">
@@ -391,6 +378,27 @@ ${homeViewHtml()}
         <div id="timeline-grid" class="timeline-grid"></div>
       </section>
     </main>
+    <aside class="panel copilot" id="ai-panel">
+      <div class="panel-title">AI Copilot</div>
+      <div class="ai-mode">Manual path parity: every action has a no-AI equivalent.</div>
+      <select id="ai-mode-select" title="Generation mode">
+        <option value="scene">Scene (video)</option>
+        <!-- Only video generation is wired today; audio/voice/dialogue come later. -->
+      </select>
+      <textarea id="ai-prompt" rows="4" placeholder="Describe a scene, shot list, or generation request..."></textarea>
+      <div class="stack">
+        <button class="btn" id="btn-health" type="button">Orchestrator Health</button>
+        <button class="btn" id="btn-list-projects" type="button">List Projects</button>
+        <button class="btn" id="btn-submit-job" type="button">Submit AI Job</button>
+        <button class="btn" id="btn-refresh-job" type="button">Refresh Job</button>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-accept" id="btn-accept-job" type="button" disabled>Accept</button>
+          <button class="btn btn-reject" id="btn-reject-job" type="button" disabled>Reject</button>
+        </div>
+      </div>
+      <div id="ai-job-status" class="ai-job-status">No job submitted.</div>
+      <div id="inspector" class="inspector">No clip selected.</div>
+    </aside>
   </div>
   <div class="devtools-drawer" id="devtools-drawer" style="display:none">
     <div class="devtools-header"><span>Developer Tools — Endpoint Log</span><button class="btn subtle" id="btn-close-devtools" type="button">Close</button></div>
@@ -465,15 +473,14 @@ export function bootstrapStudioApp(): void {
   // ── Element references ──
   const $ = (sel: string) => document.querySelector<HTMLElement>(sel)!;
   const homeView = $("#home-view");
+  const chatStudioView = $("#chat-studio-view");
   const studioView = $("#studio-view");
+  const workspace = $("#workspace");
   const modalOverlay = $("#modal-overlay");
   const devtoolsDrawer = $("#devtools-drawer");
   const devtoolsOut = $("#out") as HTMLPreElement;
   const actDevtools = $("#act-devtools");
-  const actExplorer = $("#act-explorer");
   const actAi = $("#act-ai");
-  const panelExplorer = $("#panel-explorer");
-  const aiPanel = $("#ai-panel");
   const timecodeEl = $("#timecode");
   const sliderEl = $("#playhead-slider") as HTMLInputElement;
   const timelineGrid = $("#timeline-grid");
@@ -482,9 +489,6 @@ export function bootstrapStudioApp(): void {
   const zoomSlider = $("#timeline-zoom") as HTMLInputElement;
   const fpsInput = $("#project-fps") as HTMLInputElement;
   const aiPrompt = $("#ai-prompt") as HTMLTextAreaElement;
-  const homePrompt = $("#home-prompt") as HTMLTextAreaElement;
-  const homePromptStatus = $("#home-prompt-status");
-  const generateBtn = $("#btn-home-generate") as HTMLButtonElement;
   const previewFrame = document.getElementById("preview-frame") as HTMLImageElement;
   const previewVideo = document.getElementById("preview-video") as HTMLVideoElement;
   const previewEmpty = $("#preview-empty");
@@ -604,18 +608,16 @@ export function bootstrapStudioApp(): void {
   }
 
   // ── Navigation ──
-  function navigateTo(view: "home" | "studio"): void {
+  function navigateTo(view: "home" | "chat-studio" | "studio"): void {
     state.currentView = view;
+    homeView.style.display = view === "home" ? "" : "none";
+    chatStudioView.style.display = view === "chat-studio" ? "" : "none";
+    studioView.style.display = view === "studio" ? "" : "none";
     if (view === "home") {
-      homeView.style.display = "";
-      studioView.style.display = "none";
       state.activeProjectId = null;
       state.activeSequenceId = null;
       resetProjectView();
       refreshHomeProjects();
-    } else {
-      homeView.style.display = "none";
-      studioView.style.display = "";
     }
   }
 
@@ -777,47 +779,6 @@ export function bootstrapStudioApp(): void {
     renderTimelineFull();
     renderAssets();
     updateInspector(state, inspectorEl);
-  }
-
-  // ── Home prompt → generated video in the editor ──
-  /**
-   * The ChatGPT-shaped path: one prompt creates the project, starts the
-   * generation, and drops the user straight into the editor to watch it land.
-   */
-  async function generateFromPrompt(prompt: string): Promise<void> {
-    if (!prompt.trim()) {
-      homePromptStatus.textContent = "Describe the video you want first.";
-      homePromptStatus.classList.add("error");
-      return;
-    }
-    generateBtn.disabled = true;
-    homePromptStatus.classList.remove("error");
-    homePromptStatus.textContent = "Setting up your project…";
-    try {
-      const launched = await launchAiProject(prompt, {
-        createProject: orchestratorCreateProject,
-        createSequence: orchestratorCreateSequence,
-        createTrack: orchestratorCreateTrack,
-        submitAiJob,
-      });
-      devLog(`Prompt launch: project ${launched.project.id}, job ${launched.jobId}`);
-      homePrompt.value = "";
-      homePromptStatus.textContent = "";
-
-      // Into the editor, AI panel open, with the clip auto-accepted on arrival.
-      await openProject(launched.project);
-      state.lastJobId = launched.jobId;
-      aiPrompt.value = prompt.trim();
-      setActivePanel("ai");
-      jobStatusEl.textContent = "Status: queued\nGenerating your video…";
-      startJobPolling(launched.jobId, true);
-    } catch (e) {
-      homePromptStatus.textContent = `Could not start generation: ${String(e)}`;
-      homePromptStatus.classList.add("error");
-      devLog(`Prompt launch error: ${String(e)}`);
-    } finally {
-      generateBtn.disabled = false;
-    }
   }
 
   // ── Create project from template ──
@@ -1363,13 +1324,15 @@ export function bootstrapStudioApp(): void {
   const unregisterHotkeys = registerHotkeys(hotkeyDispatch);
 
   // ── Panel toggle ──
-  let activePanel: "explorer" | "ai" = "explorer";
-  function setActivePanel(panel: "explorer" | "ai"): void {
-    activePanel = panel;
-    actExplorer.classList.toggle("active", panel === "explorer");
-    actAi.classList.toggle("active", panel === "ai");
-    panelExplorer.classList.toggle("ai-hidden", panel !== "explorer");
-    aiPanel.classList.toggle("ai-hidden", panel !== "ai");
+  /**
+   * The copilot is a right-side dock, independent of the (always-visible)
+   * Explorer sidebar — collapsing it just reclaims timeline width, it never
+   * hides project/asset controls the way the old left-side panel swap did.
+   */
+  function setCopilotOpen(open: boolean): void {
+    state.aiVisible = open;
+    actAi.classList.toggle("active", open);
+    workspace.classList.toggle("copilot-collapsed", !open);
   }
 
   // ── Devtools toggle ──
@@ -1401,32 +1364,24 @@ export function bootstrapStudioApp(): void {
     actDevtools.classList.remove("active");
   });
 
-  // Panel toggles
-  actExplorer.addEventListener("click", () => setActivePanel("explorer"));
-  actAi.addEventListener("click", () => setActivePanel("ai"));
+  // Copilot toggle (right-side dock; collapsible per the design doc)
+  actAi.addEventListener("click", () => setCopilotOpen(!state.aiVisible));
 
   // Home buttons
   $("#btn-home-new-project").addEventListener("click", () => {
+    navigateTo("chat-studio");
+  });
+  $("#btn-home-template").addEventListener("click", () => {
     modalOverlay.style.display = "";
   });
   $("#btn-home-refresh").addEventListener("click", refreshHomeProjects);
   $("#btn-home-retry").addEventListener("click", refreshHomeProjects);
 
-  // Prompt entry: Generate, Enter-to-send, and one-click starter prompts.
-  generateBtn.addEventListener("click", () => generateFromPrompt(homePrompt.value));
-  homePrompt.addEventListener("keydown", (e) => {
-    const ev = e as KeyboardEvent;
-    if (ev.key === "Enter" && !ev.shiftKey) {
-      ev.preventDefault();
-      void generateFromPrompt(homePrompt.value);
-    }
-  });
-  $("#home-suggestions").addEventListener("click", (e) => {
-    const chip = (e.target as HTMLElement).closest<HTMLElement>(".suggestion-chip");
-    if (!chip) return;
-    const prompt = chip.dataset.prompt ?? "";
-    homePrompt.value = prompt;
-    void generateFromPrompt(prompt);
+  // Chat studio (New Project interview — stub; see renderer/chatStudio.ts)
+  $("#brand-chat-studio").addEventListener("click", () => navigateTo("home"));
+  $("#btn-chat-studio-back").addEventListener("click", () => navigateTo("home"));
+  $("#btn-chat-studio-skip").addEventListener("click", () => {
+    modalOverlay.style.display = "";
   });
 
   // Modal
@@ -1694,7 +1649,7 @@ export function bootstrapStudioApp(): void {
   // ═══════════════════════════════════════════
 
   applyDevMode();
-  setActivePanel("explorer");
+  setCopilotOpen(state.aiVisible);
   refreshHomeProjects();
   renderTimelineFull();
   renderAssets();
