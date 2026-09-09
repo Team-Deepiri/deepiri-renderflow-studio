@@ -3,24 +3,8 @@ import { orchestratorDeleteProject } from "../backendApi";
 import { brandHtml } from "./brand";
 import { escapeHtml } from "./escape";
 
-/**
- * Starter prompts offered on the home page, ChatGPT-style. Picking one goes
- * straight to generating — the user never has to think up a first prompt.
- */
-export const AI_SUGGESTIONS: string[] = [
-  "A neon-lit city street at night, just after rain",
-  "Slow drone shot drifting over a misty mountain valley",
-  "A cozy coffee shop in warm morning light",
-  "Timelapse of a city skyline turning from day to night",
-];
-
-/** Markup for the whole home view: topbar, prompt hero, and project grid. */
+/** Markup for the whole home view: topbar, hero CTAs, and project grid. */
 export function homeViewHtml(): string {
-  const chips = AI_SUGGESTIONS.map(
-    (s) =>
-      `<button class="suggestion-chip" type="button" data-prompt="${escapeHtml(s)}">${escapeHtml(s)}</button>`,
-  ).join("");
-
   return `
 <div id="home-view" class="home-view">
   <header class="topbar topbar-home">
@@ -32,20 +16,15 @@ export function homeViewHtml(): string {
   <main class="home-main">
     <section class="home-hero">
       <h1><span class="word-render">Render</span><span class="word-flow">Flow</span> <span class="hero-studio">Studio</span></h1>
-      <p class="hero-sub">Describe the video you want. We generate it and drop it straight onto your timeline.</p>
-      <div class="prompt-box">
-        <textarea id="home-prompt" rows="3" placeholder="Describe a scene to generate..."></textarea>
-        <div class="prompt-actions">
-          <button class="btn subtle" id="btn-home-new-project" type="button">Start from a template</button>
-          <button class="btn" id="btn-home-generate" type="button">Generate video</button>
-        </div>
+      <p class="hero-sub">Talk through your video in a guided interview, or jump straight into a ready-made layout.</p>
+      <div class="home-hero-actions">
+        <button class="btn" id="btn-home-new-project" type="button">New project</button>
+        <button class="btn subtle" id="btn-home-template" type="button">Start from a template</button>
       </div>
-      <div class="suggestions" id="home-suggestions">${chips}</div>
-      <div class="prompt-status" id="home-prompt-status"></div>
     </section>
     <section class="home-projects">
       <div class="home-section-header"><h2>Your Projects</h2><span class="home-project-count" id="home-project-count"></span><button class="btn subtle narrow" id="btn-home-refresh" type="button">Refresh</button></div>
-      <div id="home-project-list" class="home-project-grid"><div class="home-empty"><p>No projects yet. Describe a scene above to create your first one.</p></div></div>
+      <div id="home-project-list" class="home-project-grid"><div class="home-empty"><p>No projects yet. Start a new project above to create your first one.</p></div></div>
       <div id="home-loading" class="home-loading" style="display:none"><p>Loading projects...</p></div>
       <div id="home-error" class="home-error" style="display:none"><p>Could not connect to the orchestrator. Make sure the backend is running.</p><button class="btn subtle" id="btn-home-retry" type="button">Retry</button></div>
     </section>

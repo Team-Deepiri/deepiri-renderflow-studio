@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { homeViewHtml, AI_SUGGESTIONS } from "./home";
+import { homeViewHtml } from "./home";
 import { brandHtml, LOGO_SRC } from "./brand";
 
 describe("home hero", () => {
@@ -49,23 +49,19 @@ describe("brand mark", () => {
   });
 });
 
-describe("home prompt entry", () => {
-  it("offers every starter prompt as a one-click chip", () => {
-    const html = homeViewHtml();
-
-    for (const suggestion of AI_SUGGESTIONS) {
-      expect(html).toContain(`data-prompt="${suggestion}"`);
-    }
-  });
-
-  it("gives the user a prompt box and a generate action", () => {
-    const html = homeViewHtml();
-
-    expect(html).toContain('id="home-prompt"');
-    expect(html).toContain('id="btn-home-generate"');
-  });
-
-  it("keeps a separate way into the template flow", () => {
+describe("home hero CTAs", () => {
+  it("offers New project, which leads to the chat studio interview", () => {
     expect(homeViewHtml()).toContain('id="btn-home-new-project"');
+  });
+
+  it("keeps a separate, chat-free way into the template flow", () => {
+    expect(homeViewHtml()).toContain('id="btn-home-template"');
+  });
+
+  it("no longer shows an inline prompt box on the home screen", () => {
+    const html = homeViewHtml();
+
+    expect(html).not.toContain('id="home-prompt"');
+    expect(html).not.toContain('id="btn-home-generate"');
   });
 });
