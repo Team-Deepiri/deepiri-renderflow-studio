@@ -34,8 +34,13 @@ import {
   deleteClip,
   moveClip,
   trimClip,
-  insertClipFromAsset,
+  insertAssetIntoVideoTrack,
+  rippleDeleteClip,
+  duplicateClip,
+  snapTick,
 } from "./ops/clips";
+import { insertAcceptedClip, ServerSyncError } from "./ops/aiAccept";
+import { runExport, saveThenExport } from "./ops/export";
 import { addMarker, jumpToNextMarker } from "./ops/markers";
 import {
   registerAsset,
@@ -47,8 +52,11 @@ import { renderTimeline } from "./renderer/timeline";
 import type { TimelineCallbacks } from "./renderer/timeline";
 import { renderAssetList } from "./renderer/assets";
 import { updateInspector } from "./renderer/inspector";
-import { renderHomeProjects } from "./renderer/home";
+import { renderHomeProjects, homeViewHtml } from "./renderer/home";
 import type { HomeCallbacks } from "./renderer/home";
+import { chatStudioViewHtml } from "./renderer/chatStudio";
+import { escapeHtml } from "./renderer/escape";
+import { brandHtml } from "./renderer/brand";
 import { registerHotkeys } from "./hotkeys";
 import type { HotkeyDispatch } from "./hotkeys";
 import {
@@ -63,6 +71,9 @@ import {
   orchestratorListTracks,
   orchestratorListClips,
   orchestratorReplaceClips,
+  orchestratorCreateClip,
+  submitRenderJob,
+  getRenderJob,
   submitAiJob,
   getAiJob,
   acceptAiJob,
@@ -77,22 +88,15 @@ import {
   type AIJob,
 } from "./backendApi";
 
-// ── Shared SVG logo (Renderflow gradient icon) ──
-const LOGO_SVG = `<svg class="brand-logo" width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="logoGrad" x1="4" y1="4" x2="28" y2="28" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#4d7dff"/><stop offset="100%" stop-color="#8b5cf6"/>
-    </linearGradient>
-    <filter id="logoGlow"><feGaussianBlur stdDeviation="0.8" result="blur"/>
-      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
-  </defs>
-  <rect width="32" height="32" rx="8" fill="url(#logoGrad)" filter="url(#logoGlow)"/>
-  <path d="M7 14V9.5C7 8.12 8.12 7 9.5 7H22.5C23.88 7 25 8.12 25 9.5V14" stroke="white" stroke-width="2.2" stroke-linecap="round" fill="none"/>
-  <path d="M9 19h14" stroke="white" stroke-width="2.2" stroke-linecap="round" opacity="0.7"/>
-  <path d="M12 22h8" stroke="white" stroke-width="2.2" stroke-linecap="round" opacity="0.4"/>
-  <circle cx="16" cy="14" r="3.5" fill="white" opacity="0.9"/>
-</svg>`;
+/**
+ * One-click starter prompts on the copilot's idle state. Clicking one fills
+ * the composer and submits, the way the home page's chips used to.
+ */
+const COPILOT_SUGGESTIONS: string[] = [
+  "A neon-lit city street at night, just after rain",
+  "Slow drone shot drifting over a misty mountain valley",
+  "A cozy coffee shop in warm morning light",
+];
 
 // ── buildStyle: inject full application CSS ──
 function buildStyle(): void {
@@ -104,12 +108,13 @@ function buildStyle(): void {
   --text: #eef1f9; --text-dim: #8a95b0; --text-muted: #4f5a74;
   --accent: #4d7dff; --accent-glow: rgba(77,125,255,0.15); --accent-hover: #6390ff;
   --danger: #f04d6e; --sidebar-width: 280px; --activity-bar-width: 48px;
+  --copilot-width: 320px; --copilot-rail-width: 44px;
 }
 body {
   margin:0; font-family:"Inter","Segoe UI",system-ui,sans-serif;
   background:var(--bg); color:var(--text); -webkit-font-smoothing:antialiased;
 }
-.studio{min-height:100vh;display:flex;flex-direction:column}
+.studio{height:100vh;overflow:hidden;display:flex;flex-direction:column}
 .topbar{
   border-bottom:1px solid var(--border-subtle); display:flex; align-items:center;
   justify-content:space-between; padding:10px 16px;
@@ -122,8 +127,13 @@ body {
 .toolbar{display:flex;gap:8px}
 .studio-body{flex:1;display:flex;flex-direction:column;min-height:0}
 .workspace{
-  display:grid; grid-template-columns:var(--activity-bar-width) var(--sidebar-width) 1fr;
+  display:grid;
+  grid-template-columns:var(--activity-bar-width) var(--sidebar-width) 1fr var(--copilot-width);
   grid-template-rows:1fr; flex:1; min-height:0;
+  transition:grid-template-columns 0.2s ease;
+}
+.workspace.copilot-collapsed{
+  grid-template-columns:var(--activity-bar-width) var(--sidebar-width) 1fr var(--copilot-rail-width);
 }
 .activity-bar{
   background:var(--bg); border-right:1px solid var(--border-subtle);
@@ -139,11 +149,93 @@ body {
 .activity-btn:hover{background:var(--bg-raised);color:var(--text-dim)}
 .activity-btn.active{background:var(--accent-glow);color:var(--accent)}
 .activity-spacer{flex:1;min-height:0}
-.panel.ai-hidden{display:none}
+/* min-height:0 — grid items default to min-height:auto and refuse to shrink
+   below their content, which made the copilot panel grow past the window
+   instead of letting its thread scroll. */
+.activity-bar,.panel,.center{min-height:0}
 .panel,.center{border-right:1px solid var(--border-subtle);background:var(--bg-soft)}
 .panel{padding:14px 12px;overflow-y:auto;overflow-x:hidden}
-#ai-mode-select{width:100%;background:#0f131b;border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px;margin-bottom:8px}
-.ai-job-status{margin-top:10px;padding:8px;border:1px solid var(--border-subtle);border-radius:6px;background:#0f131b;font-size:11px;color:var(--text-dim);white-space:pre-wrap}
+/* copilot — chat-style right dock */
+.panel.copilot{
+  border-right:none;border-left:1px solid var(--border-subtle);
+  padding:0;display:flex;flex-direction:column;overflow:hidden;
+}
+.workspace.copilot-collapsed .panel.copilot{align-items:center}
+.copilot-rail{display:none;flex-direction:column;align-items:center;gap:14px;padding-top:14px;width:100%;height:100%}
+.workspace.copilot-collapsed .copilot-rail{display:flex}
+.copilot-rail-btn{
+  width:26px;height:26px;border-radius:6px;border:1px solid var(--border);background:var(--bg-raised);
+  color:var(--text-dim);cursor:pointer;display:grid;place-items:center;flex-shrink:0;
+  transition:color 0.15s,border-color 0.15s;
+}
+.copilot-rail-btn:hover{color:var(--accent);border-color:var(--accent)}
+.copilot-rail-label{
+  writing-mode:vertical-rl;text-orientation:mixed;font-size:10px;font-weight:700;
+  letter-spacing:1.5px;color:var(--text-muted);text-transform:uppercase;
+}
+.copilot-body{display:flex;flex-direction:column;min-height:0;height:100%;padding:12px}
+.workspace.copilot-collapsed .copilot-body{display:none}
+.copilot-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding-bottom:10px;margin-bottom:10px;border-bottom:1px solid var(--border-subtle);flex-shrink:0;
+}
+.copilot-header-title{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:var(--text)}
+.copilot-header-title svg{color:var(--accent)}
+.copilot-collapse-btn{
+  width:26px;height:26px;border-radius:6px;border:1px solid transparent;background:none;
+  color:var(--text-muted);cursor:pointer;display:grid;place-items:center;
+  transition:background 0.15s,color 0.15s;
+}
+.copilot-collapse-btn:hover{background:var(--bg-raised);color:var(--text)}
+.copilot-thread{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding-bottom:4px}
+.copilot-msg{background:var(--bg-raised);border:1px solid var(--border);border-radius:10px;padding:10px 12px}
+.copilot-msg-label{
+  font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
+  color:var(--text-muted);margin-bottom:6px;
+}
+.copilot-msg-text{margin:0;font-size:12px;color:var(--text-dim);line-height:1.5}
+.copilot-status{font-size:12.5px;color:var(--text);white-space:pre-wrap;line-height:1.5}
+.copilot-review-actions{display:flex;gap:8px;margin-top:10px}
+.copilot-transcript{display:flex;flex-direction:column;gap:10px}
+.copilot-msg-user{
+  align-self:flex-end;max-width:88%;background:var(--accent);color:#fff;
+  border:none;border-radius:12px 12px 4px 12px;padding:9px 12px;
+  font-size:12.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;
+}
+.copilot-msg-copilot{
+  align-self:flex-start;max-width:95%;background:var(--bg-raised);
+  border:1px solid var(--border);border-radius:12px 12px 12px 4px;padding:10px 12px;
+}
+.copilot-empty{padding:4px 2px}
+.copilot-empty-title{margin:0 0 8px;font-size:16px;font-weight:700;letter-spacing:-0.2px;color:var(--text)}
+.copilot-empty-text{margin:0 0 14px;font-size:12.5px;color:var(--text-dim);line-height:1.6}
+.copilot-suggestions{display:flex;flex-direction:column;gap:8px}
+.copilot-suggestion{
+  text-align:left;background:var(--bg-raised);border:1px solid var(--border);color:var(--text-dim);
+  border-radius:8px;padding:9px 12px;font-size:12px;font-family:inherit;line-height:1.4;cursor:pointer;
+  transition:border-color 0.15s,color 0.15s,background 0.15s;
+}
+.copilot-suggestion:hover{border-color:var(--accent);color:var(--text);background:rgba(77,125,255,0.08)}
+.copilot-mode-select{
+  width:100%;margin-top:8px;background:#0f131b;border:1px solid var(--border);color:var(--text-dim);
+  border-radius:999px;padding:6px 10px;font-size:11px;
+}
+.copilot-composer{
+  flex-shrink:0;margin-top:10px;background:var(--bg-raised);border:1px solid var(--border);
+  border-radius:14px;padding:10px;display:flex;align-items:flex-end;gap:8px;transition:border-color 0.15s;
+}
+.copilot-composer:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow)}
+.copilot-composer textarea{
+  flex:1;background:none;border:none;color:var(--text);font-family:inherit;font-size:13px;
+  resize:none;outline:none;padding:4px 2px;
+}
+.copilot-send{
+  flex-shrink:0;width:30px;height:30px;border-radius:999px;border:none;background:var(--accent);
+  color:#fff;cursor:pointer;display:grid;place-items:center;transition:background 0.15s,opacity 0.15s;
+}
+.copilot-send:hover{background:var(--accent-hover)}
+.copilot-send:active{opacity:0.8}
+.export-status{font-size:11px;color:var(--text-dim);max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .panel-title{
   font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;
   color:var(--text-muted);margin-bottom:12px;padding-bottom:8px;
@@ -156,18 +248,22 @@ body {
   background:#0f131b;border:1px solid var(--border);color:var(--text);
   border-radius:6px;padding:8px;
 }
-.center{display:grid;grid-template-rows:1fr 290px}
-.monitor{padding:12px;border-bottom:1px solid var(--border);display:grid;grid-template-rows:auto 1fr}
-.monitor-head,.timeline-head{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.center{display:grid;grid-template-rows:1fr 290px;min-height:0}
+.monitor{padding:12px;border-bottom:1px solid var(--border);display:grid;grid-template-rows:auto 1fr;min-height:0}
+.monitor-head,.timeline-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.monitor-head,.timeline-head,.hint{flex-shrink:0}
 .monitor-head h3,.timeline-head h3{margin:0;font-size:12px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:var(--text-dim)}
 .preview{margin-top:10px;border:1px solid var(--border);border-radius:10px;position:relative;overflow:hidden;background:#080a10;box-shadow:inset 0 0 30px rgba(0,0,0,0.4)}
 .preview-overlay{position:absolute;inset:0;display:grid;place-items:center;align-content:center;gap:10px;color:var(--text-dim);font-size:12px;padding:16px;background:rgba(13,17,25,0.82);pointer-events:none}
 .preview-overlay .btn{pointer-events:auto}
 #preview-frame{display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain;border-radius:10px}
 #preview-video{display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain;border-radius:10px}
-.timeline{padding:12px;background:#111621}
-.timeline-controls{display:flex;align-items:center;gap:6px;width:64%}
-.timeline-grid{margin-top:10px;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#0d1119;user-select:none}
+.timeline{padding:12px;background:#111621;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.timeline-controls{display:flex;align-items:center;gap:6px;flex:1;min-width:0;flex-wrap:wrap;justify-content:flex-end}
+.timeline-controls .btn{padding:7px 10px}
+/* The track list scrolls in place. overflow was hidden, which silently cut off
+   every track past the fold with no way to reach them. */
+.timeline-grid{margin-top:10px;flex:1;min-height:0;border:1px solid var(--border);border-radius:8px;overflow-y:auto;overflow-x:hidden;background:#0d1119;user-select:none}
 .hint{font-size:10px;color:var(--text-muted);padding:4px 12px;background:var(--bg);border-bottom:1px solid var(--border-subtle);letter-spacing:0.3px}
 .track-row{display:grid;grid-template-columns:110px 1fr;min-height:46px;border-bottom:1px solid #1f2736}
 .track-name{border-right:1px solid #1f2736;padding:8px;font-size:12px;color:var(--text-dim);display:flex;align-items:center;justify-content:space-between;gap:4px}
@@ -193,10 +289,7 @@ body {
 .btn.subtle:hover{background:rgba(255,255,255,0.09);color:var(--text);border-color:var(--border)}
 .btn.narrow{padding:7px 10px}
 .btn.icon{min-width:56px}
-.btn-large{padding:12px 24px;font-size:14px;border-radius:8px;display:flex;align-items:center;gap:8px}
-.btn-large.subtle{background:rgba(255,255,255,0.04);border:1px solid var(--border);color:var(--text-dim)}
-.btn-large.subtle:hover{background:rgba(255,255,255,0.08);color:var(--text)}
-#playhead-slider{width:56%}
+#playhead-slider{flex:0 0 170px;width:170px}
 .timecode{min-width:110px;text-align:right;color:var(--text-dim);font-variant-numeric:tabular-nums}
 .elapsed{font-size:11px;color:#18b487;font-variant-numeric:tabular-nums;min-width:56px;text-align:right}
 pre{background:#0f131b;border:1px solid var(--border);border-radius:8px;padding:8px;font-size:11px;overflow:auto;max-height:230px;white-space:pre-wrap}
@@ -225,6 +318,9 @@ pre{background:#0f131b;border:1px solid var(--border);border-radius:8px;padding:
 .modal-close:hover{color:var(--text)}
 .modal-sub{color:var(--text-dim);font-size:12px;margin:0 0 16px}
 .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+.modal-narrow{width:420px}
+.btn-danger{background:var(--danger)}
+.btn-danger:hover{background:#ff6b85;box-shadow:0 0 0 3px rgba(240,77,110,0.18)}
 .modal-error{background:#0f131b;border:1px solid var(--border);border-radius:8px;padding:10px;
   font-family:ui-monospace,monospace;font-size:11px;color:var(--text-dim);
   max-height:120px;overflow:auto;word-break:break-word;white-space:pre-wrap}
@@ -236,6 +332,7 @@ pre{background:#0f131b;border:1px solid var(--border);border-radius:8px;padding:
   box-shadow:0 10px 30px rgba(0,0,0,0.5);word-break:break-word}
 .toast-ok{border-color:#18b487}
 .toast-error{border-color:#ff6b6b}
+.toast-detail{margin-top:5px;font-size:10.5px;line-height:1.4;color:var(--text-dim);opacity:0.75}
 .template-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
 .template-card{background:#0f131b;border:1px solid var(--border);border-radius:10px;padding:14px;cursor:pointer;transition:border-color 0.15s,background 0.15s}
 .template-card:hover{border-color:var(--accent);background:rgba(77,125,255,0.07)}
@@ -252,15 +349,26 @@ pre{background:#0f131b;border:1px solid var(--border);border-radius:8px;padding:
 /* home */
 .home-view{min-height:100vh;display:flex;flex-direction:column}
 .topbar-home{background:rgba(13,15,22,0.98)}
-.dev-mode-toggle{font-size:11px;padding:5px 10px}
-.dev-mode-toggle.on{background:rgba(24,180,135,0.2);border-color:#18b487;color:#4addb5}
 .devtools-btn.dev-hidden{display:none!important}
 .home-main{flex:1;display:flex;flex-direction:column;align-items:center;padding:60px 24px 40px}
 .home-hero{text-align:center;max-width:640px;margin-bottom:48px}
-.home-hero h1{font-size:32px;font-weight:700;letter-spacing:-0.6px;margin:0 0 12px;line-height:1.25}
-.hero-accent{background:linear-gradient(135deg,#4d7dff,#8b5cf6);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.home-hero h1{font-size:40px;font-weight:800;letter-spacing:-1px;margin:0 0 12px;line-height:1.2}
+/* Render and Flow read as two words: each gets its own color. */
+.word-render{color:#4d7dff}
+.word-flow{color:#c084fc}
+.hero-studio{color:var(--text-dim);font-weight:600}
 .hero-sub{font-size:15px;color:var(--text-dim);line-height:1.55;margin:0 0 24px}
-.hero-actions{display:flex;justify-content:center;gap:10px}
+/* home hero CTAs */
+.home-hero-actions{display:flex;gap:10px;justify-content:center;margin-top:8px}
+/* chat studio (New Project interview — stub) */
+.chat-studio-view{min-height:100vh;display:flex;flex-direction:column}
+.chat-studio-main{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 24px}
+.chat-studio-card{background:var(--bg-raised);border:1px solid var(--border);border-radius:14px;padding:28px;max-width:640px;width:100%;text-align:center}
+.chat-studio-badge{display:inline-block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:var(--accent);background:var(--accent-glow);border-radius:999px;padding:4px 10px;margin-bottom:14px}
+.chat-studio-title{margin:0 0 8px;font-size:22px;font-weight:700;letter-spacing:-0.3px}
+.chat-studio-sub{color:var(--text-dim);font-size:13px;line-height:1.55;margin:0 0 20px}
+.chat-studio-thread-placeholder{background:#0f131b;border:1px dashed var(--border);border-radius:10px;padding:28px 16px;color:var(--text-muted);font-size:13px;margin-bottom:20px}
+.chat-studio-actions{display:flex;justify-content:center}
 .home-projects{width:100%;max-width:900px}
 .home-section-header{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid var(--border-subtle)}
 .home-section-header h2{margin:0;font-size:16px;font-weight:600}
@@ -282,43 +390,16 @@ pre{background:#0f131b;border:1px solid var(--border);border-radius:8px;padding:
 function buildDom(root: HTMLElement): void {
   root.innerHTML = `
 <!-- HOME VIEW -->
-<div id="home-view" class="home-view">
-  <header class="topbar topbar-home">
-    <div class="brand" id="brand-home">${LOGO_SVG}<span class="brand-text">Renderflow <span class="brand-sub">Studio</span></span></div>
-    <div class="toolbar">
-      <button class="btn subtle" id="btn-toggle-theme-home" type="button">Theme</button>
-      <button class="btn subtle dev-mode-toggle" id="btn-toggle-dev-mode" type="button" title="Toggle Developer Mode">Dev Mode: OFF</button>
-    </div>
-  </header>
-  <main class="home-main">
-    <section class="home-hero">
-      <h1>Welcome to <span class="hero-accent">Renderflow Studio</span></h1>
-      <p class="hero-sub">AI-powered video editing and rendering platform. Create, edit, and export professional video content.</p>
-      <div class="hero-actions">
-        <button class="btn btn-large" id="btn-home-new-project" type="button">
-          <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
-          New Project
-        </button>
-        <button class="btn btn-large subtle" id="btn-home-refresh" type="button">
-          <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M14 4a6 6 0 00-8.48.53M6 16a6 6 0 008.48-.53" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M14 2v4h-4M6 18v-4h4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Refresh
-        </button>
-      </div>
-    </section>
-    <section class="home-projects">
-      <div class="home-section-header"><h2>Your Projects</h2><span class="home-project-count" id="home-project-count"></span></div>
-      <div id="home-project-list" class="home-project-grid"><div class="home-empty"><p>No projects yet. Create your first project to get started!</p></div></div>
-      <div id="home-loading" class="home-loading" style="display:none"><p>Loading projects...</p></div>
-      <div id="home-error" class="home-error" style="display:none"><p>Could not connect to the orchestrator. Make sure the backend is running.</p><button class="btn subtle" id="btn-home-retry" type="button">Retry</button></div>
-    </section>
-  </main>
-</div>
+${homeViewHtml()}
+
+<!-- CHAT STUDIO VIEW (New Project interview — stub) -->
+${chatStudioViewHtml()}
 
 <!-- STUDIO VIEW -->
 <div id="studio-view" class="studio-view" style="display:none">
 <div class="studio">
   <header class="topbar">
-    <div class="brand" id="brand-studio" style="cursor:pointer" title="Back to Home">${LOGO_SVG}<span class="brand-text">Renderflow <span class="brand-sub">Studio</span></span></div>
+    ${brandHtml("brand-studio", true)}
     <div class="toolbar">
       <button class="btn subtle" id="btn-home-nav" type="button">Home</button>
       <button class="btn subtle" id="btn-toggle-theme" type="button">Theme</button>
@@ -326,15 +407,13 @@ function buildDom(root: HTMLElement): void {
       <button class="btn subtle" id="btn-redo" type="button">Redo</button>
       <button class="btn" id="btn-save-project" type="button">Save</button>
       <button class="btn" id="btn-export" type="button">Export</button>
+      <span id="export-status" class="export-status"></span>
     </div>
   </header>
   <div class="studio-body">
   <div class="workspace" id="workspace">
     <nav class="activity-bar" id="activity-bar">
-      <button class="activity-btn active" id="act-explorer" title="Project Explorer" type="button">
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="3" y="3" width="6" height="14" rx="1.5" fill="currentColor" opacity=".5"/><rect x="11" y="3" width="6" height="6" rx="1.5" fill="currentColor"/><rect x="11" y="11" width="6" height="6" rx="1.5" fill="currentColor" opacity=".7"/></svg>
-      </button>
-      <button class="activity-btn" id="act-ai" title="AI Copilot" type="button">
+      <button class="activity-btn active" id="act-ai" title="AI Copilot" type="button">
         <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M7 10h6M10 7v6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
       </button>
       <div class="activity-spacer"></div>
@@ -354,6 +433,14 @@ function buildDom(root: HTMLElement): void {
         <button class="btn subtle" id="btn-jump-next-marker" type="button">Next Marker</button>
       </div>
       <div class="asset-section">
+        <h4>Copilot Tools</h4>
+        <div class="quick-actions">
+          <button class="btn subtle" id="btn-health" type="button">Orchestrator Health</button>
+          <button class="btn subtle" id="btn-list-projects" type="button">List Projects</button>
+          <button class="btn subtle" id="btn-refresh-job" type="button">Refresh Job</button>
+        </div>
+      </div>
+      <div class="asset-section">
         <h4>Assets</h4>
         <div id="drop-zone" class="drop-zone">Drop media files here</div>
         <ul id="asset-list" class="asset-list"></ul>
@@ -361,27 +448,10 @@ function buildDom(root: HTMLElement): void {
           <button class="btn narrow" id="btn-import-media" type="button">Import Media</button>
         </div>
       </div>
-    </aside>
-    <aside class="panel left ai-hidden" id="ai-panel">
-      <div class="panel-title">AI Copilot</div>
-      <div class="ai-mode">Manual path parity: every action has a no-AI equivalent.</div>
-      <select id="ai-mode-select" title="Generation mode">
-        <option value="scene">Scene (video)</option>
-        <!-- Only video generation is wired today; audio/voice/dialogue come later. -->
-      </select>
-      <textarea id="ai-prompt" rows="4" placeholder="Describe a scene, shot list, or generation request..."></textarea>
-      <div class="stack">
-        <button class="btn" id="btn-health" type="button">Orchestrator Health</button>
-        <button class="btn" id="btn-list-projects" type="button">List Projects</button>
-        <button class="btn" id="btn-submit-job" type="button">Submit AI Job</button>
-        <button class="btn" id="btn-refresh-job" type="button">Refresh Job</button>
-        <div style="display:flex;gap:6px">
-          <button class="btn btn-accept" id="btn-accept-job" type="button" disabled>Accept</button>
-          <button class="btn btn-reject" id="btn-reject-job" type="button" disabled>Reject</button>
-        </div>
+      <div class="asset-section">
+        <h4>Selection</h4>
+        <div id="inspector" class="inspector">No clip selected.</div>
       </div>
-      <div id="ai-job-status" class="ai-job-status">No job submitted.</div>
-      <div id="inspector" class="inspector">No clip selected.</div>
     </aside>
     <main class="center">
       <section class="monitor">
@@ -409,13 +479,68 @@ function buildDom(root: HTMLElement): void {
             <button class="btn subtle" id="btn-add-video-track" type="button">+ Video Track</button>
             <button class="btn subtle" id="btn-add-audio-track" type="button">+ Audio Track</button>
             <button class="btn subtle" id="btn-split-clip" type="button">Split</button>
+            <button class="btn subtle" id="btn-duplicate-clip" type="button">Duplicate</button>
             <button class="btn subtle" id="btn-delete-clip" type="button">Delete</button>
+            <button class="btn subtle" id="btn-ripple-delete-clip" type="button" title="Delete and close the gap">Ripple</button>
           </div>
         </div>
-        <div class="hint">Hotkeys: J/K/L shuttle, Arrow keys frame-step, M marker, S split, Del delete</div>
+        <div class="hint">Hotkeys: J/K/L shuttle, Arrow keys frame-step, M marker, S split, Ctrl+D duplicate, Del delete, Shift+Del ripple delete</div>
         <div id="timeline-grid" class="timeline-grid"></div>
       </section>
     </main>
+    <aside class="panel copilot" id="ai-panel">
+      <div class="copilot-rail" id="copilot-rail">
+        <button class="copilot-rail-btn" id="btn-copilot-expand" title="Expand Copilot" type="button">
+          <svg width="13" height="13" viewBox="0 0 20 20" fill="none"><path d="M8 5l6 5-6 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" transform="rotate(180 10 10)"/></svg>
+        </button>
+        <span class="copilot-rail-label">Copilot</span>
+      </div>
+      <div class="copilot-body">
+        <div class="copilot-header">
+          <div class="copilot-header-title">
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M10 3l1.6 4.4L16 9l-4.4 1.6L10 15l-1.6-4.4L4 9l4.4-1.6z" fill="currentColor"/></svg>
+            <span>Copilot</span>
+          </div>
+          <button class="copilot-collapse-btn" id="btn-copilot-collapse" title="Collapse Copilot" type="button">
+            <svg width="13" height="13" viewBox="0 0 20 20" fill="none"><path d="M8 5l6 5-6 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+        <div class="copilot-thread" id="copilot-thread">
+          <div class="copilot-msg">
+            <div class="copilot-msg-label">Manual path parity</div>
+            <p class="copilot-msg-text">Every action here has a no-AI equivalent — nothing hits the timeline until you accept it.</p>
+            <select id="ai-mode-select" class="copilot-mode-select" title="Generation mode">
+              <option value="scene">Scene (video)</option>
+              <!-- Only video generation is wired today; audio/voice/dialogue come later. -->
+            </select>
+          </div>
+          <!-- Idle state: swapped out for the job-status card the moment a job starts. -->
+          <div class="copilot-empty" id="copilot-empty-state">
+            <h3 class="copilot-empty-title">Type a prompt, get a clip</h3>
+            <p class="copilot-empty-text">Describe a shot and the copilot generates it, or ask it to restyle and fill the scenes in this template. Clips arrive as review cards you accept onto the timeline.</p>
+            <div class="copilot-suggestions" id="copilot-suggestions">${COPILOT_SUGGESTIONS.map(
+              (s) =>
+                `<button class="copilot-suggestion" type="button" data-prompt="${escapeHtml(s)}">${escapeHtml(s)}</button>`,
+            ).join("")}</div>
+          </div>
+          <!-- Conversation: one user bubble per prompt, the copilot's reply
+               under it. Filled in by appendUserMessage/startCopilotMessage. -->
+          <div class="copilot-transcript" id="copilot-transcript"></div>
+          <!-- Lives here between jobs; moved into the newest copilot message so
+               the buttons always sit with the reply they belong to. -->
+          <div class="copilot-review-actions" id="copilot-review-actions" style="display:none">
+            <button class="btn btn-accept" id="btn-accept-job" type="button" disabled>Accept</button>
+            <button class="btn btn-reject" id="btn-reject-job" type="button" disabled>Reject</button>
+          </div>
+        </div>
+        <div class="copilot-composer">
+          <textarea id="ai-prompt" rows="2" placeholder="Describe a scene, shot list, or generation request..."></textarea>
+          <button class="copilot-send" id="btn-submit-job" type="button" title="Submit AI Job" aria-label="Submit AI Job">
+            <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M10 15V5M10 5l-5 5M10 5l5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+      </div>
+    </aside>
   </div>
   <div class="devtools-drawer" id="devtools-drawer" style="display:none">
     <div class="devtools-header"><span>Developer Tools — Endpoint Log</span><button class="btn subtle" id="btn-close-devtools" type="button">Close</button></div>
@@ -449,6 +574,22 @@ function buildDom(root: HTMLElement): void {
     <div class="modal-actions">
       <button class="btn subtle" id="btn-leave-anyway" type="button">Leave anyway</button>
       <button class="btn" id="btn-return-to-project" type="button">Return to project</button>
+    </div>
+  </div>
+</div>
+
+<!-- CONFIRM (hidden by default). In-app rather than window.confirm(), which
+     the Tauri webview does not reliably show — a native dialog that never
+     appears reads as a dead button. -->
+<div id="confirm-overlay" class="modal-overlay" style="display:none">
+  <div class="modal modal-narrow">
+    <div class="modal-header">
+      <h2 id="confirm-title">Are you sure?</h2>
+    </div>
+    <p class="modal-sub" id="confirm-body"></p>
+    <div class="modal-actions">
+      <button class="btn subtle" id="btn-confirm-cancel" type="button">Cancel</button>
+      <button class="btn btn-danger" id="btn-confirm-ok" type="button">Delete</button>
     </div>
   </div>
 </div>
@@ -490,15 +631,14 @@ export function bootstrapStudioApp(): void {
   // ── Element references ──
   const $ = (sel: string) => document.querySelector<HTMLElement>(sel)!;
   const homeView = $("#home-view");
+  const chatStudioView = $("#chat-studio-view");
   const studioView = $("#studio-view");
+  const workspace = $("#workspace");
   const modalOverlay = $("#modal-overlay");
   const devtoolsDrawer = $("#devtools-drawer");
   const devtoolsOut = $("#out") as HTMLPreElement;
   const actDevtools = $("#act-devtools");
-  const actExplorer = $("#act-explorer");
   const actAi = $("#act-ai");
-  const panelExplorer = $("#panel-explorer");
-  const aiPanel = $("#ai-panel");
   const timecodeEl = $("#timecode");
   const sliderEl = $("#playhead-slider") as HTMLInputElement;
   const timelineGrid = $("#timeline-grid");
@@ -507,33 +647,31 @@ export function bootstrapStudioApp(): void {
   const zoomSlider = $("#timeline-zoom") as HTMLInputElement;
   const fpsInput = $("#project-fps") as HTMLInputElement;
   const aiPrompt = $("#ai-prompt") as HTMLTextAreaElement;
-  const devModeToggle = $("#btn-toggle-dev-mode");
   const previewFrame = document.getElementById("preview-frame") as HTMLImageElement;
   const previewVideo = document.getElementById("preview-video") as HTMLVideoElement;
   const previewEmpty = $("#preview-empty");
   const aiModeSelect = $("#ai-mode-select") as HTMLSelectElement;
-  const jobStatusEl = $("#ai-job-status") as HTMLElement;
+  const threadEl = $("#copilot-thread");
+  const transcriptEl = $("#copilot-transcript");
+  const reviewActions = $("#copilot-review-actions");
+  const emptyStateEl = $("#copilot-empty-state");
   const acceptBtn = $("#btn-accept-job") as HTMLButtonElement;
   const rejectBtn = $("#btn-reject-job") as HTMLButtonElement;
+  // Points at the status line of the newest copilot reply, so every existing
+  // writer (submit, poll, accept, reject) lands in the right message. Detached
+  // between jobs, which makes stray writes harmless no-ops.
+  let jobStatusEl: HTMLElement = document.createElement("div");
 
   // ── Dev mode ──
-  const DEV_MODE_KEY = "deepiri_dev_mode";
+  // No toggle in the UI: developers opt in with
+  // localStorage.setItem("deepiri_dev_mode", "true") and reload.
   function applyDevMode(): void {
     const on = state.devMode;
-    if (devModeToggle) {
-      devModeToggle.textContent = on ? "Dev Mode: ON" : "Dev Mode: OFF";
-      devModeToggle.classList.toggle("on", on);
-    }
     actDevtools.classList.toggle("dev-hidden", !on);
     if (!on && devtoolsDrawer.style.display !== "none") {
       devtoolsDrawer.style.display = "none";
       actDevtools.classList.remove("active");
     }
-  }
-  function toggleDevMode(): void {
-    state.devMode = !state.devMode;
-    localStorage.setItem(DEV_MODE_KEY, String(state.devMode));
-    applyDevMode();
   }
 
   // ── Devtools log ──
@@ -546,11 +684,22 @@ export function bootstrapStudioApp(): void {
   // ── Toasts ──
   const toastHost = $("#toast-host");
 
-  /** Transient message, bottom-right. Click to dismiss early. */
-  function toast(message: string, kind: "ok" | "error" = "ok"): void {
+  /** Transient message, bottom-right. Click to dismiss early. An optional
+   *  `detail` (e.g. the underlying server error) renders smaller and dimmer
+   *  below the main message so it doesn't compete with it. */
+  function toast(message: string, kind: "ok" | "error" = "ok", detail?: string): void {
     const el = document.createElement("div");
     el.className = `toast toast-${kind}`;
-    el.textContent = message;
+    const main = document.createElement("div");
+    main.className = "toast-msg";
+    main.textContent = message;
+    el.appendChild(main);
+    if (detail) {
+      const sub = document.createElement("div");
+      sub.className = "toast-detail";
+      sub.textContent = detail;
+      el.appendChild(sub);
+    }
     const remove = () => el.remove();
     el.addEventListener("click", remove);
     toastHost.appendChild(el);
@@ -559,7 +708,18 @@ export function bootstrapStudioApp(): void {
   }
 
   // -- Timeline Persistence --
-  /** Returns null on success, or the error text so callers can surface it. */
+  /** Raw fetch/server errors ("TypeError: Failed to fetch", a JSON 500 body)
+   *  mean nothing to a user; say what happened and what to do about it.
+   *  The raw text still goes to devLog for debugging. */
+  function friendlySaveError(raw: string): string {
+    if (/failed to fetch|networkerror|load failed|connection refused/i.test(raw)) {
+      return "We couldn't reach the RenderFlow backend. Make sure it's running, then try again.";
+    }
+    return "The RenderFlow backend hit a problem while saving. Please try again in a moment.";
+  }
+
+  /** Returns null on success, or a user-friendly error message so callers
+   *  can surface it directly. */
   async function persistTimeline(): Promise<string | null> {
     const sid = state.activeSequenceId;
     if (!sid) return null;
@@ -582,7 +742,7 @@ export function bootstrapStudioApp(): void {
       return null;
     } catch (e) {
       devLog(`Save timeline error: ${String(e)}`);
-      return String(e);
+      return friendlySaveError(String(e));
     }
   }
 
@@ -592,6 +752,50 @@ export function bootstrapStudioApp(): void {
       (n, t) => n + (t.serverId ? t.clips.filter((c) => c.assetId).length : 0),
       0,
     );
+  }
+
+  /**
+   * In-app replacement for window.confirm(). The Tauri webview does not
+   * reliably surface native dialogs — confirm() can return false without ever
+   * showing anything, which turned Delete into a button that did nothing.
+   * Resolves true only on an explicit confirm click.
+   */
+  function confirmDialog(
+    title: string,
+    body: string,
+    confirmLabel = "Delete",
+  ): Promise<boolean> {
+    const overlay = $("#confirm-overlay");
+    const okBtn = $("#btn-confirm-ok") as HTMLButtonElement;
+    const cancelBtn = $("#btn-confirm-cancel") as HTMLButtonElement;
+
+    $("#confirm-title").textContent = title;
+    $("#confirm-body").textContent = body;
+    okBtn.textContent = confirmLabel;
+
+    return new Promise<boolean>((resolve) => {
+      const settle = (result: boolean) => {
+        overlay.style.display = "none";
+        okBtn.onclick = null;
+        cancelBtn.onclick = null;
+        overlay.onclick = null;
+        document.removeEventListener("keydown", onKey);
+        resolve(result);
+      };
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key === "Escape") settle(false);
+      };
+
+      okBtn.onclick = () => settle(true);
+      cancelBtn.onclick = () => settle(false);
+      overlay.onclick = (e) => {
+        if (e.target === overlay) settle(false);
+      };
+      document.addEventListener("keydown", onKey);
+
+      overlay.style.display = "";
+      okBtn.focus();
+    });
   }
 
   function showSaveFailedModal(error: string, onLeave: () => void): void {
@@ -613,18 +817,16 @@ export function bootstrapStudioApp(): void {
   }
 
   // ── Navigation ──
-  function navigateTo(view: "home" | "studio"): void {
+  function navigateTo(view: "home" | "chat-studio" | "studio"): void {
     state.currentView = view;
+    homeView.style.display = view === "home" ? "" : "none";
+    chatStudioView.style.display = view === "chat-studio" ? "" : "none";
+    studioView.style.display = view === "studio" ? "" : "none";
     if (view === "home") {
-      homeView.style.display = "";
-      studioView.style.display = "none";
       state.activeProjectId = null;
       state.activeSequenceId = null;
       resetProjectView();
       refreshHomeProjects();
-    } else {
-      homeView.style.display = "none";
-      studioView.style.display = "";
     }
   }
 
@@ -652,7 +854,7 @@ export function bootstrapStudioApp(): void {
     stopProxyPolling(state);
     stopJobPolling();
     setReviewButtons(false);
-    jobStatusEl.textContent = "";
+    clearCopilotThread();
     const playBtn = $("#btn-play");
     if (playBtn) playBtn.textContent = "Play";
 
@@ -685,6 +887,23 @@ export function bootstrapStudioApp(): void {
       },
       onRefresh: refreshHomeProjects,
       onDeleteProject: async (id) => {
+        const project = cachedProjects.find((p) => p.id === id);
+        const name = project?.name ?? "this project";
+        const ok = await confirmDialog(
+          "Delete project?",
+          `"${name}" and everything in it will be removed. This cannot be undone.`,
+        );
+        if (!ok) return;
+        try {
+          await orchestratorDeleteProject(id);
+        } catch (err) {
+          // Say so — a dead-looking button is worse than an error.
+          devLog(`Delete project error: ${String(err)}`);
+          toast(`Couldn't delete "${name}"`, "error", friendlySaveError(String(err)));
+          return;
+        }
+        devLog(`Project deleted: ${id}`);
+        toast(`Deleted "${name}"`, "ok");
         cachedProjects = cachedProjects.filter((p) => p.id !== id);
         await refreshHomeProjects();
       },
@@ -706,21 +925,20 @@ export function bootstrapStudioApp(): void {
     state.activeProjectId = pid;
     state.timeline.fps = project.fps_num / project.fps_den;
     fpsInput.value = String(state.timeline.fps);
+    // Resolved into a local, not straight into state
+    let sequenceId: string;
     try {
       const seqs = await orchestratorListSequences(pid);
-      if (seqs.length > 0) {
-        state.activeSequenceId = seqs[0].id;
-      } else {
-        const seq = await orchestratorCreateSequence(pid, "Main Sequence");
-        state.activeSequenceId = seq.id;
-      }
+      sequenceId = seqs.length
+        ? seqs[0].id
+        : (await orchestratorCreateSequence(pid, "Main Sequence")).id;
     } catch {
-      const seq = await orchestratorCreateSequence(pid, "Main Sequence");
-      state.activeSequenceId = seq.id;
+      sequenceId = (await orchestratorCreateSequence(pid, "Main Sequence")).id;
     }
-    if (state.activeProjectId !== pid || !state.activeSequenceId) return;
+    if (state.activeProjectId !== pid) return;
+    state.activeSequenceId = sequenceId;
 
-    // Load assets first — the clips below take their labels from the bin.
+    // Load assets
     try {
       const assets = await listProjectAssets(pid);
       if (state.activeProjectId !== pid) return;
@@ -737,10 +955,13 @@ export function bootstrapStudioApp(): void {
     // reset, so a failure here leaves it empty rather than showing the last
     // project's.
     try {
-      const rows = await orchestratorListTracks(state.activeSequenceId);
+      const rows = await orchestratorListTracks(sequenceId);
       if (state.activeProjectId !== pid) return;
       const tracks = rows
         .slice()
+        // The timeline only draws video and audio lanes; anything else the
+        // server holds would otherwise render as a bogus video track.
+        .filter((t) => t.track_type === "video" || t.track_type === "audio")
         .sort((a, b) => a.lane_index - b.lane_index)
         .map((t, i): import("./types").UiTrack => ({
           id: i + 1,
@@ -751,10 +972,12 @@ export function bootstrapStudioApp(): void {
           clips: [],
         }));
 
-      const clipRows = await orchestratorListClips(state.activeSequenceId);
+      const clipRows = await orchestratorListClips(sequenceId);
       if (state.activeProjectId !== pid) return;
       const byTrack = new Map(tracks.map((t) => [t.serverId, t]));
-      for (const c of clipRows) {
+      // In tick order: insertClipFromAsset appends after the last clip, so an
+      // unsorted list would put the next insert in the wrong place.
+      for (const c of clipRows.slice().sort((a, b) => a.in_tick - b.in_tick)) {
         const track = byTrack.get(c.track_id);
         if (!track) continue;
         const asset = state.assets.find((a) => a.id === c.asset_id);
@@ -816,14 +1039,22 @@ export function bootstrapStudioApp(): void {
         state.ui.activeTrackId === trackId ? null : trackId;
       renderTimelineFull();
     },
-    onTrackDelete: (trackId) => {
+    onTrackDelete: async (trackId) => {
       const idx = state.timeline.tracks.findIndex((t) => t.id === trackId);
       if (idx < 0) return;
       const track = state.timeline.tracks[idx];
       if (track.clips.length > 0) {
-        if (!window.confirm(`Delete "${track.name}"? This will also remove ${track.clips.length} clip(s).`)) return;
+        const n = track.clips.length;
+        const ok = await confirmDialog(
+          "Delete track?",
+          `"${track.name}" holds ${n} clip${n === 1 ? "" : "s"}, which will be removed with it.`,
+        );
+        if (!ok) return;
       }
-      state.timeline.tracks.splice(idx, 1);
+      // The track may have moved while the confirm was open.
+      const at = state.timeline.tracks.indexOf(track);
+      if (at < 0) return;
+      state.timeline.tracks.splice(at, 1);
       // Tracks are server-backed now, so a local-only splice would come back on
       // the next open. The clips cascade with it server-side.
       if (track.serverId && state.activeSequenceId) {
@@ -924,21 +1155,35 @@ export function bootstrapStudioApp(): void {
       const found = getClipById(state, clipId);
       return found ? found.clip.outTick : 0;
     })();
+    const tickPerPx = scaledDuration / laneRect.width / state.ui.zoom;
+    // ~8px of slack, so snapping feels the same at any zoom level.
+    const snapThreshold = Math.max(1, Math.round(8 * tickPerPx));
     const onMove = (e: PointerEvent) => {
       const dx = e.clientX - startX;
-      const deltaTick = Math.round(
-        ((dx / laneRect.width) * scaledDuration) / state.ui.zoom,
-      );
+      const deltaTick = Math.round(dx * tickPerPx);
       if (mode === "move") {
-        moveClip(state, clipId, deltaTick, history);
+        // Positioned against the drag's origin, not the clip's current spot —
+        // offsetting from the live position compounds every pointer event.
+        const targetIn = snapTick(
+          state,
+          startInTick + deltaTick,
+          clipId,
+          snapThreshold,
+        );
+        const found = getClipById(state, clipId);
+        if (found) {
+          moveClip(state, clipId, targetIn - found.clip.inTick, history);
+        }
       } else if (mode === "trim-left") {
-        const newIn = Math.min(startInTick + deltaTick, startOutTick - 2);
+        const snapped = snapTick(state, startInTick + deltaTick, clipId, snapThreshold);
+        const newIn = Math.min(snapped, startOutTick - 2);
         const found = getClipById(state, clipId);
         if (found) {
           found.clip.inTick = Math.max(0, newIn);
         }
       } else {
-        const newOut = Math.max(startOutTick + deltaTick, startInTick + 2);
+        const snapped = snapTick(state, startOutTick + deltaTick, clipId, snapThreshold);
+        const newOut = Math.max(snapped, startInTick + 2);
         const found = getClipById(state, clipId);
         if (found) {
           found.clip.outTick = Math.min(state.timeline.durationTicks, newOut);
@@ -1094,6 +1339,16 @@ export function bootstrapStudioApp(): void {
     renderTimelineFull();
     updateInspector(state, inspectorEl);
   }
+  function doRippleDeleteClip() {
+    rippleDeleteClip(state, history);
+    renderTimelineFull();
+    updateInspector(state, inspectorEl);
+  }
+  function doDuplicateClip() {
+    duplicateClip(state, history);
+    renderTimelineFull();
+    updateInspector(state, inspectorEl);
+  }
 
   // ── Undo / Redo ──
   function doUndo() {
@@ -1140,6 +1395,57 @@ export function bootstrapStudioApp(): void {
     rejectBtn.disabled = !enabled;
   }
 
+  /** Keep the newest message in view, the way a chat transcript does. */
+  function scrollThreadToEnd(): void {
+    threadEl.scrollTop = threadEl.scrollHeight;
+  }
+
+  /** The prompt the user just sent, as their own bubble in the thread. */
+  function appendUserMessage(text: string): void {
+    emptyStateEl.style.display = "none";
+    const el = document.createElement("div");
+    el.className = "copilot-msg-user";
+    el.textContent = text; // textContent, not innerHTML — prompts are user input
+    transcriptEl.appendChild(el);
+    scrollThreadToEnd();
+  }
+
+  /**
+   * Opens the copilot's reply to the message just sent and points jobStatusEl
+   * at it, so the submit/poll/accept/reject writers all land in this bubble.
+   * The review buttons move here too, sitting with the reply they belong to.
+   */
+  function startCopilotMessage(): void {
+    emptyStateEl.style.display = "none";
+    const el = document.createElement("div");
+    el.className = "copilot-msg-copilot";
+
+    const label = document.createElement("div");
+    label.className = "copilot-msg-label";
+    label.textContent = "Copilot";
+
+    const status = document.createElement("div");
+    status.className = "copilot-status";
+
+    el.append(label, status);
+    // appendChild moves the existing node, so acceptBtn/rejectBtn stay valid.
+    reviewActions.style.display = "";
+    el.appendChild(reviewActions);
+
+    transcriptEl.appendChild(el);
+    jobStatusEl = status;
+    scrollThreadToEnd();
+  }
+
+  /** Back to the starter prompts: no conversation, no job. */
+  function clearCopilotThread(): void {
+    reviewActions.style.display = "none";
+    threadEl.appendChild(reviewActions); // rescue before wiping the transcript
+    transcriptEl.replaceChildren();
+    jobStatusEl = document.createElement("div");
+    emptyStateEl.style.display = "";
+  }
+
   function renderJobStatus(job: AIJob): void {
     const stages = (job.stages || []).join(" → ");
     let line = `Status: ${job.status}`;
@@ -1149,6 +1455,7 @@ export function bootstrapStudioApp(): void {
       if (err) line += `\nError: ${String(err)}`;
     }
     jobStatusEl.textContent = line;
+    scrollThreadToEnd();
     // Accept/Reject are only meaningful while the job awaits review.
     setReviewButtons(job.status === "review");
   }
@@ -1160,8 +1467,19 @@ export function bootstrapStudioApp(): void {
     }
   }
 
-  function startJobPolling(jobId: string): void {
+  /**
+   * Polls a job to completion.
+   *
+   * `autoAccept` is for the home-page prompt flow: the user asked for a video
+   * and expects one, so we take the clip as soon as it is ready instead of
+   * parking it behind a review gate. The AI panel's own Submit keeps the
+   * explicit Accept/Reject step.
+   */
+  function startJobPolling(jobId: string, autoAccept = false): void {
     stopJobPolling();
+    // A job can start outside the composer (a resumed one, say) — give it a
+    // reply bubble to write into rather than dropping its status on the floor.
+    if (!jobStatusEl.isConnected) startCopilotMessage();
     jobPollTimer = window.setInterval(async () => {
       try {
         const job = await getAiJob(jobId);
@@ -1169,6 +1487,7 @@ export function bootstrapStudioApp(): void {
         if (JOB_TERMINAL.has(job.status)) {
           stopJobPolling();
           devLog(`Job ${jobId} reached ${job.status}`);
+          if (autoAccept && job.status === "review") await doAcceptJob();
         }
       } catch (e) {
         stopJobPolling();
@@ -1178,14 +1497,22 @@ export function bootstrapStudioApp(): void {
   }
 
   async function doSubmitJob() {
-    if (!state.activeProjectId || !aiPrompt.value.trim()) return;
+    const prompt = aiPrompt.value.trim();
+    if (!state.activeProjectId || !prompt) return;
     stopJobPolling();
     setReviewButtons(false);
+
+    // Send it: the prompt becomes the user's message and the composer empties,
+    // the way a chat does. The reply opens underneath it.
+    appendUserMessage(prompt);
+    aiPrompt.value = "";
+    startCopilotMessage();
     jobStatusEl.textContent = "Submitting…";
+
     try {
       const res = await submitAiJob(
         state.activeProjectId,
-        aiPrompt.value.trim(),
+        prompt,
         aiModeSelect.value,
       );
       devLog(`AI job submitted: ${res.job_id} (mode=${aiModeSelect.value})`);
@@ -1223,6 +1550,41 @@ export function bootstrapStudioApp(): void {
       // Surface the new AI asset in the library so the user can click/drag it
       // onto the timeline later (it plays there now that its proxy is ready).
       await refreshAssets();
+
+      // Cut the generated clip straight into the timeline. It also lands on
+      // the server's sequence, which is what Export renders from.
+      try {
+        const clip = await insertAcceptedClip(state, history, job, {
+          getAsset,
+          listTracks: orchestratorListTracks,
+          createTrack: orchestratorCreateTrack,
+          createClip: orchestratorCreateClip,
+        });
+        if (clip) {
+          jobStatusEl.textContent = `Status: ${job.status}\nAdded "${clip.label}" to the timeline.`;
+          devLog(`Inserted accepted clip ${clip.label} at tick ${clip.inTick}`);
+        } else {
+          // null has two causes — name the right one instead of always
+          // blaming a missing asset the job may well have produced.
+          const why = job.metadata?.asset_id
+            ? "this project has no video track to hold it"
+            : "the job produced no asset";
+          jobStatusEl.textContent = `Status: ${job.status}\nNo clip added — ${why}.`;
+          devLog(`Accepted job ${state.lastJobId}: no clip added — ${why}`);
+        }
+      } catch (e) {
+        // ServerSyncError means the clip is on the local timeline but its
+        // server-side copy is missing — devLog alone would hide that in
+        // production, and Export renders from the server's clip list, so
+        // the exported file would silently skip the clip. Say it in the UI.
+        const synced = e instanceof ServerSyncError ? e.clip : null;
+        jobStatusEl.textContent = synced
+          ? `Status: ${job.status}\nAdded "${synced.label}" to the timeline, but it wasn't saved on the server — Export will skip it. (${String(e)})`
+          : `Status: ${job.status}\nCouldn't add the clip to the timeline: ${String(e)}`;
+        devLog(`Clip insert problem: ${String(e)}`);
+      }
+      renderTimelineFull();
+      updateInspector(state, inspectorEl);
     } catch (e) {
       jobStatusEl.textContent = `Accept failed: ${String(e)}`;
       devLog(`Accept error: ${String(e)}`);
@@ -1251,19 +1613,23 @@ export function bootstrapStudioApp(): void {
     addMarker: doAddMarker,
     splitClip: doSplitClip,
     deleteClip: doDeleteClip,
+    rippleDeleteClip: doRippleDeleteClip,
+    duplicateClip: doDuplicateClip,
     undo: doUndo,
     redo: doRedo,
   };
   const unregisterHotkeys = registerHotkeys(hotkeyDispatch);
 
   // ── Panel toggle ──
-  let activePanel: "explorer" | "ai" = "explorer";
-  function setActivePanel(panel: "explorer" | "ai"): void {
-    activePanel = panel;
-    actExplorer.classList.toggle("active", panel === "explorer");
-    actAi.classList.toggle("active", panel === "ai");
-    panelExplorer.classList.toggle("ai-hidden", panel !== "explorer");
-    aiPanel.classList.toggle("ai-hidden", panel !== "ai");
+  /**
+   * The copilot is a right-side dock, independent of the (always-visible)
+   * Explorer sidebar — collapsing it just reclaims timeline width, it never
+   * hides project/asset controls the way the old left-side panel swap did.
+   */
+  function setCopilotOpen(open: boolean): void {
+    state.aiVisible = open;
+    actAi.classList.toggle("active", open);
+    workspace.classList.toggle("copilot-collapsed", !open);
   }
 
   // ── Devtools toggle ──
@@ -1289,23 +1655,33 @@ export function bootstrapStudioApp(): void {
   $("#btn-list-projects").addEventListener("click", doListProjects);
 
   // Dev mode
-  devModeToggle.addEventListener("click", toggleDevMode);
   actDevtools.addEventListener("click", toggleDevtools);
   $("#btn-close-devtools").addEventListener("click", () => {
     devtoolsDrawer.style.display = "none";
     actDevtools.classList.remove("active");
   });
 
-  // Panel toggles
-  actExplorer.addEventListener("click", () => setActivePanel("explorer"));
-  actAi.addEventListener("click", () => setActivePanel("ai"));
+  // Copilot toggle (right-side dock; collapsible per the design doc)
+  actAi.addEventListener("click", () => setCopilotOpen(!state.aiVisible));
+  $("#btn-copilot-collapse").addEventListener("click", () => setCopilotOpen(false));
+  $("#btn-copilot-expand").addEventListener("click", () => setCopilotOpen(true));
 
   // Home buttons
   $("#btn-home-new-project").addEventListener("click", () => {
+    navigateTo("chat-studio");
+  });
+  $("#btn-home-template").addEventListener("click", () => {
     modalOverlay.style.display = "";
   });
   $("#btn-home-refresh").addEventListener("click", refreshHomeProjects);
   $("#btn-home-retry").addEventListener("click", refreshHomeProjects);
+
+  // Chat studio (New Project interview — stub; see renderer/chatStudio.ts)
+  $("#brand-chat-studio").addEventListener("click", () => navigateTo("home"));
+  $("#btn-chat-studio-back").addEventListener("click", () => navigateTo("home"));
+  $("#btn-chat-studio-skip").addEventListener("click", () => {
+    modalOverlay.style.display = "";
+  });
 
   // Modal
   $("#modal-close").addEventListener("click", () => {
@@ -1333,7 +1709,9 @@ export function bootstrapStudioApp(): void {
   $("#btn-add-marker").addEventListener("click", doAddMarker);
   $("#btn-jump-next-marker").addEventListener("click", doJumpNextMarker);
   $("#btn-split-clip").addEventListener("click", doSplitClip);
+  $("#btn-duplicate-clip").addEventListener("click", doDuplicateClip);
   $("#btn-delete-clip").addEventListener("click", doDeleteClip);
+  $("#btn-ripple-delete-clip").addEventListener("click", doRippleDeleteClip);
   $("#btn-undo").addEventListener("click", doUndo);
   $("#btn-redo").addEventListener("click", doRedo);
 
@@ -1377,6 +1755,21 @@ export function bootstrapStudioApp(): void {
   $("#btn-refresh-job").addEventListener("click", doRefreshJob);
   $("#btn-accept-job").addEventListener("click", doAcceptJob);
   $("#btn-reject-job").addEventListener("click", doRejectJob);
+  aiPrompt.addEventListener("keydown", (e) => {
+    const ev = e as KeyboardEvent;
+    if (ev.key === "Enter" && !ev.shiftKey) {
+      ev.preventDefault();
+      void doSubmitJob();
+    }
+  });
+  // Starter prompts: one click fills the composer and generates, as the home
+  // page's chips used to.
+  $("#copilot-suggestions").addEventListener("click", (e) => {
+    const chip = (e.target as HTMLElement).closest<HTMLElement>(".copilot-suggestion");
+    if (!chip) return;
+    aiPrompt.value = chip.dataset.prompt ?? "";
+    void doSubmitJob();
+  });
 
   // Import media
   $("#btn-import-media").addEventListener("click", async () => {
@@ -1386,20 +1779,7 @@ export function bootstrapStudioApp(): void {
     try {
       const asset = await importMedia(state.activeProjectId, path);
       registerAsset(state, asset);
-      // Auto-insert clip onto the first video track
-      const videoTrack = state.timeline.tracks.find((t) => t.kind === "Video");
-      if (videoTrack) {
-        // Clear demo clips (clips without a linked asset)
-        videoTrack.clips = videoTrack.clips.filter((c) => c.assetId);
-        state.ui.activeTrackId = videoTrack.id;
-        insertClipFromAsset(state, asset, history);
-        // Extend timeline if clip exceeds duration
-        const maxOut = videoTrack.clips.reduce((m, c) => Math.max(m, c.outTick), 0);
-        if (maxOut + state.timeline.fps * 2 > state.timeline.durationTicks) {
-          state.timeline.durationTicks = maxOut + state.timeline.fps * 2;
-        }
-        renderTimelineFull();
-      }
+      if (insertAssetIntoVideoTrack(state, asset, history)) renderTimelineFull();
       renderAssets();
       // Start proxy polling if needed
       if (asset.meta_jsonb?.proxy_status === "pending") {
@@ -1436,16 +1816,7 @@ export function bootstrapStudioApp(): void {
         const filePath = (file as File & { path?: string }).path || file.name;
         const asset = await importMedia(state.activeProjectId, filePath);
         registerAsset(state, asset);
-        const videoTrack = state.timeline.tracks.find((t) => t.kind === "Video");
-        if (videoTrack) {
-          videoTrack.clips = videoTrack.clips.filter((c) => c.assetId);
-          state.ui.activeTrackId = videoTrack.id;
-          insertClipFromAsset(state, asset, history);
-          const maxOut = videoTrack.clips.reduce((m, c) => Math.max(m, c.outTick), 0);
-          if (maxOut + state.timeline.fps * 2 > state.timeline.durationTicks) {
-            state.timeline.durationTicks = maxOut + state.timeline.fps * 2;
-          }
-        }
+        insertAssetIntoVideoTrack(state, asset, history);
         if (asset.meta_jsonb?.proxy_status === "pending") {
           startProxyPolling(state, getAsset, (updated) => {
             updateAsset(state, updated.id, updated);
@@ -1516,15 +1887,71 @@ export function bootstrapStudioApp(): void {
     saveProject(projectName, snapshotState(state));
     const err = await persistTimeline();
     if (err) {
-      toast(`Couldn't save timeline: ${err}`, "error");
+      toast("Your project couldn't be saved.", "error", err);
       return;
     }
     devLog(`Project "${projectName}" saved.`);
     toast(`Project "${projectName}" saved`, "ok");
   });
-  $("#btn-export").addEventListener("click", () =>
-    devLog("Export: not yet wired."),
-  );
+  const exportBtn = $("#btn-export") as HTMLButtonElement;
+  const exportStatusEl = $("#export-status") as HTMLElement;
+  exportBtn.addEventListener("click", async () => {
+    if (!state.activeProjectId || !state.activeSequenceId) {
+      exportStatusEl.textContent = "Open a project first";
+      return;
+    }
+    // Pinned now: the save is awaited first, and going Home mid-export would
+    // null these out from under the render.
+    const projectId = state.activeProjectId;
+    const sequenceId = state.activeSequenceId;
+    exportBtn.disabled = true;
+    try {
+      // The render reads the server's clips, so the timeline has to get there
+      // first — otherwise Export quietly ships the last-saved cut.
+      exportStatusEl.textContent = "Saving timeline…";
+      const result = await saveThenExport(persistTimeline, () => {
+        exportStatusEl.textContent = "Exporting…";
+        return runExport(
+          projectId,
+          sequenceId,
+          { submitRenderJob, getRenderJob },
+          {
+            onProgress: (j) => {
+              exportStatusEl.textContent =
+                j.status === "rendering"
+                  ? `Exporting… ${Math.round(j.progress * 100)}%`
+                  : `Export ${j.status}`;
+            },
+          },
+        );
+      });
+
+      if (!result.ok) {
+        exportStatusEl.textContent = "Export cancelled — couldn't save timeline";
+        toast(
+          "Nothing was exported — your latest changes couldn't be saved first.",
+          "error",
+          result.saveError,
+        );
+        devLog(`Export aborted — save failed: ${result.saveError}`);
+        return;
+      }
+
+      const job = result.job;
+      if (job.status === "completed" && job.output_uri) {
+        exportStatusEl.textContent = `Exported → ${job.output_uri}`;
+        devLog(`Export completed: ${job.output_uri}`);
+      } else {
+        exportStatusEl.textContent = `Export failed: ${job.error ?? "unknown error"}`;
+        devLog(`Export failed: ${job.error ?? "unknown error"}`);
+      }
+    } catch (e) {
+      exportStatusEl.textContent = `Export failed: ${String(e)}`;
+      devLog(`Export error: ${String(e)}`);
+    } finally {
+      exportBtn.disabled = false;
+    }
+  });
 
   // Theme toggle (placeholder)
   const toggleTheme = () => devLog("Theme toggle: not yet wired.");
@@ -1536,7 +1963,7 @@ export function bootstrapStudioApp(): void {
   // ═══════════════════════════════════════════
 
   applyDevMode();
-  setActivePanel("explorer");
+  setCopilotOpen(state.aiVisible);
   refreshHomeProjects();
   renderTimelineFull();
   renderAssets();
