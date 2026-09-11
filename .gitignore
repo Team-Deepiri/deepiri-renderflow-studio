@@ -22,3 +22,7 @@ services/orchestrator/data/store.json
 services/orchestrator/data/proxies/
 services/orchestrator/data/render_outputs/
 .gstack/
+release/
+*.dmg
+dump.rdb
+

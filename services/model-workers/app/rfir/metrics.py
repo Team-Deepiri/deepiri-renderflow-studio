@@ -6,6 +6,10 @@ Tracks cumulative counters across jobs processed by this worker process:
   - rfir_jobs_total                    — number of jobs completed
   - rfir_downgrades_total              — number of budget downgrades applied
   - rfir_cost_usd_total                — cumulative estimated cost
+  - rfir_model_disk_bytes              — weights currently on disk (gauge)
+  - rfir_model_fetch_bytes_total       — bytes fetched because a role was cold
+  - rfir_model_hit_roles_total         — role requests already resident
+  - rfir_model_miss_roles_total        — role requests that needed a download
 
 No external dependency (no `prometheus_client`) — emits the standard text
 exposition format directly, which is all `/metrics` scraping requires.
@@ -14,6 +18,8 @@ Spec reference: rfir-inference-engine-implementation.md §5.4
 """
 from __future__ import annotations
 
+import json
+import logging
 import threading
 from collections import defaultdict
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -21,6 +27,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.rfir.executor.context import ExecutionContext
+
+logger = logging.getLogger(__name__)
 
 
 class MetricsRegistry:
@@ -33,6 +41,11 @@ class MetricsRegistry:
         self.jobs_total: int = 0
         self.downgrades_total: int = 0
         self.cost_usd_total: float = 0.0
+        # Disk working set (docs/superpowers/specs/2026-08-21-rfir-role-residency-design.md)
+        self.model_disk_bytes: int = 0  # gauge: last observation, not a sum
+        self.model_fetch_bytes_total: int = 0
+        self.model_hit_roles_total: int = 0
+        self.model_miss_roles_total: int = 0
 
     def record_job(self, ctx: "ExecutionContext") -> None:
         """Fold a completed job's ExecutionContext into the running totals."""
@@ -44,6 +57,43 @@ class MetricsRegistry:
                 self.tier_count[tier] += count
             self.downgrades_total += len(ctx.downgrades)
             self.cost_usd_total += ctx.cost_estimate_usd()
+
+    def record_residency(
+        self,
+        *,
+        hot_roles: frozenset[str],
+        missing_roles: frozenset[str],
+        hot_bytes: int,
+        miss_bytes: int,
+        disk_bytes: int,
+    ) -> None:
+        """Fold one job's disk working set into the counters.
+
+        Also emits a single JSON line per job so ρ̂ can be tracked over time
+        without a Prometheus scrape — that ratio is the claim this design
+        makes, and it should be checkable from a log tail.
+        """
+        from app.rfir.models.residency import catalog_bytes_fp16
+
+        with self._lock:
+            self.model_hit_roles_total += len(hot_roles)
+            self.model_miss_roles_total += len(missing_roles)
+            self.model_fetch_bytes_total += miss_bytes
+            self.model_disk_bytes = disk_bytes
+
+        catalog = catalog_bytes_fp16(False)
+        logger.info(
+            json.dumps(
+                {
+                    "roles": sorted(hot_roles | missing_roles),
+                    "hot_bytes": hot_bytes,
+                    "miss_bytes": miss_bytes,
+                    "disk_bytes": disk_bytes,
+                    "rho_hat": hot_bytes / catalog if catalog else 0.0,
+                },
+                sort_keys=True,
+            )
+        )
 
     def render_prometheus(self) -> str:
         """Render all counters in Prometheus text exposition format."""
@@ -71,6 +121,24 @@ class MetricsRegistry:
             lines.append("# HELP rfir_cost_usd_total Cumulative estimated cost in USD.")
             lines.append("# TYPE rfir_cost_usd_total counter")
             lines.append(f"rfir_cost_usd_total {self.cost_usd_total:.6f}")
+
+            lines.append("# HELP rfir_model_disk_bytes Model weights currently resident on disk.")
+            lines.append("# TYPE rfir_model_disk_bytes gauge")
+            lines.append(f"rfir_model_disk_bytes {self.model_disk_bytes}")
+
+            lines.append(
+                "# HELP rfir_model_fetch_bytes_total Bytes fetched because a role was not resident."
+            )
+            lines.append("# TYPE rfir_model_fetch_bytes_total counter")
+            lines.append(f"rfir_model_fetch_bytes_total {self.model_fetch_bytes_total}")
+
+            lines.append("# HELP rfir_model_hit_roles_total Role requests already on disk.")
+            lines.append("# TYPE rfir_model_hit_roles_total counter")
+            lines.append(f"rfir_model_hit_roles_total {self.model_hit_roles_total}")
+
+            lines.append("# HELP rfir_model_miss_roles_total Role requests that needed a fetch.")
+            lines.append("# TYPE rfir_model_miss_roles_total counter")
+            lines.append(f"rfir_model_miss_roles_total {self.model_miss_roles_total}")
 
             return "\n".join(lines) + "\n"
 
