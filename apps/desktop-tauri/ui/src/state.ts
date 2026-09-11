@@ -14,9 +14,10 @@ export type StudioState = {
   playing: boolean;
   playTimer: number | undefined;
   lastJobId: string;
+  /** Whether the right-side AI copilot dock is expanded (vs. collapsed). */
   aiVisible: boolean;
   devMode: boolean;
-  currentView: "home" | "studio";
+  currentView: "home" | "chat-studio" | "studio";
 };
 
 /** Undo/redo stack — kept separate from StudioState for clarity. */
@@ -78,7 +79,7 @@ export function createInitialState(): StudioState {
     playing: false,
     playTimer: undefined,
     lastJobId: "",
-    aiVisible: false,
+    aiVisible: true,
     devMode: typeof localStorage !== "undefined" && localStorage.getItem("deepiri_dev_mode") === "true",
     currentView: "home",
   };
