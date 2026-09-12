@@ -256,13 +256,12 @@ def _run_rife_interpolate(node: RfirNode, arena: TensorArena, ctx: ExecutionCont
     factor = int(node.attrs.get("factor", 4))
     frames = rife_interpolate.run(start_img, end_img, factor=factor)
 
-    # Publish the frame list to every output tensor and save PNGs for the mux.
+    # Publish the frame list. Persistence to disk happens once, at the
+    # shot's terminal tensor (Step 3) — not here, which would otherwise
+    # write every shot's frames twice (vulkan_upscale is a pass-through
+    # stub downstream of this node).
     for tensor_name in node.outputs.values():
         arena.put(tensor_name, frames)
-    for i, frame in enumerate(frames):
-        frame_path = out_path / f"{node.id}_{i}.png"
-        frame.save(frame_path)
-        ctx.artifacts[f"{node.id}_{i}"] = str(frame_path)
 
     # SSIM quality gate (§2.6)
     verify_t = node.attrs.get("verify_keyframe")
@@ -295,12 +294,44 @@ def _run_vulkan_parallax_stub(node: RfirNode, arena: TensorArena, ctx: Execution
             arena.put(tensor_name, arena.get(img_tensor))
 
 
+def _persist_frames(frames: list, tensor_name: str, ctx: ExecutionContext, out_path: Path) -> str:
+    """Write frames as out_path/frames/<tensor>/%05d.png; return the dir.
+
+    Zero-padded so numeric order matches lexicographic order (fixes the
+    `_10 < _2` sort bug — Cause 2), and written under a `frames/` subdir so
+    the output dir root stays PNG-free (`test_cfsv_pipeline.py:122`, which
+    globs non-recursively).
+    """
+    frame_dir = out_path / "frames" / tensor_name
+    frame_dir.mkdir(parents=True, exist_ok=True)
+    for i, frame in enumerate(frames):
+        frame.save(frame_dir / f"{i:05d}.png")
+    ctx.artifacts[f"frames::{tensor_name}"] = str(frame_dir)
+    return str(frame_dir)
+
+
 def _run_vulkan_upscale_stub(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
-    """Stub: pass through (no actual upscale)."""
+    """Stub: pass through (no actual upscale).
+
+    This is the terminal node of every current tier's subgraph (Step 3): if
+    its output is a frame sequence, persist it to disk now — keyed by
+    tensor name so it survives fusion — and drop it from the arena
+    (Decision 5). A single still image (today, only Tier A) is left as-is;
+    the mux falls back to the keyframe PNG already on disk for that case.
+    """
     input_tensor = list(node.inputs.values())[0]
-    if arena.has(input_tensor):
+    if not arena.has(input_tensor):
+        return
+
+    value = arena.get(input_tensor)
+    for tensor_name in node.outputs.values():
+        arena.put(tensor_name, value)
+
+    if isinstance(value, list):
         for tensor_name in node.outputs.values():
-            arena.put(tensor_name, arena.get(input_tensor))
+            _persist_frames(value, tensor_name, ctx, out_path)
+            arena.release(tensor_name)
+        arena.release(input_tensor)
 
 
 def _run_ffmpeg_mux(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
@@ -455,13 +486,12 @@ def _run_sparse_t2v_window(node: RfirNode, arena: TensorArena, ctx: ExecutionCon
         ltc=ltc,
     )
 
+    # Persistence happens once, at the shot's terminal tensor (Step 3) — not
+    # here, which would otherwise write every shot's frames twice
+    # (vulkan_upscale/vulkan_composite are pass-through/broadcast downstream
+    # of this node for every current tier).
     for tensor_name in node.outputs.values():
         arena.put(tensor_name, frames)
-
-    for i, frame in enumerate(frames):
-        frame_path = out_path / f"{node.id}_{i}.png"
-        frame.save(frame_path)
-        ctx.artifacts[f"{node.id}_{i}"] = str(frame_path)
 
 
 def _run_vulkan_composite(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
@@ -504,12 +534,10 @@ def _run_vulkan_composite(node: RfirNode, arena: TensorArena, ctx: ExecutionCont
                 comp = frame_resized
             composited.append(comp)
 
+        # Persistence happens once, at the shot's terminal tensor (Step 3) —
+        # not here; vulkan_upscale downstream broadcasts this list through.
         for tensor_name in node.outputs.values():
             arena.put(tensor_name, composited)
-        if composited:
-            comp_path = out_path / f"{node.id}_0.png"
-            composited[0].save(comp_path)
-            ctx.artifacts[node.id] = str(comp_path)
     elif isinstance(fg, Image.Image):
         bg_img = bg if isinstance(bg, Image.Image) else fg
         if isinstance(mask, np.ndarray):
@@ -520,9 +548,6 @@ def _run_vulkan_composite(node: RfirNode, arena: TensorArena, ctx: ExecutionCont
             result = fg
         for tensor_name in node.outputs.values():
             arena.put(tensor_name, result)
-        comp_path = out_path / f"{node.id}.png"
-        result.save(comp_path)
-        ctx.artifacts[node.id] = str(comp_path)
     else:
         for tensor_name in node.outputs.values():
             arena.put(tensor_name, fg)

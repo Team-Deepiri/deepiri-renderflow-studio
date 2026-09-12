@@ -1,16 +1,21 @@
-"""Tests for the Step 1 mux pipeline: shot manifest, variadic mux ports,
-duration-dependent cost estimates, and ordering-only memory planning.
+"""Tests for the RFIR mux pipeline: shot manifest, variadic mux ports,
+duration-dependent cost estimates, ordering-only memory planning, and
+per-shot frame persistence.
 
-Spec reference: docs/specs/rfir-mp4-output-pipeline.md §6 Step 1, §8.
+Spec reference: docs/specs/rfir-mp4-output-pipeline.md §6 Steps 1 and 3, §8.
 """
 from __future__ import annotations
 
 import pytest
+from PIL import Image
 
+from app.rfir.arena import TensorArena
 from app.rfir.compiler.builder import build
 from app.rfir.compiler.fusion import fuse
 from app.rfir.compiler.memory_plan import plan
-from app.rfir.ir.types import CameraMotion, CameraPath, InferenceBudget, Shot, ShotList, Tier
+from app.rfir.executor import engine
+from app.rfir.executor.context import ExecutionContext
+from app.rfir.ir.types import CameraMotion, CameraPath, InferenceBudget, RfirNode, Shot, ShotList, Tier
 
 
 def _mixed_shot_list() -> ShotList:
@@ -104,3 +109,54 @@ def test_memory_plan_peak_vram_does_not_scale_with_shot_count():
     # If the mux's frames_i inputs extended tensor liveness, peak VRAM for 3
     # concurrently-live Tier C frame lists would dwarf a single shot's.
     assert mp3.peak_vram_mb == pytest.approx(mp1.peak_vram_mb, rel=0.05)
+
+
+# ---------------------------------------------------------------------------
+# _persist_frames (Step 3)
+# ---------------------------------------------------------------------------
+
+def test_persist_frames_zero_pads_for_numeric_order(tmp_path):
+    ctx = ExecutionContext(job_id="j")
+    frames = [Image.new("RGB", (4, 4), (i, i, i)) for i in range(11)]
+    frame_dir = engine._persist_frames(frames, "s0_upscaled", ctx, tmp_path)
+
+    names = sorted(p.name for p in (tmp_path / "frames" / "s0_upscaled").iterdir())
+    assert names == [f"{i:05d}.png" for i in range(11)]
+    assert ctx.artifacts["frames::s0_upscaled"] == frame_dir
+
+
+def test_persist_frames_writes_under_frames_subdir_not_root(tmp_path):
+    ctx = ExecutionContext(job_id="j")
+    engine._persist_frames([Image.new("RGB", (2, 2))], "s0_upscaled", ctx, tmp_path)
+    assert not list(tmp_path.glob("*.png"))
+
+
+def test_vulkan_upscale_stub_persists_list_and_releases_arena(tmp_path):
+    arena = TensorArena()
+    ctx = ExecutionContext(job_id="j")
+    frames = [Image.new("RGB", (2, 2)) for _ in range(3)]
+    arena.put("s0_interp", frames)
+    node = RfirNode(id="s0_upscale", op="vulkan_upscale",
+                     inputs={"image": "s0_interp"}, outputs={"image_out": "s0_upscaled"})
+
+    engine._run_vulkan_upscale_stub(node, arena, ctx, tmp_path)
+
+    assert "frames::s0_upscaled" in ctx.artifacts
+    assert not arena.has("s0_upscaled")
+    assert not arena.has("s0_interp")
+
+
+def test_vulkan_upscale_stub_leaves_single_still_in_arena(tmp_path):
+    """Tier A's terminal tensor is a single image, not a list — nothing to
+    persist as a frame dir; the mux falls back to the s{N}_t2i still."""
+    arena = TensorArena()
+    ctx = ExecutionContext(job_id="j")
+    img = Image.new("RGB", (2, 2))
+    arena.put("s0_parallax", img)
+    node = RfirNode(id="s0_upscale", op="vulkan_upscale",
+                     inputs={"image": "s0_parallax"}, outputs={"image_out": "s0_upscaled"})
+
+    engine._run_vulkan_upscale_stub(node, arena, ctx, tmp_path)
+
+    assert "frames::s0_upscaled" not in ctx.artifacts
+    assert arena.has("s0_upscaled")
