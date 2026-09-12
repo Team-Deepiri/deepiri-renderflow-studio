@@ -77,7 +77,7 @@ def test_build_3_shot_valid():
 
 def test_build_3_shot_node_count():
     graph = build(_3_shot_list())
-    # Tier A: 4 nodes, Tier B: 4 nodes, Tier A: 4 nodes, + 1 mux = 13
+    # Tier A: 4, Tier B: 4, Tier A: 4, + 1 mux = 13
     assert len(graph.nodes) == 13
 
 

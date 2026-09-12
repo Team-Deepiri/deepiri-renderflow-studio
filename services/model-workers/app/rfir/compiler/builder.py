@@ -31,6 +31,11 @@ class CompileError(Exception):
     pass
 
 
+# How many times a Tier B segment may escalate to Tier C when the SSIM gate
+# (§2.6) judges RIFE's interpolation too far from the verification keyframe.
+# Per shot, not per job. Override via Shot.attrs["escalations_remaining"].
+DEFAULT_ESCALATIONS_PER_SHOT = 1
+
 DEFAULT_FPS_NUM = 24
 DEFAULT_FPS_DEN = 1
 MUX_WIDTH = 1920
@@ -196,6 +201,8 @@ def _build_tier_b(graph: RfirGraph, prefix: str, shot: Shot, *, num_frames: int)
     interp = _add_tensor(graph, f"{prefix}_interp", TensorDtype.RGB_U8)
     out = _add_tensor(graph, f"{prefix}_upscaled", TensorDtype.RGB_U8)
 
+    escalations = int(shot.attrs.get("escalations_remaining", DEFAULT_ESCALATIONS_PER_SHOT))
+
     # factor = num_frames - 1 so rife_interpolate.run() returns num_frames
     # frames total (Decision 3 / §6 Step 6).
     factor = max(1, num_frames - 1)
@@ -218,7 +225,10 @@ def _build_tier_b(graph: RfirGraph, prefix: str, shot: Shot, *, num_frames: int)
             id=f"{prefix}_rife", op="rife_interpolate",
             inputs={"frame_start": img_start, "frame_end": img_end},
             outputs={"frames": interp},
-            attrs={"factor": factor, "num_frames": num_frames},
+            # The SSIM gate (§2.6) scores the two endpoints against each other
+            # — no third keyframe. See docs/specs/rfir-mp4-output-pipeline.md
+            # §7c for the measurements behind that choice.
+            attrs={"escalations_remaining": escalations, "factor": factor, "num_frames": num_frames},
             estimated_gpu_ms=rife_ms, vram_mb=2048,
         ),
         RfirNode(

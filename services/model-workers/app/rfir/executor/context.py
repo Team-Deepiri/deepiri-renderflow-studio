@@ -1,9 +1,17 @@
 """Executor context — tracks job state, metrics, and timing during execution."""
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
+
+# Escalation is log-only today (§9 — the executor cannot re-run a shot at a
+# different tier), so this default is unvalidated: §7c found it escalates
+# 10/10 measured Tier B shots. Calibrating it needs labeled shots, not a
+# percentile off the observed distribution — see docs/specs/
+# rfir-mp4-output-pipeline.md §7a. Left unset until that calibration exists.
+_DEFAULT_SSIM_THRESHOLD = 0.85
 
 @dataclass
 class NodeMetric:
@@ -23,10 +31,17 @@ class EscalationDecision:
 def decide_escalation(
     ssim_score: float,
     *,
-    threshold: float = 0.85, #Default SSIM threshold
+    threshold: float | None = None,
     escalations_remaining: int = 0,
 ) -> EscalationDecision:
-    """Decide whether a Tier B segment should escalate to Tier C."""
+    """Decide whether a Tier B segment should escalate to Tier C.
+
+    threshold defaults to RENDERFLOW_RFIR_SSIM_THRESHOLD (Step 6's config
+    var) rather than a hardcoded default argument, so calibration has
+    somewhere to plug in. Falls back to _DEFAULT_SSIM_THRESHOLD when unset.
+    """
+    if threshold is None:
+        threshold = float(os.environ.get("RENDERFLOW_RFIR_SSIM_THRESHOLD", _DEFAULT_SSIM_THRESHOLD))
     if ssim_score >= threshold:
         return EscalationDecision(False, "quality_ok", ssim_score)
     if escalations_remaining <= 0:

@@ -255,6 +255,12 @@ def _run_rife_interpolate(node: RfirNode, arena: TensorArena, ctx: ExecutionCont
         logger.warning("rife_interpolate: inputs are not PIL Images, skipping")
         return
 
+    # Score the endpoints before interpolating: the gate is a property of the
+    # keyframe pair, not of RIFE's output, so it needs nothing RIFE produces.
+    # Once escalation is implemented this is also the point at which a doomed
+    # shot can skip the interpolation entirely.
+    _run_ssim_gate(node, ctx, start_img, end_img)
+
     factor = int(node.attrs.get("factor", 4))
     frames = rife_interpolate.run(start_img, end_img, factor=factor)
 
@@ -265,27 +271,76 @@ def _run_rife_interpolate(node: RfirNode, arena: TensorArena, ctx: ExecutionCont
     for tensor_name in node.outputs.values():
         arena.put(tensor_name, frames)
 
-    # SSIM quality gate (§2.6)
-    verify_t = node.attrs.get("verify_keyframe")
-    if verify_t and arena.has(verify_t) and len(frames) >= 3:
-        verify_img = arena.get(verify_t)
-        if isinstance(verify_img, Image.Image):
-            score = compute_ssim(frames[len(frames) // 2], verify_img)
-            decision = decide_escalation(
-                score, escalations_remaining=int(node.attrs.get("escalations_remaining", 0))
-            )
-            ctx.record_escalation(node.id, decision)
+
+def _run_ssim_gate(
+    node: RfirNode, ctx: ExecutionContext, start_img, end_img
+) -> None:
+    """Tier B quality gate (§2.6): score the start and end keyframes against
+    each other.
+
+    Advisory only: the decision is recorded for metrics and the review UI;
+    nothing re-runs the segment yet.
+    """
+    try:
+        score = compute_ssim(start_img, end_img)
+    except Exception as e:  # noqa: BLE001 - a quality gate must not fail the render
+        logger.warning("ssim_gate: scoring failed for %s (%s) — skipping", node.id, e)
+        return
+
+    decision = decide_escalation(
+        score, escalations_remaining=int(node.attrs.get("escalations_remaining", 0))
+    )
+    ctx.record_escalation(node.id, decision)
+    logger.info("ssim_gate: %s endpoint ssim=%.3f escalate=%s (%s)",
+                node.id, score, decision.escalate, decision.reason)
 
 
 def compute_ssim(a: Image.Image, b: Image.Image) -> float:
-    """Structural similarity in [0, 1] between two images."""
-    from skimage.metrics import structural_similarity as ssim
+    """Structural similarity in [0, 1] between two images.
 
+    Prefers scikit-image; falls back to a numpy reimplementation (§7a) when
+    it isn't importable — scikit-image is declared in pyproject.toml but was
+    not installed in the model-workers venv, which silently disabled the
+    gate on every job before this fallback existed.
+    """
     arr_a = np.asarray(a.convert("L"), dtype="float32")
     b_resized = b.resize(a.size) if b.size != a.size else b
     arr_b = np.asarray(b_resized.convert("L"), dtype="float32")
-    score = ssim(arr_a, arr_b, data_range=255.0)
+
+    try:
+        from skimage.metrics import structural_similarity as ssim
+        score = ssim(arr_a, arr_b, data_range=255.0)
+    except ImportError:
+        score = _ssim_numpy(arr_a, arr_b)
     return float(max(0.0, min(1.0, score)))
+
+
+def _ssim_numpy(x: np.ndarray, y: np.ndarray, *, win: int = 7, data_range: float = 255.0) -> float:
+    """SSIM matching skimage.metrics.structural_similarity's defaults for 2D
+    input: uniform win_size=7 window, K1=0.01, K2=0.03, unbiased covariance,
+    mean over the valid (cropped) region.
+
+    Promoted from scripts/tier_b_seedlock_experiment.py (§7c), where it was
+    validated against known cases (identical -> 1.0, independent noise ->
+    ~0.002) because scikit-image was not importable in this venv.
+    """
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    x = x.astype("float64")
+    y = y.astype("float64")
+    wx = sliding_window_view(x, (win, win))
+    wy = sliding_window_view(y, (win, win))
+    ax = (-1, -2)
+
+    ux, uy = wx.mean(ax), wy.mean(ax)
+    vx, vy = wx.var(ax, ddof=1), wy.var(ax, ddof=1)
+    n = win * win
+    vxy = ((wx * wy).mean(ax) - ux * uy) * (n / (n - 1))
+
+    c1 = (0.01 * data_range) ** 2
+    c2 = (0.03 * data_range) ** 2
+    s = ((2 * ux * uy + c1) * (2 * vxy + c2)) / ((ux**2 + uy**2 + c1) * (vx + vy + c2))
+    return float(s.mean())
 
 
 def _run_vulkan_parallax_stub(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
