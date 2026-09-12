@@ -8,6 +8,7 @@ Tier C: t2i_keyframe(bg) → depth + segment_subject → vae_encode → sparse_t
 Tier D: t2i_keyframe → vae_encode → sparse_t2v_window(full) → vae_decode → vulkan_upscale
 
 Spec reference: rfir-inference-engine-implementation.md §0.4
+Mux/manifest reference: docs/specs/rfir-mp4-output-pipeline.md §6 Step 1
 """
 from __future__ import annotations
 
@@ -30,11 +31,31 @@ class CompileError(Exception):
     pass
 
 
+DEFAULT_FPS_NUM = 24
+DEFAULT_FPS_DEN = 1
+MUX_WIDTH = 1920
+MUX_HEIGHT = 1080
+TIER_D_MAX_DURATION_SEC = 3.0
+
+# Cost model constants (Step 1): estimated_gpu_ms must scale with num_frames
+# or BudgetGovernor approves work it cannot afford. Values are order-of-
+# magnitude estimates anchored to the previous flat defaults at ~1s/24fps.
+_RIFE_MS_PER_FRAME = 8.0
+_SPARSE_T2V_MS_PER_FRAME_TIER_C = 125.0
+_SPARSE_T2V_MS_PER_FRAME_TIER_D = 210.0
+
+
+def _num_frames(effective_duration_sec: float, fps_num: int, fps_den: int) -> int:
+    return max(1, round(effective_duration_sec * fps_num / fps_den))
+
+
 def build(
     shot_list: ShotList,
     budget: InferenceBudget | None = None,
     ai_enabled: bool = True,
     routing: RoutingPolicy | None = None,
+    fps_num: int = DEFAULT_FPS_NUM,
+    fps_den: int = DEFAULT_FPS_DEN,
 ) -> RfirGraph:
     """Compile a ShotList into an RfirGraph."""
     if not ai_enabled:
@@ -57,11 +78,36 @@ def build(
     })
 
     tier_distribution: dict[str, int] = {}
+    shots_manifest: list[dict] = []
+    shot_output_tensors: list[str] = []
+
     for shot in shot_list.shots:
         effective_tier = _cap_tier(shot.tier, budget.max_tier)
         effective_tier = routing.effective_max_tier(effective_tier)
         tier_distribution[effective_tier.value] = tier_distribution.get(effective_tier.value, 0) + 1
-        _build_shot_subgraph(graph, shot, effective_tier)
+
+        effective_duration_sec = shot.duration_sec
+        if effective_tier == Tier.D:
+            effective_duration_sec = min(shot.duration_sec, TIER_D_MAX_DURATION_SEC)
+
+        num_frames = _num_frames(effective_duration_sec, fps_num, fps_den)
+        terminal_tensor = _build_shot_subgraph(
+            graph, shot, effective_tier,
+            num_frames=num_frames, fps_num=fps_num, fps_den=fps_den,
+        )
+        shot_output_tensors.append(terminal_tensor)
+
+        shots_manifest.append({
+            "index": shot.index,
+            "tier": effective_tier.value,
+            "duration_sec": shot.duration_sec,
+            "effective_duration_sec": effective_duration_sec,
+            "fps": fps_num / fps_den,
+            "num_frames": num_frames,
+            "camera": shot.camera.motion.value,
+            "camera_speed": shot.camera.speed,
+            "output_tensor": terminal_tensor,
+        })
 
     # Record the *effective* (post-cap) tier mix for job metrics (§12).
     graph.metadata["tier_distribution"] = tier_distribution
@@ -69,7 +115,13 @@ def build(
     graph.nodes.append(RfirNode(
         id="mux",
         op="ffmpeg_mux",
-        inputs={"frames": _last_output_tensor(graph)},
+        inputs={f"frames_{i}": t for i, t in enumerate(shot_output_tensors)},
+        attrs={
+            "fps": fps_num / fps_den,
+            "width": MUX_WIDTH,
+            "height": MUX_HEIGHT,
+            "shots": shots_manifest,
+        },
     ))
 
     return graph
@@ -84,17 +136,22 @@ def _cap_tier(requested: Tier, max_tier: Tier) -> Tier:
     return requested
 
 
-def _build_shot_subgraph(graph: RfirGraph, shot: Shot, tier: Tier) -> None:
+def _build_shot_subgraph(
+    graph: RfirGraph, shot: Shot, tier: Tier, *,
+    num_frames: int, fps_num: int, fps_den: int,
+) -> str:
+    """Build the subgraph for one shot; return its terminal output tensor."""
     prefix = f"s{shot.index}"
 
     if tier == Tier.A:
-        _build_tier_a(graph, prefix, shot)
+        return _build_tier_a(graph, prefix, shot)
     elif tier == Tier.B:
-        _build_tier_b(graph, prefix, shot)
+        return _build_tier_b(graph, prefix, shot, num_frames=num_frames)
     elif tier == Tier.C:
-        _build_tier_c(graph, prefix, shot)
+        return _build_tier_c(graph, prefix, shot, num_frames=num_frames)
     elif tier == Tier.D:
-        _build_tier_d(graph, prefix, shot)
+        return _build_tier_d(graph, prefix, shot, num_frames=num_frames)
+    raise CompileError(f"unknown tier: {tier!r}")
 
 
 def _add_tensor(graph: RfirGraph, name: str, dtype: TensorDtype, lifetime: TensorLifetime = TensorLifetime.SHOT) -> str:
@@ -102,7 +159,7 @@ def _add_tensor(graph: RfirGraph, name: str, dtype: TensorDtype, lifetime: Tenso
     return name
 
 
-def _build_tier_a(graph: RfirGraph, prefix: str, shot: Shot) -> None:
+def _build_tier_a(graph: RfirGraph, prefix: str, shot: Shot) -> str:
     img = _add_tensor(graph, f"{prefix}_keyframe", TensorDtype.RGB_U8)
     depth = _add_tensor(graph, f"{prefix}_depth", TensorDtype.DEPTH_F32)
     frames = _add_tensor(graph, f"{prefix}_parallax", TensorDtype.RGB_U8)
@@ -130,13 +187,19 @@ def _build_tier_a(graph: RfirGraph, prefix: str, shot: Shot) -> None:
             inputs={"image": frames}, outputs={"image_out": out},
         ),
     ])
+    return out
 
 
-def _build_tier_b(graph: RfirGraph, prefix: str, shot: Shot) -> None:
+def _build_tier_b(graph: RfirGraph, prefix: str, shot: Shot, *, num_frames: int) -> str:
     img_start = _add_tensor(graph, f"{prefix}_kf_start", TensorDtype.RGB_U8)
     img_end = _add_tensor(graph, f"{prefix}_kf_end", TensorDtype.RGB_U8)
     interp = _add_tensor(graph, f"{prefix}_interp", TensorDtype.RGB_U8)
     out = _add_tensor(graph, f"{prefix}_upscaled", TensorDtype.RGB_U8)
+
+    # factor = num_frames - 1 so rife_interpolate.run() returns num_frames
+    # frames total (Decision 3 / §6 Step 6).
+    factor = max(1, num_frames - 1)
+    rife_ms = max(1, num_frames) * _RIFE_MS_PER_FRAME
 
     graph.nodes.extend([
         RfirNode(
@@ -155,16 +218,18 @@ def _build_tier_b(graph: RfirGraph, prefix: str, shot: Shot) -> None:
             id=f"{prefix}_rife", op="rife_interpolate",
             inputs={"frame_start": img_start, "frame_end": img_end},
             outputs={"frames": interp},
-            estimated_gpu_ms=200, vram_mb=2048,
+            attrs={"factor": factor, "num_frames": num_frames},
+            estimated_gpu_ms=rife_ms, vram_mb=2048,
         ),
         RfirNode(
             id=f"{prefix}_upscale", op="vulkan_upscale",
             inputs={"image": interp}, outputs={"image_out": out},
         ),
     ])
+    return out
 
 
-def _build_tier_c(graph: RfirGraph, prefix: str, shot: Shot) -> None:
+def _build_tier_c(graph: RfirGraph, prefix: str, shot: Shot, *, num_frames: int) -> str:
     bg_img = _add_tensor(graph, f"{prefix}_bg", TensorDtype.RGB_U8)
     bg_depth = _add_tensor(graph, f"{prefix}_bg_depth", TensorDtype.DEPTH_F32)
     bg_frames = _add_tensor(graph, f"{prefix}_bg_parallax", TensorDtype.RGB_U8)
@@ -174,6 +239,8 @@ def _build_tier_c(graph: RfirGraph, prefix: str, shot: Shot) -> None:
     fg_frames = _add_tensor(graph, f"{prefix}_fg", TensorDtype.RGB_U8)
     composite = _add_tensor(graph, f"{prefix}_composite", TensorDtype.RGB_U8)
     out = _add_tensor(graph, f"{prefix}_upscaled", TensorDtype.RGB_U8)
+
+    t2v_ms = max(1, num_frames) * _SPARSE_T2V_MS_PER_FRAME_TIER_C
 
     graph.nodes.extend([
         # Background plate (Tier A)
@@ -207,8 +274,9 @@ def _build_tier_c(graph: RfirGraph, prefix: str, shot: Shot) -> None:
         RfirNode(
             id=f"{prefix}_t2v", op="sparse_t2v_window",
             inputs={"latent": latent_in, "mask": mask}, outputs={"latent_out": latent_out},
-            attrs={"prompt": shot.description, "steps": 10, "window_size": 16, "overlap": 4},
-            estimated_gpu_ms=3000, vram_mb=10240,
+            attrs={"prompt": shot.description, "steps": 10, "window_size": 16, "overlap": 4,
+                   "num_frames": num_frames},
+            estimated_gpu_ms=t2v_ms, vram_mb=10240,
         ),
         RfirNode(
             id=f"{prefix}_vae_dec", op="vae_decode",
@@ -226,18 +294,18 @@ def _build_tier_c(graph: RfirGraph, prefix: str, shot: Shot) -> None:
             inputs={"image": composite}, outputs={"image_out": out},
         ),
     ])
+    return out
 
 
-TIER_D_MAX_DURATION_SEC = 3.0
-
-
-def _build_tier_d(graph: RfirGraph, prefix: str, shot: Shot) -> None:
-    capped_duration = min(shot.duration_sec, TIER_D_MAX_DURATION_SEC)
+def _build_tier_d(graph: RfirGraph, prefix: str, shot: Shot, *, num_frames: int) -> str:
     img = _add_tensor(graph, f"{prefix}_keyframe", TensorDtype.RGB_U8)
     latent_in = _add_tensor(graph, f"{prefix}_latent_in", TensorDtype.LATENT_F16)
     latent_out = _add_tensor(graph, f"{prefix}_latent_out", TensorDtype.LATENT_F16)
     frames = _add_tensor(graph, f"{prefix}_frames", TensorDtype.RGB_U8)
     out = _add_tensor(graph, f"{prefix}_upscaled", TensorDtype.RGB_U8)
+    dummy_mask = _add_tensor(graph, f"{prefix}_dummy_mask", TensorDtype.MASK_U8)
+
+    t2v_ms = max(1, num_frames) * _SPARSE_T2V_MS_PER_FRAME_TIER_D
 
     graph.nodes.extend([
         RfirNode(
@@ -253,13 +321,14 @@ def _build_tier_d(graph: RfirGraph, prefix: str, shot: Shot) -> None:
         ),
         RfirNode(
             id=f"{prefix}_t2v", op="sparse_t2v_window",
-            inputs={"latent": latent_in, "mask": f"{prefix}_dummy_mask"},
+            inputs={"latent": latent_in, "mask": dummy_mask},
             outputs={"latent_out": latent_out},
             attrs={
                 "prompt": shot.description, "steps": 10, "full_frame": True,
-                "duration_sec": capped_duration,
+                "duration_sec": min(shot.duration_sec, TIER_D_MAX_DURATION_SEC),
+                "num_frames": num_frames,
             },
-            estimated_gpu_ms=5000, vram_mb=10240,
+            estimated_gpu_ms=t2v_ms, vram_mb=10240,
         ),
         RfirNode(
             id=f"{prefix}_vae_dec", op="vae_decode",
@@ -271,16 +340,4 @@ def _build_tier_d(graph: RfirGraph, prefix: str, shot: Shot) -> None:
             inputs={"image": frames}, outputs={"image_out": out},
         ),
     ])
-    # Tier D needs a full-frame mask placeholder
-    _add_tensor(graph, f"{prefix}_dummy_mask", TensorDtype.MASK_U8)
-
-
-def _last_output_tensor(graph: RfirGraph) -> str:
-    """Find the last upscaled tensor to feed into ffmpeg_mux."""
-    for node in reversed(graph.nodes):
-        if node.op == "vulkan_upscale" and "image_out" in node.outputs:
-            return node.outputs["image_out"]
-    for node in reversed(graph.nodes):
-        if node.outputs:
-            return next(iter(node.outputs.values()))
-    return ""
+    return out

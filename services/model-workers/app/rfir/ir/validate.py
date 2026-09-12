@@ -77,8 +77,11 @@ def _check_port_dtypes(graph: RfirGraph) -> list[ValidationError]:
         if op_def is None:
             continue
         port_specs = {p.name: p for p in op_def.inputs}
+        variadic = op_def.variadic_input
         for port_name, tensor_name in node.inputs.items():
             spec = port_specs.get(port_name)
+            if spec is None and variadic is not None and port_name.startswith(f"{variadic.name}_"):
+                spec = variadic
             tensor = graph.tensors.get(tensor_name)
             if spec and tensor and tensor.dtype != spec.dtype:
                 errors.append(

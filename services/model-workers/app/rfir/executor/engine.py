@@ -413,6 +413,7 @@ def _run_sparse_t2v_window(node: RfirNode, arena: TensorArena, ctx: ExecutionCon
     full_frame = bool(node.attrs.get("full_frame", False))
     window_size = int(node.attrs.get("window_size", 16))
     overlap_val = int(node.attrs.get("overlap", 4))
+    num_frames = int(node.attrs.get("num_frames", 24))
 
     latent_tensor = node.inputs.get("latent", "")
     latent = arena.get(latent_tensor) if arena.has(latent_tensor) else None
@@ -443,6 +444,7 @@ def _run_sparse_t2v_window(node: RfirNode, arena: TensorArena, ctx: ExecutionCon
         steps=steps,
         window_size=window_size,
         overlap=overlap_val,
+        num_frames=num_frames,
         shot_id=shot_id,
         ltc=ltc,
     )

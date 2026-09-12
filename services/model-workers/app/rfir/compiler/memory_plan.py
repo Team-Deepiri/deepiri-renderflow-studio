@@ -19,6 +19,13 @@ _BYTES_PER_MB = 1024 * 1024
 # 8 GB consumer GPU with headroom for driver/runtime.
 DEFAULT_VRAM_LIMIT_MB = 7500.0
 
+# Decision 5: ffmpeg_mux's frames_i inputs are ordering edges only — the
+# terminal handler persists frames to disk and drops them from the arena
+# before the mux ever runs. Extending a tensor's live range to reach the
+# mux would otherwise keep every shot's decoded frame list resident at
+# once (hundreds of images at 1080p for Tier C/D).
+ORDERING_ONLY_OPS: frozenset[str] = frozenset({"ffmpeg_mux"})
+
 @dataclass
 class MemoryPlan:
     peak_vram_mb: float
@@ -56,7 +63,7 @@ def plan(
             produced_at[tensor] = s
             last_use[tensor] = max(last_use.get(tensor, s), s)
     for node in graph.nodes:
-        if node.id not in step_of:
+        if node.id not in step_of or node.op in ORDERING_ONLY_OPS:
             continue
         s = step_of[node.id]
         for tensor in node.inputs.values():

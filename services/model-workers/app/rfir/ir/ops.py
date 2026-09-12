@@ -31,6 +31,10 @@ class OpDef:
     device: OpDevice
     inputs: tuple[PortSpec, ...] = ()
     outputs: tuple[PortSpec, ...] = ()
+    # A variadic input family: any port named "{variadic_input.name}_{i}" is
+    # dtype-checked against this spec instead of being silently skipped.
+    # Used by ffmpeg_mux's frames_0..frames_N ports (one per shot).
+    variadic_input: PortSpec | None = None
 
 
 OP_REGISTRY: dict[str, OpDef] = {}
@@ -143,7 +147,11 @@ _register(
     OpDef(
         name="ffmpeg_mux",
         device=OpDevice.CPU,
+        # "frames" kept for back-compat (test_ir_validate.py's minimal graph);
+        # production graphs wire frames_0..frames_N, one ordering-only port
+        # per shot (§Decision 5 — frames travel by disk, not by tensor).
         inputs=(PortSpec("frames", TensorDtype.RGB_U8),),
         outputs=(),
+        variadic_input=PortSpec("frames", TensorDtype.RGB_U8),
     ),
 )

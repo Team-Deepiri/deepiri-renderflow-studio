@@ -141,7 +141,11 @@ def run_rfir_job(job_id: str, payload: dict, reporter: JobStatusReporter) -> Non
             metadata={"stage_storyboard": {"shot_count": len(shot_list.shots)}},
         ))
 
-        graph = build(shot_list, budget=budget, ai_enabled=True)
+        project_cfg = payload.get("project") or {}
+        fps_num = int(project_cfg.get("fps_num", 24))
+        fps_den = int(project_cfg.get("fps_den", 1))
+        graph = build(shot_list, budget=budget, ai_enabled=True,
+                      fps_num=fps_num, fps_den=fps_den)
         graph = fuse(graph)
         mp = memory_plan(graph)
         graph.metadata["downgrade_hints"] = mp.downgrade_hints
