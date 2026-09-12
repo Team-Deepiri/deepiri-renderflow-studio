@@ -383,24 +383,30 @@ def _run_vae_encode(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, o
 
 
 def _run_vae_decode(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
-    """Decode a latent tensor to an RGB image."""
+    """Decode a latent tensor to RGB image(s) (Decision 1 / Cause 1 fix).
+
+    sparse_t2v_window decodes internally and returns list[Image] directly —
+    that list arrives here as the "latent" input, so it passes straight
+    through. A real latent tensor (no production caller today; kept for the
+    graph shape design §4.3/§4.4 draws — §10 known debt) is decoded via
+    vae.decode_frames() into the equivalent list. Either way the output
+    tensor holds a *sequence*, not a single collapsed frame.
+    """
     import torch
 
     input_tensor = list(node.inputs.values())[0]
     latent = arena.get(input_tensor)
 
-    if not isinstance(latent, torch.Tensor):
-        logger.warning("vae_decode: input is not a tensor, skipping")
+    if isinstance(latent, list):
+        frames = latent
+    elif isinstance(latent, torch.Tensor):
+        frames = vae.decode_frames(latent)
+    else:
+        logger.warning("vae_decode: input is neither a tensor nor a frame list, skipping")
         return
 
-    image = vae.decode(latent)
-
     for tensor_name in node.outputs.values():
-        arena.put(tensor_name, image)
-
-    img_path = out_path / f"{node.id}.png"
-    image.save(img_path)
-    ctx.artifacts[node.id] = str(img_path)
+        arena.put(tensor_name, frames)
 
 
 def _run_sparse_t2v_window(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
