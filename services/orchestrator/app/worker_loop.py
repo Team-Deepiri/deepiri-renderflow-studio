@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
 from queue import Empty, Queue
@@ -48,6 +49,14 @@ class _JobCancelled(BaseException):
 # in-process stub's bookkeeping.
 _rfir_inflight: set[str] = set()
 _rfir_lock = threading.Lock()
+
+
+def _planner_path_enabled() -> bool:
+    """Step 5's behavior flip: planner-driven multi-shot in-process path vs.
+    the single hardcoded Tier-A shot. Default off — remove once the manual
+    e2e in docs/specs/rfir-mp4-output-pipeline.md §8 passes on both paths.
+    """
+    return os.environ.get("RENDERFLOW_RFIR_PLANNER_PATH", "false").lower() == "true"
 
 
 def _emit(job_id: str, status: str, stage: str | None = None, project_id: str | None = None) -> None:
@@ -258,8 +267,13 @@ def _process_scene_job_rfir(uid: UUID, rec: AiJobRecord, settings: Settings) -> 
         _fail(f"guardrail_verdict={verdict!r}, refusing to run generation")
         return
 
+    planner_path = _planner_path_enabled()
+
     try:
-        from app.media.cfsv_pipeline import compile_and_run_tier_a
+        if planner_path:
+            from app.media.cfsv_pipeline import compile_and_run
+        else:
+            from app.media.cfsv_pipeline import compile_and_run_tier_a
     except (ImportError, ModuleNotFoundError) as e:
         _fail(f"RFIR unavailable in this environment: {e}")
         return
@@ -268,15 +282,29 @@ def _process_scene_job_rfir(uid: UUID, rec: AiJobRecord, settings: Settings) -> 
 
     try:
         _advance("compiling")
-        result = compile_and_run_tier_a(
-            rec.prompt,
-            str(out_dir),
-            job_id=job_id,
-            max_gpu_sec=settings.rfir_max_gpu_sec,
-            max_tier=settings.rfir_max_tier,
-            nsfw_mode=_nsfw_mode_for(rec),
-            on_node_start=_on_node_start,
-        )
+        if planner_path:
+            # Step 5: planner-driven multi-shot graph instead of one
+            # hardcoded Tier-A shot. Behind RENDERFLOW_RFIR_PLANNER_PATH so
+            # the default in-process path stays byte-identical.
+            result = compile_and_run(
+                rec.prompt,
+                str(out_dir),
+                job_id=job_id,
+                max_gpu_sec=settings.rfir_max_gpu_sec,
+                max_tier=settings.rfir_max_tier,
+                nsfw_mode=_nsfw_mode_for(rec),
+                on_node_start=_on_node_start,
+            )
+        else:
+            result = compile_and_run_tier_a(
+                rec.prompt,
+                str(out_dir),
+                job_id=job_id,
+                max_gpu_sec=settings.rfir_max_gpu_sec,
+                max_tier=settings.rfir_max_tier,
+                nsfw_mode=_nsfw_mode_for(rec),
+                on_node_start=_on_node_start,
+            )
     except _JobCancelled:
         store.update_status(uid, JobStatus.CANCELLED, stages=stages + ["cancelled"])
         _emit(job_id, "cancelled", project_id=pid)

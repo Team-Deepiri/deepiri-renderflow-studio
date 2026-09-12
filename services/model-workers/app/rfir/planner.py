@@ -174,3 +174,23 @@ def plan(
     # Tier assignment is the router's deterministic job, applied to Qwen's shots.
     assign_tiers(shot_list, max_tier=max_tier)
     return shot_list
+
+
+def plan_or_fallback(prompt: str, max_tier: Tier = Tier.C) -> ShotList:
+    """Plan shots via Qwen; fall back to a single Tier-A shot if the planner
+    model isn't available (no GGUF weights downloaded yet, etc.).
+
+    Extracted from redis_worker._plan_shots (Step 5) so both the Redis path
+    and the in-process planner-driven path (behind
+    RENDERFLOW_RFIR_PLANNER_PATH) share one fallback.
+    """
+    try:
+        return plan(prompt, guardrail=lambda p: True, max_tier=max_tier)
+    except PlannerBlocked:
+        raise
+    except Exception as e:
+        logger.warning("planner unavailable (%s) — falling back to a single Tier-A shot", e)
+        return ShotList(prompt=prompt, shots=[
+            Shot(index=0, description=prompt, tier=Tier.A, duration_sec=5.0,
+                 camera=CameraPath(motion=CameraMotion.ZOOM, speed=1.0)),
+        ])

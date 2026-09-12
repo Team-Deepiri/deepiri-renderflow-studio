@@ -32,14 +32,16 @@ from app.rfir.ir.validate import validate
 logger = logging.getLogger(__name__)
 
 
-def _build_tier_a(
+def _build_single_forced_shot(
     prompt: str,
     *,
+    tier: str,
     duration_sec: float,
     max_gpu_sec: int,
     max_tier: str,
+    job_id: str,
 ) -> tuple[RfirGraph, ShotList, InferenceBudget]:
-    """Build and validate a single Tier-A shot graph.
+    """Build and validate a single shot graph at a forced tier (no planner).
 
     Raises CompileError on bad input or a graph that fails validation.
     """
@@ -49,7 +51,7 @@ def _build_tier_a(
             Shot(
                 index=0,
                 description=prompt,
-                tier=Tier.A,
+                tier=Tier[tier],
                 duration_sec=duration_sec,
                 camera=CameraPath(motion=CameraMotion.ZOOM, speed=1.0),
             ),
@@ -61,7 +63,33 @@ def _build_tier_a(
         max_tier=Tier[max_tier],
     )
 
-    graph = build(shot_list, budget=budget)
+    graph = build(shot_list, budget=budget, job_id=job_id)
+
+    errors = validate(graph)
+    if errors:
+        raise CompileError(f"Graph validation failed: {errors[0].message}")
+
+    return graph, shot_list, budget
+
+
+def _build_planned(
+    prompt: str,
+    *,
+    max_gpu_sec: int,
+    max_tier: str,
+    job_id: str,
+) -> tuple[RfirGraph, ShotList, InferenceBudget]:
+    """Build and validate a multi-shot graph via the planner (Step 5).
+
+    Raises CompileError on bad input or a graph that fails validation.
+    """
+    from app.rfir import planner
+
+    tier_enum = Tier[max_tier]
+    shot_list = planner.plan_or_fallback(prompt, max_tier=tier_enum)
+
+    budget = InferenceBudget(max_gpu_seconds=float(max_gpu_sec), max_tier=tier_enum)
+    graph = build(shot_list, budget=budget, job_id=job_id)
 
     errors = validate(graph)
     if errors:
@@ -98,8 +126,9 @@ def compile_tier_a(
 ) -> dict[str, Any]:
     """Compile a single Tier-A shot from a prompt. Returns graph JSON path + metadata."""
     try:
-        graph, shot_list, _budget = _build_tier_a(
-            prompt, duration_sec=duration_sec, max_gpu_sec=max_gpu_sec, max_tier=max_tier,
+        graph, shot_list, _budget = _build_single_forced_shot(
+            prompt, tier="A", duration_sec=duration_sec, max_gpu_sec=max_gpu_sec,
+            max_tier=max_tier, job_id="adhoc",
         )
     except CompileError as e:
         return {"ok": False, "error": str(e)}
@@ -114,18 +143,25 @@ def compile_tier_a(
     }
 
 
-def compile_and_run_tier_a(
+def compile_and_run(
     prompt: str,
     output_dir: str,
     *,
     job_id: str = "adhoc",
+    shot_count: int | None = None,
+    force_tier: str | None = None,
     duration_sec: float = 5.0,
     max_gpu_sec: int = 120,
-    max_tier: str = "A",
+    max_tier: str = "C",
     nsfw_mode: str = "block",
     on_node_start: Callable[[RfirNode], None] | None = None,
 ) -> dict[str, Any]:
-    """Compile a Tier-A shot and execute the graph in-process.
+    """Compile a prompt into an RFIR graph and execute it in-process (Step 5).
+
+    force_tier + shot_count=1 builds a single shot at that tier without
+    invoking the planner — exactly what compile_and_run_tier_a's alias
+    needs. Otherwise the planner (plan_or_fallback + assign_tiers) produces
+    a multi-shot graph capped at max_tier.
 
     Returns artifact paths on success: the muxed output.mp4, the keyframe
     PNGs, the serialized graph, and executor metrics. Failures (bad prompt,
@@ -138,12 +174,17 @@ def compile_and_run_tier_a(
     caller.
     """
     try:
-        graph, _shot_list, budget = _build_tier_a(
-            prompt, duration_sec=duration_sec, max_gpu_sec=max_gpu_sec, max_tier=max_tier,
-        )
+        if force_tier is not None and (shot_count or 1) == 1:
+            graph, _shot_list, budget = _build_single_forced_shot(
+                prompt, tier=force_tier, duration_sec=duration_sec,
+                max_gpu_sec=max_gpu_sec, max_tier=max_tier, job_id=job_id,
+            )
+        else:
+            graph, _shot_list, budget = _build_planned(
+                prompt, max_gpu_sec=max_gpu_sec, max_tier=max_tier, job_id=job_id,
+            )
     except CompileError as e:
         return {"ok": False, "error": str(e)}
-
 
     graph.metadata["nsfw_mode"] = nsfw_mode
 
@@ -183,3 +224,28 @@ def compile_and_run_tier_a(
         "graph_uri": str(graph_path),
         "metrics": ctx.to_metrics_dict(),
     }
+
+
+def compile_and_run_tier_a(
+    prompt: str,
+    output_dir: str,
+    *,
+    job_id: str = "adhoc",
+    duration_sec: float = 5.0,
+    max_gpu_sec: int = 120,
+    max_tier: str = "A",
+    nsfw_mode: str = "block",
+    on_node_start: Callable[[RfirNode], None] | None = None,
+) -> dict[str, Any]:
+    """Thin alias: force a single Tier-A shot without the planner.
+
+    Kept because four production call sites and
+    test_worker_loop_rfir.py:114's string monkeypatch target
+    ("app.media.cfsv_pipeline.compile_and_run_tier_a") depend on this exact
+    name (§3 constraint).
+    """
+    return compile_and_run(
+        prompt, output_dir, job_id=job_id, shot_count=1, force_tier="A",
+        duration_sec=duration_sec, max_gpu_sec=max_gpu_sec, max_tier=max_tier,
+        nsfw_mode=nsfw_mode, on_node_start=on_node_start,
+    )

@@ -50,20 +50,14 @@ def _checkpoint_dir() -> str:
 def _plan_shots(prompt: str, max_tier):
     """Plan shots via Qwen; fall back to a single Tier-A shot if the planner
     model isn't available (no GGUF weights downloaded yet, etc.).
+
+    Thin wrapper over app.rfir.planner.plan_or_fallback (Step 5) — the
+    fallback logic now lives there so the in-process planner-driven path
+    (behind RENDERFLOW_RFIR_PLANNER_PATH) shares it instead of duplicating it.
     """
     from app.rfir import planner
-    from app.rfir.ir.types import CameraMotion, CameraPath, Shot, ShotList, Tier
 
-    try:
-        return planner.plan(prompt, guardrail=lambda p: True, max_tier=max_tier)
-    except planner.PlannerBlocked: 
-        raise
-    except Exception as e:
-        logger.warning("planner unavailable (%s) — falling back to a single Tier-A shot", e)
-        return ShotList(prompt=prompt, shots=[
-            Shot(index=0, description=prompt, tier=Tier.A, duration_sec=5.0,
-                 camera=CameraPath(motion=CameraMotion.ZOOM, speed=1.0)),
-        ])
+    return planner.plan_or_fallback(prompt, max_tier=max_tier)
 
 
 def _warmup() -> None:
@@ -144,7 +138,7 @@ def run_rfir_job(job_id: str, payload: dict, reporter: JobStatusReporter) -> Non
         project_cfg = payload.get("project") or {}
         fps_num = int(project_cfg.get("fps_num", 24))
         fps_den = int(project_cfg.get("fps_den", 1))
-        graph = build(shot_list, budget=budget, ai_enabled=True,
+        graph = build(shot_list, budget=budget, ai_enabled=True, job_id=job_id,
                       fps_num=fps_num, fps_den=fps_den)
         graph = fuse(graph)
         mp = memory_plan(graph)
