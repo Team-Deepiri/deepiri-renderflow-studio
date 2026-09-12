@@ -50,6 +50,7 @@ jobs:
 
       - name: Install Tauri Linux dependencies
         run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential \
@@ -118,7 +119,9 @@ jobs:
         working-directory: services/orchestrator
 
       - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
 
       - name: Run orchestrator tests
         run: poetry run pytest
