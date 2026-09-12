@@ -123,6 +123,10 @@ class Shot:
     camera: CameraPath = field(default_factory=CameraPath)
     subject: str = ""
     style: str = ""
+    # Tier B end-state prompt (Decision 4 / §7b). Empty means "no end state
+    # given" — the builder falls back to `description` for both keyframes,
+    # which degrades cleanly to pre-7b behavior (minus the seed-lock).
+    description_end: str = ""
     attrs: dict[str, Any] = field(default_factory=dict)
 
 

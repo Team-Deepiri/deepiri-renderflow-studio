@@ -1,8 +1,8 @@
 """Tests for the RFIR mux pipeline: shot manifest, variadic mux ports,
 duration-dependent cost estimates, ordering-only memory planning,
-per-shot frame persistence, and the real ffmpeg concat.
+per-shot frame persistence, Tier B seed-lock, and the real ffmpeg concat.
 
-Spec reference: docs/specs/rfir-mp4-output-pipeline.md §6 Steps 1, 3, 4, §8.
+Spec reference: docs/specs/rfir-mp4-output-pipeline.md §6 Steps 1, 3, 4, 7b, §8.
 """
 from __future__ import annotations
 
@@ -83,6 +83,31 @@ def test_rife_estimated_gpu_ms_scales_with_duration():
     short_rife = short.get_node("s0_rife")
     long_rife = long.get_node("s0_rife")
     assert long_rife.estimated_gpu_ms > short_rife.estimated_gpu_ms
+
+
+def test_tier_b_seed_lock_and_prompt_delta():
+    graph = build(ShotList(prompt="p", shots=[
+        Shot(index=0, description="start state", description_end="end state", tier=Tier.B),
+    ]), job_id="job-xyz")
+    start = graph.get_node("s0_t2i_start")
+    end = graph.get_node("s0_t2i_end")
+    assert start.attrs["seed"] == end.attrs["seed"]
+    assert start.attrs["prompt"] == "start state"
+    assert end.attrs["prompt"] == "end state"
+
+
+def test_tier_b_seed_deterministic_across_builds():
+    sl = ShotList(prompt="p", shots=[Shot(index=0, description="a", tier=Tier.B)])
+    g1 = build(sl, job_id="job-1")
+    g2 = build(sl, job_id="job-1")
+    assert g1.get_node("s0_t2i_start").attrs["seed"] == g2.get_node("s0_t2i_start").attrs["seed"]
+
+
+def test_tier_b_empty_description_end_falls_back_to_description():
+    graph = build(ShotList(prompt="p", shots=[
+        Shot(index=0, description="only state", tier=Tier.B),
+    ]))
+    assert graph.get_node("s0_t2i_end").attrs["prompt"] == "only state"
 
 
 def test_manifest_survives_fusion():

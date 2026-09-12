@@ -35,6 +35,7 @@ SHOTLIST_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "description": {"type": "string"},
+                    "description_end": {"type": "string"},
                     "duration_sec": {"type": "number"},
                     "camera_motion": {"type": "string", "enum": sorted(_VALID_MOTIONS)},
                     "subject": {"type": "string"},
@@ -51,7 +52,9 @@ SHOTLIST_SCHEMA = {
 _SYSTEM_PROMPT = (
     "You are a film shot planner. Given a creative prompt, break it into a short "
     "sequence of distinct camera shots. Respond with ONLY a JSON object matching "
-    "the required schema. For each shot provide: a vivid one-sentence description, "
+    "the required schema. For each shot provide: a vivid one-sentence description "
+    "of how the shot starts, a description_end of the state the shot ends in (used "
+    "for shots with camera or subject motion — leave empty if the shot is static), "
     "a duration in seconds (1.5 to 8), a camera_motion from "
     f"{sorted(_VALID_MOTIONS)}, the main subject (or empty string), and an "
     "optional style. Use 1 to 6 shots. Do not include any prose outside the JSON."
@@ -126,6 +129,9 @@ def _parse_shotlist(raw: str, prompt: str) -> ShotList:
         shots.append(Shot(
             index=len(shots),
             description=description,
+            # Empty degrades cleanly: the builder falls back to `description`
+            # for both Tier B keyframes (§7b).
+            description_end=str(item.get("description_end", "")).strip(),
             duration_sec=_clamp_duration(item.get("duration_sec")),
             camera=CameraPath(motion=_coerce_motion(item.get("camera_motion"))),
             subject=str(item.get("subject", "")).strip(),

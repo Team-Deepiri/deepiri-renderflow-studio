@@ -64,12 +64,15 @@ def fuse(graph: RfirGraph) -> RfirGraph:
         existing_ids.add(fused_id)
 
         prompts: list[str] = []
+        batch_items: list[dict] = []
         outputs: dict[str, str] = {}
         for i, member in enumerate(members):
             tensor = _single_output_tensor(member)
             if tensor is None:
                 continue
-            prompts.append(str(member.attrs.get("prompt", "")))
+            prompt = str(member.attrs.get("prompt", ""))
+            prompts.append(prompt)
+            batch_items.append({"prompt": prompt, "seed": member.attrs.get("seed")})
             outputs[f"image_{i}"] = tensor
 
         # Cost model: weights are shared across the batch, so VRAM tracks the
@@ -83,6 +86,12 @@ def fuse(graph: RfirGraph) -> RfirGraph:
             attrs={
                 "batch": True,
                 "batch_size": len(prompts),
+                # Per-member (prompt, seed) pairs — the correctness fix for
+                # Tier B's seed-lock (§7b): a fused batch must not read one
+                # seed for every member. "prompts" kept for back-compat with
+                # callers that only pass that shape (e.g. hand-built nodes
+                # in tests).
+                "batch_items": batch_items,
                 "prompts": prompts,
                 "steps": steps,
                 "width": width,

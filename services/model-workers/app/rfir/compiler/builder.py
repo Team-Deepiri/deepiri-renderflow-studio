@@ -12,6 +12,8 @@ Mux/manifest reference: docs/specs/rfir-mp4-output-pipeline.md §6 Step 1
 """
 from __future__ import annotations
 
+import hashlib
+
 from app.rfir.ir.types import (
     InferenceBudget,
     RfirGraph,
@@ -54,11 +56,19 @@ def _num_frames(effective_duration_sec: float, fps_num: int, fps_den: int) -> in
     return max(1, round(effective_duration_sec * fps_num / fps_den))
 
 
+def _seed_for_shot(job_id: str, shot_index: int) -> int:
+    """Stable seed derived from (job_id, shot_index) — deterministic across
+    rebuilds of the same job, distinct across shots and jobs (Decision 4)."""
+    digest = hashlib.sha256(f"{job_id}:{shot_index}".encode("utf-8")).hexdigest()
+    return int(digest[:8], 16)
+
+
 def build(
     shot_list: ShotList,
     budget: InferenceBudget | None = None,
     ai_enabled: bool = True,
     routing: RoutingPolicy | None = None,
+    job_id: str = "",
     fps_num: int = DEFAULT_FPS_NUM,
     fps_den: int = DEFAULT_FPS_DEN,
 ) -> RfirGraph:
@@ -97,7 +107,7 @@ def build(
 
         num_frames = _num_frames(effective_duration_sec, fps_num, fps_den)
         terminal_tensor = _build_shot_subgraph(
-            graph, shot, effective_tier,
+            graph, shot, effective_tier, job_id=job_id,
             num_frames=num_frames, fps_num=fps_num, fps_den=fps_den,
         )
         shot_output_tensors.append(terminal_tensor)
@@ -143,7 +153,7 @@ def _cap_tier(requested: Tier, max_tier: Tier) -> Tier:
 
 def _build_shot_subgraph(
     graph: RfirGraph, shot: Shot, tier: Tier, *,
-    num_frames: int, fps_num: int, fps_den: int,
+    job_id: str, num_frames: int, fps_num: int, fps_den: int,
 ) -> str:
     """Build the subgraph for one shot; return its terminal output tensor."""
     prefix = f"s{shot.index}"
@@ -151,7 +161,7 @@ def _build_shot_subgraph(
     if tier == Tier.A:
         return _build_tier_a(graph, prefix, shot)
     elif tier == Tier.B:
-        return _build_tier_b(graph, prefix, shot, num_frames=num_frames)
+        return _build_tier_b(graph, prefix, shot, job_id=job_id, num_frames=num_frames)
     elif tier == Tier.C:
         return _build_tier_c(graph, prefix, shot, num_frames=num_frames)
     elif tier == Tier.D:
@@ -195,13 +205,19 @@ def _build_tier_a(graph: RfirGraph, prefix: str, shot: Shot) -> str:
     return out
 
 
-def _build_tier_b(graph: RfirGraph, prefix: str, shot: Shot, *, num_frames: int) -> str:
+def _build_tier_b(graph: RfirGraph, prefix: str, shot: Shot, *, job_id: str, num_frames: int) -> str:
     img_start = _add_tensor(graph, f"{prefix}_kf_start", TensorDtype.RGB_U8)
     img_end = _add_tensor(graph, f"{prefix}_kf_end", TensorDtype.RGB_U8)
     interp = _add_tensor(graph, f"{prefix}_interp", TensorDtype.RGB_U8)
     out = _add_tensor(graph, f"{prefix}_upscaled", TensorDtype.RGB_U8)
 
     escalations = int(shot.attrs.get("escalations_remaining", DEFAULT_ESCALATIONS_PER_SHOT))
+
+    # Decision 4 / §7b: one seed shared by both endpoints, prompt is the only
+    # axis of variation. description_end falls back to description so an
+    # empty end-state prompt degrades to pre-7b behavior (still seed-locked).
+    seed = _seed_for_shot(job_id, shot.index)
+    end_prompt = shot.description_end or shot.description
 
     # factor = num_frames - 1 so rife_interpolate.run() returns num_frames
     # frames total (Decision 3 / §6 Step 6).
@@ -212,13 +228,13 @@ def _build_tier_b(graph: RfirGraph, prefix: str, shot: Shot, *, num_frames: int)
         RfirNode(
             id=f"{prefix}_t2i_start", op="t2i_keyframe",
             outputs={"image": img_start},
-            attrs={"prompt": shot.description, "steps": 2, "keyframe": "start"},
+            attrs={"prompt": shot.description, "steps": 2, "seed": seed, "keyframe": "start"},
             estimated_gpu_ms=800, vram_mb=6144,
         ),
         RfirNode(
             id=f"{prefix}_t2i_end", op="t2i_keyframe",
             outputs={"image": img_end},
-            attrs={"prompt": shot.description, "steps": 2, "keyframe": "end"},
+            attrs={"prompt": end_prompt, "steps": 2, "seed": seed, "keyframe": "end"},
             estimated_gpu_ms=800, vram_mb=6144,
         ),
         RfirNode(

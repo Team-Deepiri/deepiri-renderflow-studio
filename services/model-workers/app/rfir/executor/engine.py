@@ -185,10 +185,18 @@ def _run_t2i_keyframe(node: RfirNode, arena: TensorArena, ctx: ExecutionContext,
 
     # for fusion shots ("batch" attr)
     if node.attrs.get("batch"):
-        prompts = node.attrs.get("prompts", [])
         out_tensors = list(node.outputs.values())  # ordered image_0..image_{n-1}
-        for i, (prompt, tensor_name) in enumerate(zip(prompts, out_tensors)):
-            image = t2i_keyframe.run(prompt, width=width, height=height, steps=steps, seed=seed)
+        # batch_items carries per-member (prompt, seed) pairs (§7b) — a fused
+        # node must not apply one seed to every member. Fall back to the
+        # older "prompts" list (all members sharing this node's single
+        # `seed` attr) for callers that only pass that shape.
+        batch_items = node.attrs.get("batch_items")
+        if batch_items is None:
+            batch_items = [{"prompt": p, "seed": seed} for p in node.attrs.get("prompts", [])]
+        for i, (item, tensor_name) in enumerate(zip(batch_items, out_tensors)):
+            member_seed = item.get("seed")
+            image = t2i_keyframe.run(item.get("prompt", ""), width=width, height=height,
+                                      steps=steps, seed=member_seed)
 
             if ctx.keyframe_check is not None:
                 result = ctx.keyframe_check(_encode_png(image), ctx.nsfw_mode, frame_index=i)
