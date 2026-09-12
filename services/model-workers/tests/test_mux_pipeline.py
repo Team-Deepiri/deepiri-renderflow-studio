@@ -1,10 +1,13 @@
 """Tests for the RFIR mux pipeline: shot manifest, variadic mux ports,
-duration-dependent cost estimates, ordering-only memory planning, and
-per-shot frame persistence.
+duration-dependent cost estimates, ordering-only memory planning,
+per-shot frame persistence, and the real ffmpeg concat.
 
-Spec reference: docs/specs/rfir-mp4-output-pipeline.md §6 Steps 1 and 3, §8.
+Spec reference: docs/specs/rfir-mp4-output-pipeline.md §6 Steps 1, 3, 4, §8.
 """
 from __future__ import annotations
+
+import shutil
+from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -16,6 +19,9 @@ from app.rfir.compiler.memory_plan import plan
 from app.rfir.executor import engine
 from app.rfir.executor.context import ExecutionContext
 from app.rfir.ir.types import CameraMotion, CameraPath, InferenceBudget, RfirNode, Shot, ShotList, Tier
+from app.rfir.ops import ffmpeg_mux
+
+ffmpeg_required = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not found in PATH")
 
 
 def _mixed_shot_list() -> ShotList:
@@ -160,3 +166,88 @@ def test_vulkan_upscale_stub_leaves_single_still_in_arena(tmp_path):
 
     assert "frames::s0_upscaled" not in ctx.artifacts
     assert arena.has("s0_upscaled")
+
+
+# ---------------------------------------------------------------------------
+# ops.ffmpeg_mux.run — real ffmpeg (Step 4)
+# ---------------------------------------------------------------------------
+
+@ffmpeg_required
+def test_ffmpeg_mux_missing_shot_emits_black_segment_and_logs_error(tmp_path, caplog):
+    shots = [
+        {"index": 0, "output_tensor": "s0_upscaled", "effective_duration_sec": 1.0, "fps": 8,
+         "camera": "static", "camera_speed": 1.0},
+    ]
+    with caplog.at_level("ERROR"):
+        result = ffmpeg_mux.run(shots, frame_dirs={}, stills={}, out_path=tmp_path, fps=8, width=64, height=64)
+
+    assert result is not None
+    assert (tmp_path / "output.mp4").exists()
+    assert any("black segment" in r.message for r in caplog.records)
+
+
+@ffmpeg_required
+def test_ffmpeg_mux_still_and_frame_dir_concat_single_pass(tmp_path, monkeypatch):
+    still_path = tmp_path / "still.png"
+    Image.new("RGB", (64, 64), (10, 20, 30)).save(still_path)
+
+    frame_dir = tmp_path / "frames" / "s1_upscaled"
+    frame_dir.mkdir(parents=True)
+    for i in range(4):
+        Image.new("RGB", (64, 64), (i * 10, 0, 0)).save(frame_dir / f"{i:05d}.png")
+
+    shots = [
+        {"index": 0, "output_tensor": "s0_upscaled", "effective_duration_sec": 0.5, "fps": 8,
+         "camera": "zoom", "camera_speed": 1.0},
+        {"index": 1, "output_tensor": "s1_upscaled", "effective_duration_sec": 0.5, "fps": 8,
+         "camera": "static", "camera_speed": 1.0},
+    ]
+    stills = {"s0_upscaled": str(still_path)}
+    frame_dirs = {"s1_upscaled": str(frame_dir)}
+
+    calls = []
+    import subprocess as sp
+    real_run = sp.run
+
+    def _spy(cmd, **kw):
+        calls.append(cmd)
+        return real_run(cmd, **kw)
+
+    monkeypatch.setattr(ffmpeg_mux.subprocess, "run", _spy)
+
+    result = ffmpeg_mux.run(shots, frame_dirs, stills, tmp_path, fps=8, width=64, height=64)
+
+    assert result is not None
+    assert len(calls) == 1, "expected exactly one ffmpeg invocation"
+    assert Path(result).exists()
+
+
+# ---------------------------------------------------------------------------
+# engine._run_ffmpeg_mux adapter (Step 4)
+# ---------------------------------------------------------------------------
+
+@ffmpeg_required
+def test_run_ffmpeg_mux_adapter_reads_from_disk_not_arena(tmp_path):
+    """Decision 5: the mux reads ctx.artifacts (disk), never the arena — a
+    resumed job whose arena is empty for completed shots must still mux."""
+    ctx = ExecutionContext(job_id="j")
+    still_path = tmp_path / "s0_t2i.png"
+    Image.new("RGB", (32, 32), (5, 5, 5)).save(still_path)
+    ctx.artifacts["s0_t2i"] = str(still_path)
+
+    node = RfirNode(
+        id="mux", op="ffmpeg_mux",
+        inputs={"frames_0": "s0_upscaled"},
+        attrs={
+            "fps": 8, "width": 32, "height": 32,
+            "shots": [{"index": 0, "output_tensor": "s0_upscaled",
+                       "effective_duration_sec": 0.25, "fps": 8,
+                       "camera": "static", "camera_speed": 1.0}],
+        },
+    )
+    arena = TensorArena()  # deliberately empty — simulates post-resume state
+
+    engine._run_ffmpeg_mux(node, arena, ctx, tmp_path)
+
+    assert "output_mp4" in ctx.artifacts
+    assert Path(ctx.artifacts["output_mp4"]).exists()

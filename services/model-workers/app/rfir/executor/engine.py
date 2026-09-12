@@ -7,6 +7,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import shutil
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -22,6 +23,7 @@ from app.rfir.ir.types import InferenceBudget, RfirGraph, RfirNode
 from app.rfir.models.loader import detect_device, unload_all
 from app.rfir.ltc import LatentTemporalCache
 from app.rfir.ops import t2i_keyframe, depth_estimate, rife_interpolate, segment_subject, vae, sparse_t2v_window
+from app.rfir.ops import ffmpeg_mux as ffmpeg_mux_op
 
 logger = logging.getLogger(__name__)
 
@@ -335,43 +337,42 @@ def _run_vulkan_upscale_stub(node: RfirNode, arena: TensorArena, ctx: ExecutionC
 
 
 def _run_ffmpeg_mux(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
-    """Create an MP4 from keyframe images using FFmpeg zoompan (Ken Burns effect)."""
-    keyframe_pngs = [v for k, v in sorted(ctx.artifacts.items()) if v.endswith(".png") and "depth" not in k]
+    """Concatenate every shot into one output.mp4 (Step 4).
 
-    if not keyframe_pngs:
-        logger.warning("ffmpeg_mux: no keyframe PNGs found")
+    A thin adapter: resolves each shot's frame dir / still from ctx.artifacts
+    (disk, not the arena — Decision 5, and what makes checkpoint-resume work)
+    and delegates the actual ffmpeg invocation to ops.ffmpeg_mux.run().
+    """
+    shots = node.attrs.get("shots", [])
+    fps = int(round(float(node.attrs.get("fps", 24))))
+    width = int(node.attrs.get("width", 1920))
+    height = int(node.attrs.get("height", 1080))
+
+    frame_dirs: dict[str, str] = {}
+    stills: dict[str, str] = {}
+    for shot in shots:
+        tensor = shot.get("output_tensor", "")
+        frame_key = f"frames::{tensor}"
+        if frame_key in ctx.artifacts:
+            frame_dirs[tensor] = ctx.artifacts[frame_key]
+            continue
+        still_key = f"s{shot.get('index')}_t2i"
+        if still_key in ctx.artifacts:
+            stills[tensor] = ctx.artifacts[still_key]
+
+    result = ffmpeg_mux_op.run(shots, frame_dirs, stills, out_path, fps=fps, width=width, height=height)
+    if result is None:
+        logger.error("ffmpeg_mux: failed to produce output.mp4")
         return
 
-    output_mp4 = out_path / "output.mp4"
+    ctx.artifacts["output_mp4"] = result
+    logger.info("ffmpeg_mux: created %s", result)
 
-    import subprocess
-    import shutil
-
-    if not shutil.which("ffmpeg"):
-        logger.error("ffmpeg not found in PATH")
-        return
-
-    first_png = keyframe_pngs[0]
-    duration = 5
-    fps = 24
-
-    cmd = [
-        "ffmpeg", "-y",
-        "-loop", "1", "-i", first_png,
-        "-vf", f"zoompan=z='min(zoom+0.001,1.2)':d={duration * fps}:s=1920x1080:fps={fps}",
-        "-t", str(duration),
-        "-c:v", "libx264", "-pix_fmt", "yuv420p",
-        str(output_mp4),
-    ]
-
-    try:
-        subprocess.run(cmd, capture_output=True, check=True, timeout=60)
-        ctx.artifacts["output_mp4"] = str(output_mp4)
-        logger.info("ffmpeg_mux: created %s", output_mp4)
-    except subprocess.CalledProcessError as e:
-        logger.error("ffmpeg_mux failed: %s", e.stderr.decode()[:200] if e.stderr else str(e))
-    except FileNotFoundError:
-        logger.error("ffmpeg not found")
+    keep_frames = os.environ.get("RENDERFLOW_RFIR_KEEP_FRAMES", "false").lower() == "true"
+    if not keep_frames:
+        for tensor, frame_dir in frame_dirs.items():
+            shutil.rmtree(frame_dir, ignore_errors=True)
+            ctx.artifacts.pop(f"frames::{tensor}", None)
 
 
 def _run_segment_subject(node: RfirNode, arena: TensorArena, ctx: ExecutionContext, out_path: Path) -> None:
