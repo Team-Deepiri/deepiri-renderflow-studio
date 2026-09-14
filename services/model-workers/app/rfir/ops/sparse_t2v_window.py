@@ -167,6 +167,7 @@ def run(
                 latent_init = warp_latent(cache_entry.last_latent, cache_entry.flow_vectors)
             else:
                 latent_init = cache_entry.last_latent
+            latent_init = latent_init.to(device=device, dtype=pipe.dtype)
 
         try:
             result = pipe(
