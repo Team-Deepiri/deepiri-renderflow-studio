@@ -242,8 +242,6 @@ def _build_tier_b(graph: RfirGraph, prefix: str, shot: Shot, *, job_id: str, num
             inputs={"frame_start": img_start, "frame_end": img_end},
             outputs={"frames": interp},
             # The SSIM gate (§2.6) scores the two endpoints against each other
-            # — no third keyframe. See docs/specs/rfir-mp4-output-pipeline.md
-            # §7c for the measurements behind that choice.
             attrs={"escalations_remaining": escalations, "factor": factor, "num_frames": num_frames},
             estimated_gpu_ms=rife_ms, vram_mb=2048,
         ),
@@ -299,7 +297,7 @@ def _build_tier_c(graph: RfirGraph, prefix: str, shot: Shot, *, num_frames: int)
         ),
         RfirNode(
             id=f"{prefix}_t2v", op="sparse_t2v_window",
-            inputs={"latent": latent_in, "mask": mask}, outputs={"latent_out": latent_out},
+            inputs={"latent": latent_in, "mask": mask, "image": bg_img}, outputs={"latent_out": latent_out},
             attrs={"prompt": shot.description, "steps": 10, "window_size": 16, "overlap": 4,
                    "num_frames": num_frames},
             estimated_gpu_ms=t2v_ms, vram_mb=10240,
@@ -347,7 +345,7 @@ def _build_tier_d(graph: RfirGraph, prefix: str, shot: Shot, *, num_frames: int)
         ),
         RfirNode(
             id=f"{prefix}_t2v", op="sparse_t2v_window",
-            inputs={"latent": latent_in, "mask": dummy_mask},
+            inputs={"latent": latent_in, "mask": dummy_mask, "image":img},
             outputs={"latent_out": latent_out},
             attrs={
                 "prompt": shot.description, "steps": 10, "full_frame": True,

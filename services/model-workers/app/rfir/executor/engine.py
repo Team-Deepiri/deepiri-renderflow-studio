@@ -634,16 +634,12 @@ def _run_sparse_t2v_window(node: RfirNode, arena: TensorArena, ctx: ExecutionCon
     mask_tensor = node.inputs.get("mask", "")
     mask = arena.get(mask_tensor) if arena.has(mask_tensor) else None
 
-    # Find the source image from earlier in the arena (the keyframe).
-    image = None
-    if latent_tensor:
-        # Walk back to find the original image from the VAE encode's input.
-        for n in ctx.node_metrics:
-            if n.node_id in ctx.artifacts and ctx.artifacts[n.node_id].endswith(".png"):
-                try:
-                    image = Image.open(ctx.artifacts[n.node_id])
-                except Exception:
-                    pass
+    # Getting the source keyframe
+    image_tensor = node.inputs.get("image", "")
+    image = arena.get(image_tensor) if arena.has(image_tensor) else None
+    if not isinstance(image, Image.Image):
+        image = None
+
 
     shot_id = node.id.split("_")[0] if "_" in node.id else node.id
     ltc = getattr(ctx, "_ltc", None)
