@@ -60,6 +60,25 @@ def _plan_shots(prompt: str, max_tier):
     return planner.plan_or_fallback(prompt, max_tier=max_tier)
 
 
+def _apply_tier_adjustments(shot_list, adjusted: list[dict]) -> None:
+    """Write the plan gate's tier downgrades back onto the ShotList.
+
+    The gate caps against the project's policy.max_tier, which can be stricter
+    than the budget max_tier the planner already applied via assign_tiers().
+    Per §6 the plan gate is authoritative, so its result wins.
+    """
+    from app.rfir.ir.types import Tier
+
+    for shot, entry in zip(shot_list.shots, adjusted):
+        raw = str(entry.get("tier", "")).upper()
+        if not raw or raw == shot.tier.value:
+            continue
+        try:
+            shot.tier = Tier[raw]
+        except KeyError:
+            logger.warning("plan gate returned unknown tier %r; keeping %s", raw, shot.tier.value)
+
+
 def _warmup() -> None:
     """Run one tiny throwaway generation at startup so the Metal/CUDA JIT
     shader compilation (~200s cold on MPS) happens once when the worker
