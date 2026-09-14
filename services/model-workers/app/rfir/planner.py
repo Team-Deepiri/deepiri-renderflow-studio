@@ -53,13 +53,19 @@ _SYSTEM_PROMPT = (
     "You are a film shot planner. Given a creative prompt, break it into a short "
     "sequence of distinct camera shots. Respond with ONLY a JSON object matching "
     "the required schema. For each shot provide: a vivid one-sentence description "
-    "of how the shot starts, a description_end of the state the shot ends in (used "
-    "for shots with camera or subject motion — a description_end describes the same "
-    "scene at the end of the shot: repeat description verbatim and change only the words "
-    "describing what moves or changes, if little changes, vary only the subject's pose or position"
-    "a duration in seconds (1.5 to 8), a camera_motion from "
-    f"{sorted(_VALID_MOTIONS)}, the main subject (or empty string), and an "
-    "optional style. Use 1 to 6 shots. Do not include any prose outside the JSON."
+    "of how the shot starts; a description_end of the same scene at the moment the "
+    "shot ends; a duration in seconds (1.5 to 8); a camera_motion from "
+    f"{sorted(_VALID_MOTIONS)}; the main subject (or empty string); and an "
+    "optional style. Use 1 to 6 shots. Do not include any prose outside the JSON.\n"
+    "RULE: description_end MUST NOT be the same sentence as description. Every "
+    "shot depicts a moment of change, so description_end always shows the scene "
+    "LATER: the subject has moved, turned, or shifted position. Reuse the same "
+    "subject, setting, lighting and style words, and rewrite only the words "
+    "naming what changed.\n"
+    "Example of a correct pair:\n"
+    '  description:     "A red balloon rests on the grass in morning light."\n'
+    '  description_end: "A red balloon drifts above the grass in morning light."\n'
+    "Note how only the verb and position changed. Do that for every shot."
 )
 
 
@@ -128,12 +134,19 @@ def _parse_shotlist(raw: str, prompt: str) -> ShotList:
         description = str(item.get("description", "")).strip()
         if not description:
             continue
+        description_end = str(item.get("description_end", "")).strip()
+        if not description_end or description_end == description:
+            logger.warning(
+                "planner: shot %d has no distinct end state — Tier B would render "
+                "it as a frozen clip (start=%r)", len(shots), description[:60],
+            )
+
         shots.append(Shot(
             index=len(shots),
             description=description,
             # Empty degrades cleanly: the builder falls back to `description`
             # for both Tier B keyframes (§7b).
-            description_end=str(item.get("description_end", "")).strip(),
+            description_end=description_end,
             duration_sec=_clamp_duration(item.get("duration_sec")),
             camera=CameraPath(motion=_coerce_motion(item.get("camera_motion"))),
             subject=str(item.get("subject", "")).strip(),
