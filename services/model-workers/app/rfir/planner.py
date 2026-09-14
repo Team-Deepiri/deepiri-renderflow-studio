@@ -41,7 +41,7 @@ SHOTLIST_SCHEMA = {
                     "subject": {"type": "string"},
                     "style": {"type": "string"},
                 },
-                "required": ["description", "camera_motion"],
+                "required": ["description", "camera_motion", "description_end"],
             },
         },
         "style_guidance": {"type": "string"},
@@ -54,7 +54,9 @@ _SYSTEM_PROMPT = (
     "sequence of distinct camera shots. Respond with ONLY a JSON object matching "
     "the required schema. For each shot provide: a vivid one-sentence description "
     "of how the shot starts, a description_end of the state the shot ends in (used "
-    "for shots with camera or subject motion — leave empty if the shot is static), "
+    "for shots with camera or subject motion — a description_end describes the same "
+    "scene at the end of the shot: repeat description verbatim and change only the words "
+    "describing what moves or changes, if little changes, vary only the subject's pose or position"
     "a duration in seconds (1.5 to 8), a camera_motion from "
     f"{sorted(_VALID_MOTIONS)}, the main subject (or empty string), and an "
     "optional style. Use 1 to 6 shots. Do not include any prose outside the JSON."

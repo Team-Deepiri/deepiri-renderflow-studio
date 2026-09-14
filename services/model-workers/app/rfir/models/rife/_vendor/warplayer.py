@@ -26,4 +26,6 @@ def warp(tenInput, tenFlow):
                          tenFlow[:, 1:2, :, :] / ((tenInput.shape[2] - 1.0) / 2.0)], 1)
 
     g = (backwarp_tenGrid[k] + tenFlow).permute(0, 2, 3, 1)
-    return torch.nn.functional.grid_sample(input=tenInput, grid=g, mode='bilinear', padding_mode='border', align_corners=True)
+    g = g.clamp(-1.0, 1.0)  # works when align_corners=True
+                            # when align_corners=False, must alter clamp accordingly (not yet implemented)
+    return torch.nn.functional.grid_sample(input=tenInput, grid=g, mode='bilinear', padding_mode='zeros', align_corners=True)
